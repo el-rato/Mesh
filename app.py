@@ -1,12 +1,19 @@
+"""
+Stock Alert App with Z-Score Anomaly Detection
+"""
+
 import json
 import os
 from datetime import datetime, timedelta
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, render_template
 import yfinance as yf
 import numpy as np
 import pandas as pd
 
-app = Flask(__name__, static_folder="static")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+
+app = Flask(__name__, static_folder=STATIC_DIR)
 
 alerts_store: list[dict] = []
 alert_id_counter = 0
@@ -93,7 +100,7 @@ def check_alerts(symbol: str, current_price: float, zscore_val: float, is_anomal
 # ── API Routes ─────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    return send_from_directory("static", "index.html")
+    return render_template("index.html")
 
 
 @app.route("/api/stock/<symbol>")
