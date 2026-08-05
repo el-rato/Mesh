@@ -190,3 +190,27 @@ class Database:
                 (market, ticker.upper(), limit),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def latest_verdicts(self, market: str | None = None) -> List[Dict[str, Any]]:
+        with self.connect() as conn:
+            if market:
+                rows = conn.execute(
+                    """SELECT * FROM verdicts v
+                       WHERE v.market = ?
+                         AND v.decided_at = (
+                             SELECT MAX(v2.decided_at) FROM verdicts v2
+                             WHERE v2.market = v.market AND v2.ticker = v.ticker
+                         )
+                       ORDER BY v.combined_score DESC""",
+                    (market,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT * FROM verdicts v
+                       WHERE v.decided_at = (
+                           SELECT MAX(v2.decided_at) FROM verdicts v2
+                           WHERE v2.market = v.market AND v2.ticker = v.ticker
+                       )
+                       ORDER BY v.combined_score DESC"""
+                ).fetchall()
+            return [dict(r) for r in rows]

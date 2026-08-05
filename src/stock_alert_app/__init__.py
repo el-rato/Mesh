@@ -60,6 +60,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="print verdicts as JSON",
     )
 
+    serve = sub.add_parser("serve", help="start the web dashboard")
+    serve.add_argument("--host", default="127.0.0.1", help="bind host (default 127.0.0.1)")
+    serve.add_argument("--port", type=int, default=8000, help="bind port (default 8000)")
+
     return parser
 
 
@@ -115,6 +119,15 @@ def main() -> None:
                     f"price={v.price_score:+.3f}"
                 )
                 print(f"      reason: {v.reason}")
+        return
+
+    if args.command == "serve":
+        import uvicorn
+
+        from .web_app import app as stock_web_app
+
+        print(f"StockVerdict dashboard at http://{args.host}:{args.port}")
+        uvicorn.run(stock_web_app, host=args.host, port=args.port, log_level="info")
         return
 
     scaffold()
