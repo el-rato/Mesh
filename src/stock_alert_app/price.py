@@ -1,0 +1,175 @@
+from __future__ import annotations
+
+import logging
+import math
+from dataclasses import dataclass
+from typing import Iterable
+
+import pandas as pd
+import yfinance as yf
+
+from .config import settings
+from .db import Database
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PriceState:
+    market: str
+    ticker: str
+    close: float
+    open: float
+    high: float
+    low: float
+    volume: int
+    momentum_20: float
+    rsi_14: float
+    sma_50: float
+    sma_200: float = 0.0
+    trend_50_200: float = 50.0 if False else 0.0
+    price_above_sma_50: bool = False
+
+    @property
+    def symbol(self) -> str:
+        return self._symbol if hasattr(self, "_symbol") else self.ticker
+
+    def as_dict(self) -> dict[str, float | str | int | bool]:
+        return {
+            "symbol": self.symbol,
+            "close": self.close,
+            "open": self.open,
+            "high": self.high,
+            "low": self.low,
+            "volume": self.volume,
+            "momentum_20": round(self.momentum_20, 4),
+            "rsi_14": round(self.rsi_14, 4),
+            "sma_50": round(self.sma_50, 4),
+            "sma_200": round(self.sma_200, 4),
+            "trend_50_200": round(self.trend_50_200, 4),
+            "above_sma_50": self.price_above_sma_50,
+        }
+
+
+def full_symbol(market_code: str, symbol: str, suffix: str = "") -> str:
+    if market_code == "NSE" and len(symbol) <= 4:
+        return f"{symbol}.LAG"
+    return symbol + suffix
+
+
+def fetch_history(symbol: str, period: str = "6mo", interval: str = "1d") -> pd.DataFrame:
+    ticker = yf.Ticker(symbol)
+    df = ticker.history(period=period, interval=interval, auto_adjust=True)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    if "Close" not in df.columns:
+        return pd.DataFrame()
+    return df
+
+
+def _safe_mean(values: list[float]) -> float:
+    valid = [v for v in values if v is not None and not math.isnan(v)]
+    return sum(valid) / len(valid) if valid else 0.0
+
+
+def compute_rsi(closes: list[float], window: int = 14) -> float:
+    if len(closes) < window + 1:
+        return 50.0
+    gains: list[float] = []
+    losses: list[float] = []
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i - 1]
+        gains.append(max(diff, 0.0))
+        losses.append(max(-diff, 0.0))
+    avg_gain = sum(gains[:window]) / window
+    avg_loss = sum(losses[:window]) / window
+    for i in range(window, len(gains)):
+        avg_gain = (avg_gain * (window - 1) + gains[i]) / window
+        avg_loss = (avg_loss * (window - 1) + losses[i]) / window
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
+def build_price_state(
+    market: str,
+    symbol: str,
+    df: pd.DataFrame,
+    indicator_window: int = 50,
+) -> PriceState | None:
+    if df.empty or len(df) < 2:
+        return None
+    closes = df["Close"].dropna().tolist()
+    if not closes:
+        return None
+
+    last = df.iloc[-1]
+    close = float(last["Close"])
+    open_ = float(last.get("Open", close))
+    high = float(last.get("High", close))
+    low = float(last.get("Low", close))
+    volume = int(last.get("Volume", 0))
+
+    momentum_20 = (closes[-1] - closes[-21]) / closes[-21] if len(closes) > 21 else 0.0
+    rsi_14 = compute_rsi(closes)
+
+    sma_50 = _safe_mean(closes[-50:]) if len(closes) >= 50 else _safe_mean(closes)
+    sma_200 = _safe_mean(closes[-200:]) if len(closes) >= 200 else 0.0
+    trend_50_200 = (sma_50 - sma_200) / sma_200 if sma_200 else 0.0
+    above_sma_50 = close > sma_50 if sma_50 else False
+
+    return PriceState(
+        market=market,
+        ticker=symbol,
+        close=close,
+        open=open_,
+        high=high,
+        low=low,
+        volume=volume,
+        momentum_20=momentum,
+        rsi_14=rsi_14,
+        sma_50=sma_50,
+        sma_200=sma_200,
+        trend_50_200=trend_50_200,
+        price_above_sma_50=above_sma_50,
+    )
+
+
+def store_price_state(db: Database, state: PriceState) -> None:
+    db.insert_price_snapshot(
+        market=state.market,
+        ticker=state.ticker,
+        close=state.close,
+        open=state.open,
+        high=state.high,
+        low=state.low,
+        volume=state.volume,
+        momentum_20=state.momentum_20,
+        rsi_14=state.rsi_14,
+        sma_50=state.sma_50,
+    )
+
+
+def fetch_and_store(market_name: str, market_suffix: str, ticker_symbols: Iterable[str], db: Database) -> dict[str, PriceState]:
+    from .markets import Market  # local to avoid circular import at module load
+
+    states: dict[str, PriceState] = {}
+    for raw in ticker_symbols:
+        symbol = full_symbol(market_name, raw, market_suffix if market.suffix else "")
+        try:
+            df = fetch_history(symbol, period="6mo")
+        except Exception as exc:
+            logger.warning("Failed to fetch %s: %s", symbol, exc)
+            continue
+        state = build_price_state(market_name, raw, df)
+        if state is None:
+            logger.warning("No price data for %s", symbol)
+            continue
+        store(state, db)
+        states[raw] = state
+    return states
+
+
+def store_state(db: Database, state: PriceState) -> None:
+    save_price_state(db, state)
