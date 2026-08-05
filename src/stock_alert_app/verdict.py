@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Iterable
 
 from .config import settings
 from .db import Database
-from .markets import Market
 from .price import PriceState
 from .sentiment.aggregate import SourceSentiment
 

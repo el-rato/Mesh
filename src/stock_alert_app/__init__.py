@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 
 from .config import settings
 from .db import Database
@@ -64,10 +65,20 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1", help="bind host (default 127.0.0.1)")
     serve.add_argument("--port", type=int, default=8000, help="bind port (default 8000)")
 
+    run = sub.add_parser("run", help="run the automated ingest->sentiment->verdict loop")
+    run.add_argument("--market", nargs="*", default=None, help="market codes to analyze")
+    run.add_argument("--interval", type=int, default=3600, help="seconds between cycles (default 3600)")
+    run.add_argument("--once", action="store_true", help="run a single cycle and exit")
+    run.add_argument("--no-finbert", action="store_true", help="use the lexicon scorer")
+
     return parser
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     parser = _build_parser()
     args = parser.parse_args()
 
@@ -128,6 +139,17 @@ def main() -> None:
 
         print(f"StockVerdict dashboard at http://{args.host}:{args.port}")
         uvicorn.run(stock_web_app, host=args.host, port=args.port, log_level="info")
+        return
+
+    if args.command == "run":
+        from .scheduler import run_scheduler
+
+        run_scheduler(
+            interval_seconds=args.interval,
+            market_codes=args.market,
+            once=args.once,
+            prefer_finbert=not args.no_finbert,
+        )
         return
 
     scaffold()
