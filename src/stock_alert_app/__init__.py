@@ -71,6 +71,13 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--once", action="store_true", help="run a single cycle and exit")
     run.add_argument("--no-finbert", action="store_true", help="use the lexicon scorer")
 
+    discover = sub.add_parser("discover", help="scan broad feeds for new tickers with bullish sentiment")
+    discover.add_argument("--market", nargs="*", default=None, help="market codes to scan")
+    discover.add_argument("--min-score", type=float, default=0.25, help="minimum sentiment score to consider (0-1)")
+    discover.add_argument("--max", type=int, default=10, help="max new tickers per run")
+    discover.add_argument("--no-finbert", action="store_true", help="use lexicon scorer")
+    discover.add_argument("--register", action="store_true", help="auto-register discovered tickers")
+
     return parser
 
 
@@ -150,6 +157,28 @@ def main() -> None:
             once=args.once,
             prefer_finbert=not args.no_finbert,
         )
+        return
+
+    if args.command == "discover":
+        from .discover import discover_from_feeds, auto_register_tickers
+
+        codes = list(args.market) if args.market else list(settings.default_markets)
+        results = discover_from_feeds(
+            codes,
+            min_score=args.min_score,
+            max_new_per_cycle=args.max,
+            use_lexicon=args.no_finbert,
+        )
+        if not results:
+            print("No new bullish tickers found.")
+            return
+        for d in results:
+            print(f"  {d.market}:{d.ticker} ({d.company}) — score={d.score:.3f}")
+            for h in d.headlines:
+                print(f"    -> {h}")
+        if args.register:
+            auto_register_tickers(results)
+            print("Registered new tickers (restart to include in pipeline).")
         return
 
     scaffold()
