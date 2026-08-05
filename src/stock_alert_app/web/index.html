@@ -29,13 +29,21 @@
   header h1 { font-size: 20px; margin: 0; letter-spacing: 0.3px; }
   header .tag { color: var(--muted); font-size: 13px; }
   .controls { display: flex; gap: 10px; align-items: center; margin-left: auto; flex-wrap: wrap; }
-  select, button {
+  select, button, input {
     background: var(--panel2); color: var(--text); border: 1px solid var(--border);
     padding: 8px 12px; border-radius: 8px; font-size: 13px; cursor: pointer;
   }
   button.refresh { background: #2563eb; border-color: #2563eb; font-weight: 600; }
   button.refresh:hover { background: #3b82f6; }
+  button.secondary { background: var(--panel2); border-color: var(--border); }
+  button.secondary:hover { background: #2a3342; }
   main { padding: 24px 28px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  .tab { padding: 8px 16px; border-radius: 8px 8px 0 0; background: var(--panel2); color: var(--muted); border: none; cursor: pointer; font-size: 13px; }
+  .tab.active { background: var(--bg); color: var(--text); border-bottom: 2px solid #2563eb; }
+  .tab:hover:not(.active) { color: var(--text); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
   .card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
@@ -48,6 +56,7 @@
   .badge.bull { background: rgba(34,197,94,.15); color: var(--bull); }
   .badge.bear { background: rgba(239,68,68,.15); color: var(--bear); }
   .badge.neutral { background: rgba(250,204,21,.15); color: var(--neutral); }
+  .badge.discover { background: rgba(37,99,235,.15); color: #60a5fa; }
   .row { display: flex; justify-content: space-between; margin-top: 10px; font-size: 13px; }
   .muted { color: var(--muted); }
   .conf-bar { height: 6px; border-radius: 3px; background: var(--panel2); margin-top: 8px; overflow: hidden; }
@@ -55,6 +64,8 @@
   .reason { margin-top: 10px; font-size: 12px; color: var(--muted); line-height: 1.4; }
   .empty { text-align: center; color: var(--muted); padding: 60px 0; }
   .error { color: var(--bear); text-align: center; padding: 40px; }
+  .discover-controls { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+  .discover-controls label { font-size: 12px; color: var(--muted); }
   /* detail drawer */
   .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; z-index: 50; }
   .overlay.open { display: block; }
@@ -69,6 +80,7 @@
   .news-item .src { color: var(--muted); font-size: 11px; }
   .news-item .sender { font-weight: 600; }
   h3 { margin: 18px 0 6px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .loading { opacity: 0.6; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -83,9 +95,28 @@
   </div>
 </header>
 
-<main id="main" class="refresh">
-  <div class="empty" id="loading">Loading verdicts…</div>
-  <div class="grid" id="grid"></div>
+<main id="main">
+  <div class="tabs">
+    <button class="tab active" data-tab="verdicts">Verdicts</button>
+    <button class="tab" data-tab="discover">Discover</button>
+  </div>
+
+  <div class="tab-panel active" id="panel-verdicts">
+    <div class="empty" id="loading">Loading verdicts…</div>
+    <div class="grid" id="grid"></div>
+  </div>
+
+  <div class="tab-panel" id="panel-discover">
+    <div class="discover-controls">
+      <label>Min score:</label>
+      <input type="number" id="discover-min-score" value="0.2" step="0.05" min="0" max="1" style="width:80px">
+      <label>Max:</label>
+      <input type="number" id="discover-max" value="20" step="5" min="1" max="100" style="width:70px">
+      <button class="refresh" id="discover-btn">Run Discovery</button>
+    </div>
+    <div class="empty" id="discover-loading" style="display:none">Scanning feeds…</div>
+    <div class="grid" id="discover-grid"></div>
+  </div>
 </main>
 
 <div class="overlay" id="overlay"></div>
@@ -96,8 +127,6 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-let allVerdicts = {};
-let markets = [];
 
 async function fetchJSON(url) {
   const r = await fetch(url);
@@ -106,20 +135,25 @@ async function fetchJSON(url) {
 }
 
 function badge(v) {
-  const b = (v.verdict || v.label).toLowerCase();
+  const b = (v.verdict || v.label || '').toLowerCase();
   const cls = b === "bull" || b === "bullish" ? "bull" : (b === "bear" || b === "bearish") ? "bear" : "neutral";
-  return `<span class="badge ${cls}">${v.verdict || v.label?.toUpperCase()}</span>`;
+  return `<span class="badge ${cls}">${v.verdict || v.label?.toUpperCase() || 'NEUTRAL'}</span>`;
+}
+
+function badgeDiscover(score) {
+  const cls = score >= 0.3 ? 'bull' : score >= 0.1 ? 'neutral' : 'bear';
+  return `<span class="badge ${cls}">${(score*100).toFixed(0)}%</span>`;
 }
 
 function confColor(v) {
   return v === "BULL" ? "var(--bull)" : v === "BEAR" ? "var(--bear)" : "var(--neutral)";
 }
 
-function renderCard(list) {
+function renderVerdicts(list) {
   const grid = $("grid");
   grid.innerHTML = "";
   if (!list.length) {
-    $("main").innerHTML = `<div class="empty">No verdicts yet. Run <code>stock-alert-app verdict</code> then refresh.</div>`;
+    $("panel-verdicts").innerHTML = `<div class="empty">No verdicts yet. Run <code>stock-alert-app verdict</code> then refresh.</div>`;
     return;
   }
   list.sort((a, b) => b.combined_score - a.combined_score);
@@ -141,16 +175,59 @@ function renderCard(list) {
   }
 }
 
+function renderDiscover(list) {
+  const grid = $("discover-grid");
+  grid.innerHTML = "";
+  if (!list.length) {
+    grid.innerHTML = `<div class="empty">No bullish discoveries. Adjust score or run again.</div>`;
+    return;
+  }
+  list.sort((a, b) => b.score - a.score);
+  for (const d of list) {
+    const el = document.createElement("div");
+    el.className = "card";
+    el.innerHTML = `
+      <div class="symbol">${d.ticker}</div>
+      <div class="name">${d.company} (${d.market})</div>
+      ${badgeDiscover(d.score)}
+      <div class="row"><span class="muted">Sentiment</span><span>${d.score.toFixed(3)}</span></div>
+      <div class="row"><span class="muted">Headlines</span><span>${d.headlines.length}</span></div>
+      <div class="reason">${d.headlines.slice(0,2).map(h => '→ ' + h).join('<br>')}</div>
+    `;
+    grid.appendChild(el);
+  }
+}
+
 async function loadVerdicts() {
   try {
-    $("main").classList.add("refresh");
     const market = $("market-select").value;
     const q = market ? `?market=${encodeURIComponent(market)}` : "";
     const data = await fetchJSON("/api/verdicts" + q);
-    const list = Object.values(data).map((d) => ({...d, raw: d.verdict, family: d.market}));
-    renderCard(list);
+    renderVerdicts(Object.values(data));
   } catch (e) {
-    $("main").innerHTML = `<div class="error">Error: ${e.message}</div>`;
+    $("panel-verdicts").innerHTML = `<div class="error">Error: ${e.message}</div>`;
+  }
+}
+
+async function runDiscover() {
+  $("discover-loading").style.display = "block";
+  $("discover-grid").innerHTML = "";
+  $("discover-btn").classList.add("loading");
+  try {
+    const market = $("market-select").value;
+    const minScore = parseFloat($("discover-min-score").value) || 0.2;
+    const max = parseInt($("discover-max").value) || 20;
+    const params = new URLSearchParams();
+    if (market) params.append("market", market);
+    params.append("min_score", minScore.toString());
+    params.append("max_results", max.toString());
+    const data = await fetchJSON(`/api/discover?${params.toString()}`);
+    renderDiscover(data);
+  } catch (e) {
+    $("discover-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`;
+  } finally {
+    $("discover-loading").style.display = "none";
+    $("discover-btn").classList.remove("loading");
   }
 }
 
@@ -176,7 +253,7 @@ async function openDetail(v) {
 
 async function init() {
   try {
-    markets = await fetchJSON("/api/markets");
+    const markets = await fetchJSON("/api/markets");
     const sel = $("market-select");
     markets.forEach((m) => {
       const o = document.createElement("option");
@@ -184,14 +261,26 @@ async function init() {
       o.textContent = `${m.code} — ${m.name}`;
       sel.appendChild(o);
     });
-  } catch (e) { /* markets endpoint optional */ }
+  } catch (e) { /* optional */ }
+
+  // Tab switching
+  document.querySelectorAll('.tab').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      $(`panel-${btn.dataset.tab}`).classList.add('active');
+    };
+  });
+
+  $("refresh-btn").onclick = loadVerdicts;
+  $("market-select").onchange = loadVerdicts;
+  $("discover-btn").onclick = runDiscover;
+  $("close-btn").onclick = () => { $("drawer").classList.remove("open"); $("overlay").classList.remove("open"); };
+  $("overlay").onclick = () => { $("drawer").classList.remove("open"); $("overlay").classList.remove("open"); };
+
   await loadVerdicts();
 }
-
-$("refresh-btn").onclick = loadVerdicts;
-$("market-select").onchange = loadVerdicts;
-$("close-btn").onclick = () => { $("drawer").classList.remove("open"); $("overlay").classList.remove("open"); };
-$("overlay").onclick = () => { $("drawer").classList.remove("open"); $("overlay").classList.remove("open"); };
 init();
 </script>
 </body>

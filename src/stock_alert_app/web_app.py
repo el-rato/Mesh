@@ -82,6 +82,34 @@ def get_history(market: str, ticker: str) -> list[dict[str, object]]:
     return db.recent_verdicts(market, ticker, limit=100)
 
 
+@app.get("/api/discover")
+def discover(
+    market: str | None = None,
+    min_score: float = 0.2,
+    max_results: int = 20,
+) -> list[dict[str, object]]:
+    from .discover import discover_from_feeds
+
+    market_codes = [market] if market else list(settings.default_markets)
+    results = discover_from_feeds(
+        market_codes,
+        min_score=min_score,
+        max_new_per_cycle=max_results,
+        use_lexicon=True,
+    )
+    return [
+        {
+            "market": d.market,
+            "ticker": d.ticker,
+            "company": d.company,
+            "score": d.score,
+            "headlines": d.headlines[:5],
+            "matched_keywords": d.matched_keywords,
+        }
+        for d in results
+    ]
+
+
 app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
 
 
