@@ -1,0 +1,39 @@
+{
+  "code": "NYSE",
+  "name": "New York Stock Exchange",
+  "country": "US",
+  "currency": "USD",
+  "timezone": "America/New_York",
+  "yahoo_suffix": "",
+  "rss_queries": [
+    "wall street",
+    "US stock market",
+    "US economy"
+  ],
+  "tickers": {
+    "AAPL": {
+      "name": "Apple",
+      "keywords": ["Apple", "AAPL"]
+    },
+    "MSFT": {
+      "name": "Microsoft",
+      "keywords": ["Microsoft", "MSFT"]
+    },
+    "AMZN": {
+      "name": "Amazon",
+      "keywords": ["Amazon", "AMZN"]
+    },
+    "TSLA": {
+      "name": "Tesla",
+      "keywords": ["Tesla", "TSLA"]
+    },
+    "GOOGL": {
+      "name": "Alphabet",
+      "keywords": ["Alphabet", "Google", "GOOGL"]
+    },
+    "JPM": {
+      "name": "JPMorgan Chase",
+      "keywords": ["JPMorgan", "JPM"]
+    }
+  }
+}
