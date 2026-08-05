@@ -145,6 +145,7 @@ def run_verdicts(
 ) -> dict[str, Verdict]:
     from .ingest import _load_markets
     from .price import run_price_fetch
+    from .sentiment.pipeline import run_sentiment
 
     markets = _load_markets()
     db = Database(db_path or settings.db_path)

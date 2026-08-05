@@ -89,31 +89,33 @@ def main() -> None:
             print(json.dumps(payload, indent=2))
         else:
             for key, agg in rows:
-                marker = {"bullish": "BULL", "bearish": "BEAR", "neutral": "NEUT"}[agg.label]
-                print(
-                    f"  {key:<16} {marker:<6} score={agg.score:+.3f} "
-                    f"articles={agg.article_count} pos={agg.positive_count} "
-                    f"neg={agg.negative_count} neu={agg.neutral_count}"
-                )
-        if args.command == "verdict":
-            from .verdict import run_verdicts
-
-            verdicts = run_verdicts(
-                market_codes=args.market,
-                prefer_finbert=not args.no_finbert,
-            )
-            if args.json:
-                print(json.dumps({k: v.as_dict() for k, v in verdicts.items()}, indent=2))
-            else:
-                for key in sorted(verdicts):
-                    v = verdicts[key]
+                    marker = {"bullish": "BULL", "bearish": "BEAR", "neutral": "NEUT"}[agg.label]
                     print(
-                        f"  {key:<16} {v.verdict:<6} conf={v.confidence:.2f} "
-                        f"combined={v.combined_score:+.3f} news={v.news_score:+.3f} "
-                        f"price={v.price_score:+.3f}"
+                        f"  {key:<16} {marker:<6} score={agg.score:+.3f} "
+                        f"articles={agg.article_count} pos={agg.positive_count} "
+                        f"neg={agg.negative_count} neu={agg.neutral_count}"
                     )
-                    print(f"      reason: {v.reason}")
-            return
+        return
+
+    if args.command == "verdict":
+        from .verdict import run_verdicts
+
+        verdicts = run_verdicts(
+            market_codes=args.market,
+            prefer_finbert=not args.no_finbert,
+        )
+        if args.json:
+            print(json.dumps({k: v.as_dict() for k, v in verdicts.items()}, indent=2))
+        else:
+            for key in sorted(verdicts):
+                v = verdicts[key]
+                print(
+                    f"  {key:<16} {v.verdict:<6} conf={v.confidence:.2f} "
+                    f"combined={v.combined_score:+.3f} news={v.news_score:+.3f} "
+                    f"price={v.price_score:+.3f}"
+                )
+                print(f"      reason: {v.reason}")
+        return
 
     scaffold()
 
