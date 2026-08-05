@@ -1,4 +1,0 @@
-flask
-yfinance
-numpy
-pandas
