@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Callable
 
 from ..config import settings
 from ..db import Database
@@ -15,7 +14,6 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ScoreResult:
     scored: int = 0
-    skipped: int = 0
     headlines: dict[str, SourceSentiment] = field(default_factory=dict)
 
 
@@ -42,73 +40,17 @@ class SentimentPipeline:
     def model_name(self) -> str:
         return self.scorer.name
 
-    def _score_if_unscored(self) -> int:
+    def _unscored_rows(self, limit: int = 500):
         with self.db.connect() as conn:
-            rows = conn.execute(
+            return conn.execute(
                 """SELECT n.id, n.title, n.summary
                    FROM news_items n
                    LEFT JOIN sentiment_scores s ON s.news_item_id = n.id AND s.model = ?
                    WHERE s.id IS NULL
                    ORDER BY n.id
                    LIMIT ?""",
-                (self.model_name(), 500),
+                (self.model_name(), limit),
             ).fetchall()
-
-        count = 0
-        for row in rows:
-            text = f"{row['title']} {row['summary']}".strip()
-            result = self.scorer.score(text)
-            if not text:
-                continue
-            self.db.insert_sentiment(
-                news_item_id=row["id"],
-                model=self.model_name(),
-                score=result.score,
-                label=result.label,
-                positive=result.positive,
-                negative=result.negative,
-                neutral=result.neutral,
-            )
-            count += 1
-        return count
-
-    def run(self, *, limit: int = 500) -> ScoreResult:
-        scored = self._score_unscored(limit=limit)
-        result = ScoreResult(scored=scored)
-
-        with self.db.connect() as conn:
-            rows = conn.execute(
-                """SELECT n.market, n.ticker, n.source, n.published_at,
-                          s.score, s.label, s.positive, s.negative, s.neutral
-                   FROM news_items n
-                   JOIN sentiment_scores s ON s.news_item_id = n.id
-                   WHERE s.model = ?
-                   ORDER BY n.published_at DESC""",
-                (self.model_name(),),
-            ).fetchall()
-
-        grouped: dict[tuple[str, str], list[tuple[SentimentResult, str, str]]] = {}
-        for row in rows:
-            key = (row["market"], row["ticker"])
-            grouped.setdefault(key, []).append(
-                (
-                    SentimentResult(
-                        score=row["score"],
-                        label=row["label"],
-                        positive=row["positive"],
-                        negative=row["negative"],
-                        neutral=row["neutral"],
-                    ),
-                    row["source"],
-                    row["published_at"],
-                )
-            )
-
-        for (market, ticker), items in grouped.items():
-            hkey = f"{market}:{ticker}"
-            result.headlines[hkey] = aggregate_sentiment(items)
-
-        return result
 
     def _score_unscored(self, limit: int = 500) -> int:
         rows = self._unscored_rows(limit)
@@ -130,20 +72,41 @@ class SentimentPipeline:
             count += 1
         return count
 
-    def _unscored_rows(self, limit: int = 500):
+    def run(self, *, limit: int = 500) -> ScoreResult:
+        scored = self._score_unscored(limit=limit)
+
         with self.db.connect() as conn:
-            return conn.execute(
-                """SELECT n.id, n.title, n.summary
+            rows = conn.execute(
+                """SELECT n.market, n.ticker, n.source, n.published_at,
+                          s.score, s.label, s.positive, s.negative, s.neutral
                    FROM news_items n
-                   LEFT JOIN sentiment_scores s ON s.news_item_id = n.id AND s.model = ?
-                   WHERE s.id IS NULL
-                   ORDER BY n.id
-                   LIMIT ?""",
-                (self.model_name(), limit),
+                   JOIN sentiment_scores s ON s.news_item_id = n.id
+                   WHERE s.model = ?""",
+                (self.model_name(),),
             ).fetchall()
 
-    def aggregate_all(self) -> dict[str, SourceSentiment]:
-        return self.run().headlines
+        grouped: dict[tuple[str, str], list[tuple[SentimentResult, str, str]]] = {}
+        for row in rows:
+            key = (row["market"], row["ticker"])
+            grouped.setdefault(key, []).append(
+                (
+                    SentimentResult(
+                        score=row["score"],
+                        label=row["label"],
+                        positive=row["positive"],
+                        negative=row["negative"],
+                        neutral=row["neutral"],
+                    ),
+                    row["source"],
+                    row["published_at"],
+                )
+            )
+
+        headlines: dict[str, SourceSentiment] = {}
+        for (market, ticker), items in grouped.items():
+            headlines[f"{market}:{ticker}"] = aggregate_sentiment(items)
+
+        return ScoreResult(scored=scored, headlines=headlines)
 
 
 def make_llm_scorer() -> LLMScorer | None:
@@ -152,18 +115,18 @@ def make_llm_scorer() -> LLMScorer | None:
     return None
 
 
-def run_sentiment(db_path: str | None = None, use_llm: bool = False) -> dict[str, SourceSentiment]:
+def run_sentiment(db_path: str | None = None, prefer_finbert: bool = True) -> ScoreResult:
     db = Database(db_path or settings.db_path)
     db.init_schema()
-    pipeline = SentimentPipeline(db)
+    pipeline = SentimentPipeline(db, prefer_finbert=prefer_finbert)
     result = pipeline.run()
     logger.info("Scored %d headlines with %s", result.scored, pipeline.model_name())
-    return result.headlines
+    return result
 
 
 def run_final_verdict(text: str) -> SentimentResult:
     """Score a combined narrative with the LLM if configured, else the default scorer."""
     llm = make_llm_scorer()
-    if llm and settings.llm_model:
+    if llm:
         return llm.score(text)
     return LexiconScorer().score(text)

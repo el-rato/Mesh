@@ -36,6 +36,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="market codes to ingest (default: all configured markets)",
     )
 
+    sentiment = sub.add_parser("sentiment", help="score unscored news and aggregate per ticker")
+    sentiment.add_argument(
+        "--no-finbert", action="store_true",
+        help="use the lexicon scorer instead of FinBERT",
+    )
+    sentiment.add_argument(
+        "--json", action="store_true", default=False,
+        help="print aggregated sentiment as JSON",
+    )
+
     return parser
 
 
@@ -52,6 +62,25 @@ def main() -> None:
                 f"  {code}: fetched={res.fetched} fetched_total={res.classified} "
                 f"inserted={res.inserted} duplicate={res.duplicate}"
             )
+        return
+
+    if args.command == "sentiment":
+        from .sentiment.pipeline import run_sentiment
+
+        result = run_sentiment(prefer_finbert=not args.no_finbert)
+        print(f"Scored {result.scored} headlines with {result.headlines and 'sentiment pipeline' or 'model'}")
+        rows = sorted(result.headlines.items(), key=lambda kv: kv[1].score, reverse=True)
+        if args.json:
+            payload = {k: v.as_dict() for k, v in rows}
+            print(json.dumps(payload, indent=2))
+        else:
+            for key, agg in rows:
+                marker = {"bullish": "BULL", "bearish": "BEAR", "neutral": "NEUT"}[agg.label]
+                print(
+                    f"  {key:<16} {marker:<6} score={agg.score:+.3f} "
+                    f"articles={agg.article_count} pos={agg.positive_count} "
+                    f"neg={agg.negative_count} neu={agg.neutral_count}"
+                )
         return
 
     scaffold()
