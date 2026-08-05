@@ -46,6 +46,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="print aggregated sentiment as JSON",
     )
 
+    verdict = sub.add_parser("verdict", help="fetch prices and emit bull/bear verdicts per ticker")
+    verdict.add_argument(
+        "--market", nargs="*", default=None,
+        help="market codes to analyze (default: all configured markets)",
+    )
+    verdict.add_argument(
+        "--no-finbert", action="store_true",
+        help="use the lexicon scorer instead of FinBERT",
+    )
+    verdict.add_argument(
+        "--json", action="store_true", default=False,
+        help="print verdicts as JSON",
+    )
+
     return parser
 
 
@@ -81,6 +95,24 @@ def main() -> None:
                     f"articles={agg.article_count} pos={agg.positive_count} "
                     f"neg={agg.negative_count} neu={agg.neutral_count}"
                 )
+        if args.command == "verdict":
+        from .verdict import run_verdicts
+
+        verdicts = run_verdicts(
+            market_codes=args.market,
+            prefer_finbert=not args.no_finbert,
+        )
+        if args.json:
+            print(json.dumps({k: v.as_dict() for k, v in verdicts.items()}, indent=2))
+        else:
+            for key in sorted(verdicts):
+                v = verdicts[key]
+                print(
+                    f"  {key:<16} {v.verdict:<6} conf={v.confidence:.2f} "
+                    f"combined={v.combined_score:+.3f} news={v.news_score:+.3f} "
+                    f"price={v.price_score:+.3f}"
+                )
+                print(f"      reason: {v.reason}")
         return
 
     scaffold()
