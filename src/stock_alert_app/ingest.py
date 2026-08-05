@@ -121,7 +121,7 @@ class MarketIngestor:
 
 
 def run_ingest(market_codes: Iterable[str] | None = None, db_path: str | None = None) -> dict[str, IngestResult]:
-    markets = load_markets(settings.markets_dir)
+    markets = _load_markets()
     db = Database(db_path or settings.db_path)
     db.init_schema()
 
