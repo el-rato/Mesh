@@ -10,6 +10,7 @@ import yfinance as yf
 
 from .config import settings
 from .db import Database
+from .markets import Market
 
 logger = logging.getLogger(__name__)
 
@@ -27,16 +28,12 @@ class PriceState:
     rsi_14: float
     sma_50: float
     sma_200: float = 0.0
-    trend_50_200: float = 50.0 if False else 0.0
+    trend_50_200: float = 0.0
     price_above_sma_50: bool = False
-
-    @property
-    def symbol(self) -> str:
-        return self._symbol if hasattr(self, "_symbol") else self.ticker
 
     def as_dict(self) -> dict[str, float | str | int | bool]:
         return {
-            "symbol": self.symbol,
+            "symbol": self.ticker,
             "close": self.close,
             "open": self.open,
             "high": self.high,
@@ -60,9 +57,7 @@ def full_symbol(market_code: str, symbol: str, suffix: str = "") -> str:
 def fetch_history(symbol: str, period: str = "6mo", interval: str = "1d") -> pd.DataFrame:
     ticker = yf.Ticker(symbol)
     df = ticker.history(period=period, interval=interval, auto_adjust=True)
-    if df is None or df.empty:
-        return pd.DataFrame()
-    if "Close" not in df.columns:
+    if df is None or df.empty or "Close" not in df.columns:
         return pd.DataFrame()
     return df
 
@@ -92,12 +87,7 @@ def compute_rsi(closes: list[float], window: int = 14) -> float:
     return 100.0 - (100.0 / (1.0 + rs))
 
 
-def build_price_state(
-    market: str,
-    symbol: str,
-    df: pd.DataFrame,
-    indicator_window: int = 50,
-) -> PriceState | None:
+def build_price_state(market: str, symbol: str, df: pd.DataFrame) -> PriceState | None:
     if df.empty or len(df) < 2:
         return None
     closes = df["Close"].dropna().tolist()
@@ -113,7 +103,6 @@ def build_price_state(
 
     momentum_20 = (closes[-1] - closes[-21]) / closes[-21] if len(closes) > 21 else 0.0
     rsi_14 = compute_rsi(closes)
-
     sma_50 = _safe_mean(closes[-50:]) if len(closes) >= 50 else _safe_mean(closes)
     sma_200 = _safe_mean(closes[-200:]) if len(closes) >= 200 else 0.0
     trend_50_200 = (sma_50 - sma_200) / sma_200 if sma_200 else 0.0
@@ -127,7 +116,7 @@ def build_price_state(
         high=high,
         low=low,
         volume=volume,
-        momentum_20=momentum,
+        momentum_20=momentum_20,
         rsi_14=rsi_14,
         sma_50=sma_50,
         sma_200=sma_200,
@@ -151,25 +140,41 @@ def store_price_state(db: Database, state: PriceState) -> None:
     )
 
 
-def fetch_and_store(market_name: str, market_suffix: str, ticker_symbols: Iterable[str], db: Database) -> dict[str, PriceState]:
-    from .markets import Market  # local to avoid circular import at module load
-
+def fetch_market_prices(market: Market, db: Database) -> dict[str, PriceState]:
     states: dict[str, PriceState] = {}
-    for raw in ticker_symbols:
-        symbol = full_symbol(market_name, raw, market_suffix if market.suffix else "")
+    for symbol in market.tickers:
+        yahoo_symbol = full_symbol(market.code, symbol, market.yahoo_suffix)
         try:
-            df = fetch_history(symbol, period="6mo")
+            df = fetch_history(yahoo_symbol, period="6mo")
         except Exception as exc:
-            logger.warning("Failed to fetch %s: %s", symbol, exc)
+            logger.warning("Failed to fetch %s: %s", yahoo_symbol, exc)
             continue
-        state = build_price_state(market_name, raw, df)
+        state = build_price_state(market.code, symbol, df)
         if state is None:
-            logger.warning("No price data for %s", symbol)
+            logger.warning("No price data for %s", yahoo_symbol)
             continue
-        store(state, db)
-        states[raw] = state
+        store_price_state(db, state)
+        states[symbol] = state
     return states
 
 
-def store_state(db: Database, state: PriceState) -> None:
-    save_price_state(db, state)
+def run_price_fetch(
+    market_codes: Iterable[str] | None = None,
+    db_path: str | None = None,
+) -> dict[str, PriceState]:
+    from .ingest import _load_markets  # reuse market loading without duplicating
+
+    markets = _load_markets()
+    db = Database(db_path or settings.db_path)
+    db.init_schema()
+
+    codes = list(market_codes) if market_codes else list(settings.default_markets)
+    states: dict[str, PriceState] = {}
+    for code in codes:
+        market = markets.get(code)
+        if not market:
+            logger.warning("Unknown market %s, skipping", code)
+            continue
+        fetched = fetch_market_prices(market, db)
+        states.update(fetched)
+    return states

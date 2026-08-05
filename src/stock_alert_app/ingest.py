@@ -12,6 +12,10 @@ from . import sources
 logger = logging.getLogger(__name__)
 
 
+def _load_markets() -> dict[str, Market]:
+    return load_markets(settings.markets_dir)
+
+
 @dataclass
 class IngestResult:
     fetched: int = 0
