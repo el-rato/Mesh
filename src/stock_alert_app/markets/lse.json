@@ -1,0 +1,39 @@
+{
+  "code": "LSE",
+  "name": "London Stock Exchange",
+  "country": "GB",
+  "currency": "GBP",
+  "timezone": "Europe/London",
+  "yahoo_suffix": ".L",
+  "rss_queries": [
+    "London stock exchange",
+    "FTSE 100",
+    "UK economy"
+  ],
+  "tickers": {
+    "SHEL": {
+      "name": "Shell plc",
+      "keywords": ["Shell", "Royal Dutch Shell"]
+    },
+    "AZN": {
+      "name": "AstraZeneca PLC",
+      "keywords": ["AstraZeneca"]
+    },
+    "HSBA": {
+      "name": "HSBC Holdings plc",
+      "keywords": ["HSBC"]
+    },
+    "BP": {
+      "name": "BP p.l.c.",
+      "keywords": ["BP plc", "BP oil"]
+    },
+    "ULVR": {
+      "name": "Unilever PLC",
+      "keywords": ["Unilever"]
+    },
+    "GSK": {
+      "name": "GSK plc",
+      "keywords": ["GlaxoSmithKline", "GSK"]
+    }
+  }
+}

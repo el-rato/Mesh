@@ -27,7 +27,7 @@ class Settings:
     db_path: Path = field(default_factory=lambda: _env_path("STOCK_ALERT_DB", Path("data/stock_verdict.db")))
     markets_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parent / "markets")
 
-    default_markets: tuple[str, ...] = ("NSE", "NYSE")
+    default_markets: tuple[str, ...] = ("BSE", "NYSE", "LSE")
 
     news_api_key: str = field(default_factory=lambda: os.getenv("NEWS_API_KEY", ""))
     llm_api_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", ""))

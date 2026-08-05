@@ -49,8 +49,6 @@ class PriceState:
 
 
 def full_symbol(market_code: str, symbol: str, suffix: str = "") -> str:
-    if market_code == "NSE" and len(symbol) <= 4:
-        return f"{symbol}.LAG"
     return symbol + suffix
 
 
@@ -90,16 +88,19 @@ def compute_rsi(closes: list[float], window: int = 14) -> float:
 def build_price_state(market: str, symbol: str, df: pd.DataFrame) -> PriceState | None:
     if df.empty or len(df) < 2:
         return None
-    closes = df["Close"].dropna().tolist()
+    df_valid = df.dropna(subset=["Close"])
+    if df_valid.empty:
+        return None
+    closes = df_valid["Close"].tolist()
     if not closes:
         return None
 
-    last = df.iloc[-1]
+    last = df_valid.iloc[-1]
     close = float(last["Close"])
     open_ = float(last.get("Open", close))
     high = float(last.get("High", close))
     low = float(last.get("Low", close))
-    volume = int(last.get("Volume", 0))
+    volume = int(float(last.get("Volume", 0)))
 
     momentum_20 = (closes[-1] - closes[-21]) / closes[-21] if len(closes) > 21 else 0.0
     rsi_14 = compute_rsi(closes)

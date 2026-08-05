@@ -1,0 +1,39 @@
+{
+  "code": "BSE",
+  "name": "Bombay Stock Exchange",
+  "country": "IN",
+  "currency": "INR",
+  "timezone": "Asia/Kolkata",
+  "yahoo_suffix": ".BO",
+  "rss_queries": [
+    "Indian stock market",
+    "BSE Sensex",
+    "India economy"
+  ],
+  "tickers": {
+    "RELIANCE": {
+      "name": "Reliance Industries Limited",
+      "keywords": ["Reliance", "RIL"]
+    },
+    "TCS": {
+      "name": "Tata Consultancy Services Limited",
+      "keywords": ["TCS", "Tata Consultancy"]
+    },
+    "INFY": {
+      "name": "Infosys Limited",
+      "keywords": ["Infosys"]
+    },
+    "HDFCBANK": {
+      "name": "HDFC Bank Limited",
+      "keywords": ["HDFC Bank"]
+    },
+    "ICICIBANK": {
+      "name": "ICICI Bank Limited",
+      "keywords": ["ICICI Bank"]
+    },
+    "SBIN": {
+      "name": "State Bank of India",
+      "keywords": ["SBIN", "State Bank", "SBI"]
+    }
+  }
+}
