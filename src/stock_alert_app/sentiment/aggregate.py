@@ -73,7 +73,60 @@ def _recency_weight(published_at: datetime | None, now: datetime, half_life_hour
     return math.exp(-elapsed_hours / half_life_hours)
 
 
-def aggregate_sentiment(scores: list[tuple[SentimentResult, str, str]]) -> None:
-    raise NotImplementedError(
-        "use the aggregate_sentiment() module function defined in this file"
+def aggregate_sentiment(
+    scores: list[tuple[SentimentResult, str, str]],
+    half_life_hours: float = 72.0,
+) -> SourceSentiment:
+    """Aggregate per-article sentiment into one weighted score.
+
+    Args:
+        scores: iterable of (SentimentResult, source, published_at) tuples.
+        half_life_hours: recency decay half-life.
+
+    Returns:
+        A SourceSentiment combining recency- and source-reliability weighting.
+    """
+    now = datetime.now(timezone.utc)
+    total_weight = 0.0
+    weighted_sum = 0.0
+    pos = neg = neu = 0
+    confidence_sum = 0.0
+    count = len(scores)
+
+    parsed_times: list[datetime | None] = []
+    for result, source, published in scores:
+        published_at = _parse_time(published)
+        w = _source_weight(source) * _recency_weight(published_at, now, half_life_hours)
+        total_weight += w
+        weighted_sum += result.score * w
+        confidence_sum += 1.0 - abs(result.score)
+        parsed_times.append(published_at)
+        if result.label == "positive":
+            pos += 1
+        elif result.label == "negative":
+            neg += 1
+        else:
+            neu += 1
+
+    if count == 0 or total_weight == 0:
+        return SourceSentiment(0.0, "neutral", count, pos, neg, neu, 0.0, 0.0)
+
+    score = max(-1.0, min(1.0, weighted_sum / total_weight))
+    if score > 0.15:
+        label = "bullish"
+    elif score < -0.15:
+        label = "bearish"
+    else:
+        label = "neutral"
+
+    freshness = sum(_recency_weight(p, now, half_life_hours) for p in parsed_times) / count
+    return SourceSentiment(
+        score=round(score, 4),
+        label=label,
+        article_count=count,
+        positive_count=pos,
+        negative_count=neg,
+        neutral_count=neu,
+        avg_confidence=round(confidence_sum / count, 4),
+        freshness=round(freshness, 4),
     )
