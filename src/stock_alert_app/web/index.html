@@ -59,6 +59,10 @@
   .badge.bear { background: rgba(239,68,68,.15); color: var(--bear); }
   .badge.neutral { background: rgba(250,204,21,.15); color: var(--neutral); }
   .badge.discover { background: rgba(37,99,235,.15); color: #60a5fa; }
+  .badge.buy { background: rgba(34,197,94,.15); color: var(--bull); }
+  .badge.sell { background: rgba(239,68,68,.15); color: var(--bear); }
+  .badge.hold { background: rgba(250,204,21,.15); color: var(--neutral); }
+  .badge.avoid { background: rgba(139,92,246,.18); color: #a78bfa; }
   .row { display: flex; justify-content: space-between; margin-top: 10px; font-size: 13px; }
   .muted { color: var(--muted); }
   .conf-bar { height: 6px; border-radius: 3px; background: var(--panel2); margin-top: 8px; overflow: hidden; }
@@ -112,6 +116,7 @@
     <button class="tab active" data-tab="verdicts">Verdicts</button>
     <button class="tab" data-tab="watchlist">Watchlist</button>
     <button class="tab" data-tab="discover">Discover</button>
+    <button class="tab" data-tab="recommendations">AI Recommendations</button>
   </div>
 
   <div class="tab-panel active" id="panel-verdicts">
@@ -122,6 +127,15 @@
   <div class="tab-panel" id="panel-watchlist">
     <div class="empty" id="watchlist-loading" style="display:none">Loading watchlist…</div>
     <div class="grid" id="watchlist-grid"></div>
+  </div>
+
+  <div class="tab-panel" id="panel-recommendations">
+    <div class="discover-controls">
+      <span class="muted" id="agent-updated"></span>
+      <button class="refresh" id="agent-btn">Run Gemini Analysis</button>
+    </div>
+    <div class="empty" id="agent-loading" style="display:none">Asking Gemini… this can take a minute.</div>
+    <div class="grid" id="agent-grid"></div>
   </div>
 
   <div class="tab-panel" id="panel-discover">
@@ -273,6 +287,75 @@ function renderWatchlist(list) {
   });
 }
 
+function badgeAction(action) {
+  const a = (action || "").toLowerCase();
+  const cls = a === "buy" ? "buy" : a === "sell" ? "sell" : a === "hold" ? "hold" : "avoid";
+  return `<span class="badge ${cls}">${(action || "AVOID").toUpperCase()}</span>`;
+}
+
+function renderRecommendations(data) {
+  const grid = $("agent-grid");
+  grid.innerHTML = "";
+  const list = data.recommendations || [];
+  $("agent-updated").textContent = data.generated_at ? "Generated " + new Date(data.generated_at).toLocaleString() : "";
+  if (!list.length) {
+    grid.innerHTML = `<div class="empty">No recommendations yet. Click "Run Gemini Analysis" to generate them.</div>`;
+    return;
+  }
+  const order = { BUY: 0, HOLD: 1, SELL: 2, AVOID: 3 };
+  list.sort((a, b) => (order[a.action] ?? 9) - (order[b.action] ?? 9) || b.confidence - a.confidence);
+  for (const r of list) {
+    const el = document.createElement("div");
+    el.className = "card";
+    el.innerHTML = `
+      <div class="card-head">
+        <div>
+          <div class="symbol">${r.ticker}</div>
+          <div class="name">${r.company || r.market} (${r.market})</div>
+        </div>
+        ${watchBtn(r.market, r.ticker, r.company)}
+      </div>
+      ${badgeAction(r.action)}
+      <div class="row"><span class="muted">Confidence</span><span>${(r.confidence*100).toFixed(0)}%</span></div>
+      <div class="conf-bar"><span style="width:${r.confidence*100}%; background:${r.action === "BUY" ? "var(--bull)" : r.action === "SELL" ? "var(--bear)" : r.action === "HOLD" ? "var(--neutral)" : "#a78bfa"}"></span></div>
+      <div class="reason">${r.rationale}</div>
+    `;
+    el.onclick = () => openDetail({ market: r.market, ticker: r.ticker, verdict: r.action === "BUY" ? "BULL" : r.action === "SELL" ? "BEAR" : "NEUTRAL", confidence: r.confidence, news_score: 0, price_score: 0, combined_score: 0, reason: [r.rationale] });
+    el.classList.add("pop-in");
+    grid.appendChild(el);
+  }
+}
+
+async function loadRecommendations() {
+  try {
+    const market = $("market-select").value;
+    const q = market ? `?market=${encodeURIComponent(market)}` : "";
+    const data = await fetchJSON("/api/agent" + q);
+    renderRecommendations(data);
+  } catch (e) {
+    $("agent-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`;
+  }
+}
+
+async function runAgent() {
+  $("agent-loading").style.display = "block";
+  $("agent-grid").innerHTML = "";
+  $("agent-btn").classList.add("loading");
+  $("agent-btn").disabled = true;
+  try {
+    const market = $("market-select").value;
+    const q = market ? `?market=${encodeURIComponent(market)}&live=1` : "?live=1";
+    const data = await fetchJSON("/api/agent" + q);
+    renderRecommendations(data);
+  } catch (e) {
+    $("agent-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`;
+  } finally {
+    $("agent-loading").style.display = "none";
+    $("agent-btn").classList.remove("loading");
+    $("agent-btn").disabled = false;
+  }
+}
+
 async function loadVerdicts() {
   try {
     const market = $("market-select").value;
@@ -409,6 +492,7 @@ async function init() {
   $("refresh-btn").onclick = refreshAll;
   $("market-select").onchange = refreshAll;
   $("discover-btn").onclick = runDiscover;
+  $("agent-btn").onclick = runAgent;
   $("close-btn").onclick = () => { $("drawer").classList.remove("open"); $("overlay").classList.remove("open"); };
   $("overlay").onclick = () => { $("drawer").classList.remove("open"); $("overlay").classList.remove("open"); };
 
@@ -422,6 +506,7 @@ async function init() {
   });
 
   await refreshAll();
+  await loadRecommendations();
   setInterval(refreshAll, 30000);
 }
 

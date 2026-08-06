@@ -32,6 +32,8 @@ class Settings:
     news_api_key: str = field(default_factory=lambda: os.getenv("NEWS_API_KEY", ""))
     llm_api_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", ""))
     llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "gpt-4o-mini"))
+    gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
+    gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 
     news_weight: float = field(default_factory=lambda: _env_float("STOCK_ALERT_NEWS_WEIGHT", 0.6))
     price_weight: float = field(default_factory=lambda: _env_float("STOCK_ALERT_PRICE_WEIGHT", 0.4))

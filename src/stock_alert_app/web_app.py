@@ -170,6 +170,50 @@ def discover(
     ]
 
 
+@app.get("/api/agent")
+def agent_recommendations(
+    market: str | None = None,
+    live: bool = False,
+) -> dict[str, object]:
+    """Return Gemini trading recommendations.
+
+    When live=1, orchestrates fresh data and asks Gemini now (may take a while).
+    Otherwise returns the latest persisted recommendations.
+    """
+    db = _db()
+    db.init_schema()
+    if live:
+        from .agent import run_agent
+
+        market_codes = [market] if market else None
+        recs = run_agent(market_codes=market_codes)
+        items = [r.as_dict() for r in recs]
+        latest = db.latest_recommendations(market=market)
+        return {
+            "live": True,
+            "generated_at": latest[-1]["generated_at"] if latest else "",
+            "recommendations": items,
+        }
+
+    rows = db.latest_recommendations(market=market)
+    generated = rows[-1]["generated_at"] if rows else ""
+    return {
+        "live": False,
+        "generated_at": generated,
+        "recommendations": [
+            {
+                "market": r["market"],
+                "ticker": r["ticker"],
+                "company": r["company"],
+                "action": r["action"],
+                "confidence": r["confidence"],
+                "rationale": r["rationale"],
+            }
+            for r in rows
+        ],
+    }
+
+
 app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
 
 

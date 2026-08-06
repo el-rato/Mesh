@@ -72,6 +72,18 @@ CREATE TABLE IF NOT EXISTS watchlist (
     PRIMARY KEY (market, ticker)
 );
 
+CREATE TABLE IF NOT EXISTS agent_recommendations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    company TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    rationale TEXT NOT NULL DEFAULT '',
+    generated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_recs_generated ON agent_recommendations(generated_at);
 CREATE INDEX IF NOT EXISTS idx_news_ticker ON news_items(market, ticker);
 CREATE INDEX IF NOT EXISTS idx_verdicts_ticker ON verdicts(market, ticker);
 """
@@ -251,3 +263,49 @@ class Database:
         with self.connect() as conn:
             rows = conn.execute("SELECT market, ticker FROM watchlist").fetchall()
             return {(r["market"], r["ticker"].upper()) for r in rows}
+
+    def insert_recommendations(self, recommendations: List[Dict[str, Any]]) -> None:
+        if not recommendations:
+            return
+        generated = utc_now()
+        with self.connect() as conn:
+            conn.executemany(
+                """INSERT INTO agent_recommendations
+                   (market, ticker, company, action, confidence, rationale, generated_at)
+                   VALUES (:market, :ticker, :company, :action, :confidence, :rationale, :generated_at)""",
+                [
+                    {
+                        "market": r.get("market", ""),
+                        "ticker": r.get("ticker", "").upper(),
+                        "company": r.get("company", ""),
+                        "action": r.get("action", ""),
+                        "confidence": float(r.get("confidence", 0.0)),
+                        "rationale": r.get("rationale", ""),
+                        "generated_at": generated,
+                    }
+                    for r in recommendations
+                ],
+            )
+
+    def latest_recommendations(self, market: str | None = None) -> List[Dict[str, Any]]:
+        with self.connect() as conn:
+            if market:
+                rows = conn.execute(
+                    """SELECT * FROM agent_recommendations
+                       WHERE market = ?
+                         AND generated_at = (
+                             SELECT MAX(generated_at) FROM agent_recommendations
+                             WHERE market = ?
+                         )
+                       ORDER BY confidence DESC""",
+                    (market, market),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT * FROM agent_recommendations
+                       WHERE generated_at = (
+                           SELECT MAX(generated_at) FROM agent_recommendations
+                       )
+                       ORDER BY confidence DESC"""
+                ).fetchall()
+            return [dict(r) for r in rows]

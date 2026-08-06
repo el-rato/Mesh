@@ -79,6 +79,14 @@ def _build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--no-finbert", action="store_true", help="use lexicon scorer")
     discover.add_argument("--register", action="store_true", help="auto-register discovered tickers")
 
+    agent = sub.add_parser("agent", help="use Gemini to recommend BUY/HOLD/SELL/AVOID per ticker")
+    agent.add_argument("--market", nargs="*", default=None, help="market codes to analyze")
+    agent.add_argument(
+        "--json", action="store_true", default=False,
+        help="print recommendations as JSON",
+    )
+    agent.add_argument("--no-persist", action="store_true", help="do not save recommendations to the DB")
+
     return parser
 
 
@@ -181,6 +189,27 @@ def main() -> None:
         if args.register:
             auto_register_tickers(results)
             print("Registered new tickers (restart to include in pipeline).")
+        return
+
+    if args.command == "agent":
+        from .agent import run_agent
+
+        recommendations = run_agent(
+            market_codes=args.market,
+            persist=not args.no_persist,
+        )
+        if args.json:
+            print(json.dumps([r.as_dict() for r in recommendations], indent=2))
+        else:
+            if not recommendations:
+                print("No recommendations returned by Gemini.")
+                return
+            print("Gemini trading recommendations:")
+            for r in recommendations:
+                print(
+                    f"  {r.market}:{r.ticker:<10} {r.action:<6} "
+                    f"conf={r.confidence:.2f} — {r.rationale}"
+                )
         return
 
     scaffold()
