@@ -185,8 +185,11 @@ def agent_recommendations(
     if live:
         from .agent import run_agent
 
-        market_codes = [market] if market else None
-        recs = run_agent(market_codes=market_codes)
+        try:
+            market_codes = [market] if market else None
+            recs = run_agent(market_codes=market_codes)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
         items = [r.as_dict() for r in recs]
         latest = db.latest_recommendations(market=market)
         return {
@@ -212,6 +215,62 @@ def agent_recommendations(
             for r in rows
         ],
     }
+
+
+@app.get("/api/analyze")
+def analyze_ticker(
+    market: str,
+    ticker: str,
+    company: str = "",
+) -> dict[str, object]:
+    """Deep-dive Gemini analysis for a single, user-selected ticker."""
+    if not market or not ticker:
+        raise HTTPException(status_code=422, detail="market and ticker are required")
+    from .agent import run_agent_analysis
+
+    try:
+        analysis = run_agent_analysis(market_code=market, ticker=ticker, company=company)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return analysis.as_dict()
+
+
+@app.get("/api/risk")
+def risk_analysis(
+    tickers: str,
+    period: str = "2y",
+    risk_aversion: float = 3.0,
+) -> dict[str, object]:
+    """LSTM + Black-Litterman risk analysis for comma-separated tickers."""
+    if not tickers:
+        raise HTTPException(status_code=422, detail="tickers parameter required")
+    ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    from .models import run_risk_analysis
+
+    try:
+        results = run_risk_analysis(ticker_list, period=period, risk_aversion=risk_aversion)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"results": [r.as_dict() for r in results]}
+
+
+@app.get("/api/risk/portfolio")
+def portfolio_risk(
+    tickers: str,
+    period: str = "2y",
+    risk_aversion: float = 3.0,
+) -> dict[str, object]:
+    """Portfolio-level Black-Litterman optimization."""
+    if not tickers:
+        raise HTTPException(status_code=422, detail="tickers parameter required")
+    ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    from .models import run_portfolio_risk_analysis
+
+    try:
+        result = run_portfolio_risk_analysis(ticker_list, period=period, risk_aversion=risk_aversion)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return result or {"error": "insufficient data"}
 
 
 app.mount("/static", StaticFiles(directory=UI_DIR), name="static")

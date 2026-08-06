@@ -4,6 +4,13 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+try:
+    from dotenv import load_dotenv  # type: ignore
+
+    load_dotenv()
+except ImportError:
+    pass
+
 
 def _env_path(name: str, default: Path) -> Path:
     value = os.getenv(name)
@@ -33,7 +40,7 @@ class Settings:
     llm_api_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", ""))
     llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "gpt-4o-mini"))
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
-    gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+    gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.6-flash"))
 
     news_weight: float = field(default_factory=lambda: _env_float("STOCK_ALERT_NEWS_WEIGHT", 0.6))
     price_weight: float = field(default_factory=lambda: _env_float("STOCK_ALERT_PRICE_WEIGHT", 0.4))

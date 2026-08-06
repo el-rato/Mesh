@@ -13,6 +13,7 @@ dependencies = [
     "torch>=2.4",
     "transformers>=4.40",
     "google-genai>=2.17.0",
+    "python-dotenv>=1.2.2",
 ]
 
 [project.scripts]

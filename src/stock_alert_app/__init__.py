@@ -87,6 +87,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     agent.add_argument("--no-persist", action="store_true", help="do not save recommendations to the DB")
 
+    analyze = sub.add_parser("analyze", help="deep-dive Gemini analysis for one specific stock")
+    analyze.add_argument("ticker", help="stock ticker symbol, e.g. AAPL or RELIANCE")
+    analyze.add_argument("--market", required=True, help="market code, e.g. NYSE, BSE, LSE")
+    analyze.add_argument("--company", default="", help="optional company name")
+
+    risk = sub.add_parser("risk", help="LSTM + Black-Litterman risk analysis for tickers")
+    risk.add_argument("tickers", nargs="+", help="ticker symbols, e.g. AAPL MSFT TSLA")
+    risk.add_argument("--market", default="NYSE", help="market code for Yahoo Finance suffix")
+    risk.add_argument("--period", default="2y", help="lookback period (default 2y)")
+    risk.add_argument("--risk-aversion", type=float, default=3.0, help="Black-Litterman risk aversion")
+    risk.add_argument("--portfolio", action="store_true", help="run portfolio-level optimization only")
+
     return parser
 
 
@@ -210,6 +222,62 @@ def main() -> None:
                     f"  {r.market}:{r.ticker:<10} {r.action:<6} "
                     f"conf={r.confidence:.2f} — {r.rationale}"
                 )
+        return
+
+    if args.command == "analyze":
+        from .agent import run_agent_analysis
+
+        analysis = run_agent_analysis(
+            market_code=args.market,
+            ticker=args.ticker,
+            company=args.company,
+        )
+        print(f"{analysis.market}:{analysis.ticker} ({analysis.company}) — {analysis.action} "
+              f"(conf {analysis.confidence:.2f})")
+        print(f"  Summary: {analysis.summary}")
+        for label, items in (
+            ("Key points", analysis.key_points),
+            ("Risks", analysis.risks),
+            ("Catalysts", analysis.catalysts),
+        ):
+            if items:
+                print(f"  {label}:")
+                for it in items:
+                    print(f"    - {it}")
+        return
+
+    if args.command == "risk":
+        from .models import run_risk_analysis, run_portfolio_risk_analysis
+
+        if args.portfolio:
+            result = run_portfolio_risk_analysis(
+                tickers=args.tickers,
+                period=args.period,
+                risk_aversion=args.risk_aversion,
+            )
+            if result:
+                print("Portfolio Optimization (Black-Litterman):")
+                print(f"  Recommendation: {result['recommendation']}")
+                for t, w in result['portfolio']['weights'].items():
+                    print(f"  {t}: {w:.2%}")
+                rm = result['risk_metrics']
+                print(f"  Sharpe: {rm['sharpe_ratio']:.3f} | Vol: {rm['portfolio_vol']:.4f} | VaR95: {rm['var_95']:.4f}")
+            return
+
+        results = run_risk_analysis(
+            tickers=args.tickers,
+            market=args.market,
+            period=args.period,
+            risk_aversion=args.risk_aversion,
+        )
+        for r in results:
+            bl_w = f"{r.bl_weight:.2%}" if r.bl_weight is not None else "N/A"
+            lstm_sig = r.lstm_signal or "N/A"
+            lstm_ret = f"{r.lstm_predicted_return:.4f}" if r.lstm_predicted_return is not None else "N/A"
+            lstm_conf = f"{r.lstm_confidence:.2f}" if r.lstm_confidence is not None else "N/A"
+            print(f"{r.ticker}: LSTM={lstm_sig} ({lstm_ret} @ {lstm_conf}) | BL weight={bl_w} | Risk={r.risk_level}")
+            if r.portfolio_sharpe is not None:
+                print(f"  Portfolio: Sharpe={r.portfolio_sharpe:.3f} Vol={r.portfolio_vol:.4f} VaR95={r.var_95:.4f}")
         return
 
     scaffold()

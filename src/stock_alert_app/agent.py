@@ -35,6 +35,32 @@ class Recommendation:
 
 
 @dataclass
+class StockAnalysis:
+    market: str
+    ticker: str
+    company: str
+    action: str
+    confidence: float
+    summary: str
+    key_points: list[str]
+    risks: list[str]
+    catalysts: list[str]
+
+    def as_dict(self) -> dict[str, str | float | list[str]]:
+        return {
+            "market": self.market,
+            "ticker": self.ticker,
+            "company": self.company,
+            "action": self.action,
+            "confidence": round(self.confidence, 4),
+            "summary": self.summary,
+            "key_points": self.key_points,
+            "risks": self.risks,
+            "catalysts": self.catalysts,
+        }
+
+
+@dataclass
 class AgentContext:
     verdicts: dict[str, Verdict] = field(default_factory=dict)
     watchlist: list[dict] = field(default_factory=list)
@@ -168,6 +194,89 @@ class TradingAgent:
             )
         return recs
 
+    def analyze_ticker(
+        self,
+        market_code: str,
+        ticker: str,
+        company: str = "",
+        db_path: str | None = None,
+    ) -> StockAnalysis:
+        """Deep-dive Gemini analysis for a single, user-selected ticker."""
+        from .verdict import live_verdict
+
+        db = Database(db_path or settings.db_path)
+        db.init_schema()
+        v = live_verdict(market_code, ticker, company, db_path=db_path)
+        if v is None:
+            raise RuntimeError(f"Could not build a verdict for {market_code}:{ticker}")
+        ticker = v.ticker
+
+        headlines = [
+            {"title": n["title"], "source": n["source"], "sentiment": n.get("sentiment_label", "")}
+            for n in db.recent_news(v.market, ticker, limit=10)
+        ]
+
+        data_payload = {
+            "verdict": {
+                "market": v.market,
+                "ticker": v.ticker,
+                "company": company or "",
+                "verdict": v.verdict,
+                "confidence": v.confidence,
+                "news_score": v.news_score,
+                "price_score": v.price_score,
+                "combined_score": v.combined_score,
+                "reason": v.reason,
+            },
+            "price": v.price.as_dict() if v.price else None,
+            "news": headlines,
+        }
+
+        prompt = (
+            f"You are a senior equity analyst. Analyze {ticker} ({company or market_code}) "
+            "using ONLY the data below.\n"
+            "Return ONLY JSON with this exact schema:\n"
+            '{"action": "BUY|HOLD|SELL|AVOID", "confidence": float 0..1, '
+            '"summary": str (2-4 sentences), "key_points": [str], "risks": [str], '
+            '"catalysts": [str]}\n\n'
+            "Guidance: the system verdict combines news sentiment and price momentum. "
+            "BUY when signals are strongly positive, AVOID when clearly deteriorating, "
+            "otherwise HOLD/SELL. Be decisive but grounded in the provided numbers.\n\n"
+            "DATA:\n" + json.dumps(data_payload, default=str)
+        )
+
+        logger.info("Asking Gemini (%s) to analyze %s:%s…", self.model, market_code, ticker)
+        response = self._client.models.generate_content(model=self.model, contents=prompt)
+        return self._parse_analysis((response.text or "").strip(), market_code, ticker, company)
+
+    def _parse_analysis(self, text: str, market: str, ticker: str, company: str) -> StockAnalysis:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start == -1 or end == -1:
+                raise RuntimeError(f"Gemini returned no JSON:\n{text[:500]}")
+            try:
+                data = json.loads(text[start : end + 1])
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"Could not parse Gemini response: {exc}\n{text[:500]}") from exc
+
+        action = str(data.get("action", "HOLD")).upper()
+        if action not in ACTIONS:
+            action = "HOLD"
+        return StockAnalysis(
+            market=market.upper(),
+            ticker=ticker.upper(),
+            company=company,
+            action=action,
+            confidence=max(0.0, min(1.0, float(data.get("confidence", 0.5)))),
+            summary=str(data.get("summary", "")),
+            key_points=[str(x) for x in data.get("key_points", [])],
+            risks=[str(x) for x in data.get("risks", [])],
+            catalysts=[str(x) for x in data.get("catalysts", [])],
+        )
+
 
 def run_agent(
     market_codes: Iterable[str] | None = None,
@@ -183,3 +292,13 @@ def run_agent(
         db.insert_recommendations([r.as_dict() for r in recs])
         logger.info("Persisted %d recommendations", len(recs))
     return recs
+
+
+def run_agent_analysis(
+    market_code: str,
+    ticker: str,
+    company: str = "",
+    db_path: str | None = None,
+) -> StockAnalysis:
+    agent = TradingAgent()
+    return agent.analyze_ticker(market_code, ticker, company, db_path=db_path)
