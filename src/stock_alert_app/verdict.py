@@ -178,3 +178,81 @@ def run_verdicts(
                 reason=verdicts[key].reason,
             )
     return verdicts
+
+
+def live_verdict(
+    market_code: str,
+    ticker: str,
+    company: str = "",
+    db_path: str | None = None,
+) -> Verdict | None:
+    """Compute (and store) a verdict for an arbitrary ticker on demand.
+
+    Used for watchlist items that may not be registered in the market
+    config (e.g. tickers found via Discover). Falls back to lexicon
+    scoring if FinBERT is unavailable.
+    """
+    from .ingest import _load_markets
+    from .price import build_price_state, fetch_history, full_symbol, store_price_state
+    from .sentiment.aggregate import aggregate_sentiment
+    from .sentiment.scorers import FinBERTScorer, LexiconScorer
+    from .sources import fetch_google_news
+
+    markets = _load_markets()
+    market = markets.get(market_code)
+    if not market:
+        logger.warning("live_verdict: unknown market %s", market_code)
+        return None
+
+    db = Database(db_path or settings.db_path)
+    db.init_schema()
+    ticker = ticker.upper()
+
+    price = None
+    yahoo_symbol = full_symbol(market.code, ticker, market.yahoo_suffix)
+    try:
+        df = fetch_history(yahoo_symbol, period="6mo")
+        price = build_price_state(market.code, ticker, df)
+        if price:
+            store_price_state(db, price)
+    except Exception as exc:
+        logger.warning("live_verdict: no price data for %s: %s", yahoo_symbol, exc)
+
+    sentiment = None
+    query = f"{company or ticker} stock"
+    try:
+        articles = fetch_google_news(query, market.country)
+    except Exception as exc:
+        logger.warning("live_verdict: news fetch failed for %s: %s", ticker, exc)
+        articles = []
+
+    if articles:
+        try:
+            scorer = FinBERTScorer()
+        except RuntimeError:
+            scorer = LexiconScorer()
+        scores: list = []
+        for art in articles:
+            text = f"{art.title} {art.summary}".strip()
+            if not text:
+                continue
+            try:
+                scores.append((scorer.score(text), art.source, art.published_at))
+            except Exception:
+                continue
+        if scores:
+            sentiment = aggregate_sentiment(scores)
+
+    verdict = build_verdict(market.code, ticker, sentiment, price)
+    db.insert_verdict(
+        market=verdict.market,
+        ticker=verdict.ticker,
+        verdict=verdict.verdict,
+        confidence=verdict.confidence,
+        news_score=verdict.news_score,
+        price_score=verdict.price_score,
+        combined_score=verdict.combined_score,
+        reason=verdict.reason,
+    )
+    logger.info("live_verdict: %s:%s -> %s", market.code, ticker, verdict.verdict)
+    return verdict

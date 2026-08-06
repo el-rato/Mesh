@@ -122,7 +122,14 @@ def add_watchlist(item: WatchItem) -> dict[str, object]:
     db = _db()
     db.init_schema()
     added = db.add_to_watchlist(item.market, item.ticker, item.company)
-    return {"added": added, "market": item.market.upper(), "ticker": item.ticker.upper()}
+    response: dict[str, object] = {"added": added, "market": item.market.upper(), "ticker": item.ticker.upper()}
+    if added:
+        from .verdict import live_verdict
+
+        v = live_verdict(item.market, item.ticker, item.company)
+        if v is not None:
+            response["verdict"] = v.as_dict()
+    return response
 
 
 @app.delete("/api/watchlist")

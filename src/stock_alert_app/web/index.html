@@ -50,6 +50,8 @@
     padding: 16px; cursor: pointer; transition: transform 0.1s, border-color 0.1s;
   }
   .card:hover { border-color: #3b82f6; transform: translateY(-2px); }
+  @keyframes popIn { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+  .pop-in { animation: popIn .25s ease-out; }
   .card .symbol { font-size: 18px; font-weight: 700; }
   .card .name { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
   .badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 700; }
@@ -68,9 +70,10 @@
   .watch-btn {
     flex-shrink: 0; padding: 4px 10px; font-size: 12px; font-weight: 600;
     border-radius: 20px; background: var(--panel2); border: 1px solid var(--border);
-    color: var(--text); cursor: pointer;
+    color: var(--text); cursor: pointer; transition: all .15s ease;
   }
   .watch-btn:hover { border-color: #3b82f6; }
+  .watch-btn:disabled { opacity: .6; cursor: wait; }
   .watch-btn.watched { background: rgba(250,204,21,.12); color: var(--neutral); border-color: rgba(250,204,21,.4); }
   .updated { font-size: 12px; color: var(--muted); }
   .discover-controls { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
@@ -232,6 +235,29 @@ function renderDiscover(list) {
   }
 }
 
+function watchCard(w) {
+  const el = document.createElement("div");
+  el.className = "card";
+  const hasVerdict = !!w.verdict;
+  el.innerHTML = `
+    <div class="card-head">
+      <div>
+        <div class="symbol">${w.ticker}</div>
+        <div class="name">${w.company || w.market} (${w.market})</div>
+      </div>
+      ${watchBtn(w.market, w.ticker, w.company)}
+    </div>
+    ${hasVerdict ? badge(w) : '<span class="badge neutral">COMPUTING…</span>'}
+    ${hasVerdict ? `
+      <div class="row"><span class="muted">Confidence</span><span>${(w.confidence*100).toFixed(0)}%</span></div>
+      <div class="conf-bar"><span style="width:${w.confidence*100}%; background:${confColor(w.verdict)}"></span></div>
+      <div class="row"><span class="muted">Combined</span><span>${w.combined_score.toFixed(3)}</span></div>
+    ` : '<div class="reason">Fetching news and price…</div>'}
+  `;
+  el.onclick = () => openDetail({ market: w.market, ticker: w.ticker, verdict: w.verdict || 'NEUTRAL', confidence: w.confidence || 0, news_score: w.news_score || 0, price_score: w.price_score || 0, combined_score: w.combined_score || 0, reason: (w.reason && w.reason.length ? w.reason : ['watchlist item']) });
+  return el;
+}
+
 function renderWatchlist(list) {
   const grid = $("watchlist-grid");
   grid.innerHTML = "";
@@ -240,28 +266,11 @@ function renderWatchlist(list) {
     return;
   }
   list.sort((a, b) => (b.combined_score || -99) - (a.combined_score || -99));
-  for (const w of list) {
-    const el = document.createElement("div");
-    el.className = "card";
-    const hasVerdict = !!w.verdict;
-    el.innerHTML = `
-      <div class="card-head">
-        <div>
-          <div class="symbol">${w.ticker}</div>
-          <div class="name">${w.company || w.market} (${w.market})</div>
-        </div>
-        ${watchBtn(w.market, w.ticker, w.company)}
-      </div>
-      ${hasVerdict ? badge(w) : '<span class="badge neutral">PENDING</span>'}
-      ${hasVerdict ? `
-        <div class="row"><span class="muted">Confidence</span><span>${(w.confidence*100).toFixed(0)}%</span></div>
-        <div class="conf-bar"><span style="width:${w.confidence*100}%; background:${confColor(w.verdict)}"></span></div>
-        <div class="row"><span class="muted">Combined</span><span>${w.combined_score.toFixed(3)}</span></div>
-      ` : '<div class="reason">No verdict yet. Run the pipeline or wait for the next cycle.</div>'}
-    `;
-    el.onclick = () => openDetail({ market: w.market, ticker: w.ticker, verdict: w.verdict || 'NEUTRAL', confidence: w.confidence || 0, news_score: w.news_score || 0, price_score: w.price_score || 0, combined_score: w.combined_score || 0, reason: (w.reason && w.reason.length ? w.reason : ['watchlist item']) });
+  list.forEach((w) => {
+    const el = watchCard(w);
+    el.classList.add("pop-in");
     grid.appendChild(el);
-  }
+  });
 }
 
 async function loadVerdicts() {
@@ -289,28 +298,38 @@ async function loadWatchlist() {
 async function toggleWatch(market, ticker, company, btn) {
   const key = `${market}:${ticker}`;
   const on = isWatched(market, ticker);
+  const orig = btn.textContent;
   btn.disabled = true;
+  btn.textContent = on ? "Removing…" : "Adding…";
   try {
+    let verdict = null;
     if (on) {
       await fetchJSON(`/api/watchlist?market=${encodeURIComponent(market)}&ticker=${encodeURIComponent(ticker)}`, { method: "DELETE" });
+      watched.delete(key);
     } else {
-      await fetchJSON("/api/watchlist", {
+      const res = await fetchJSON("/api/watchlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ market, ticker, company: company || "" }),
       });
-    }
-    if (on) {
-      watched.delete(key);
-    } else {
       watched.add(key);
+      if (res.verdict) verdict = res.verdict;
     }
     document.querySelectorAll(`[data-watch="${key}"]`).forEach((b) => {
       b.className = "watch-btn " + (isWatched(market, ticker) ? "watched" : "");
       b.textContent = isWatched(market, ticker) ? "★ Watched" : "☆ Add to watchlist";
     });
-    await loadWatchlist();
+    if (!on && verdict) {
+      // place the live verdict card at the top of the watchlist immediately
+      const grid = $("watchlist-grid");
+      const el = watchCard({ ...verdict, market, ticker, company: company || "" });
+      el.classList.add("pop-in");
+      grid.prepend(el);
+    } else {
+      await loadWatchlist();
+    }
   } catch (e) {
+    btn.textContent = orig;
     alert("Watchlist error: " + e.message);
   } finally {
     btn.disabled = false;

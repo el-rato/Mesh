@@ -10,6 +10,13 @@
     "US stock market",
     "US economy"
   ],
+  "financial_feeds": [
+    "https://feeds.marketwatch.com/marketwatch/topstories/",
+    "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+    "https://www.investing.com/rss/news_1.rss",
+    "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+    "https://feeds.a.dj.com/rss/RSSMarketsMain.xml"
+  ],
   "tickers": {
     "AAPL": {
       "name": "Apple",

@@ -10,6 +10,12 @@
     "FTSE 100",
     "UK economy"
   ],
+  "financial_feeds": [
+    "https://feeds.bbci.co.uk/news/business/rss.xml",
+    "https://www.investing.com/rss/news_301.rss",
+    "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EFTSE&region=GB&lang=en-GB",
+    "https://www.theguardian.com/business/markets/rss"
+  ],
   "tickers": {
     "SHEL": {
       "name": "Shell plc",

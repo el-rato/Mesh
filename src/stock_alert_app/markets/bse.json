@@ -10,6 +10,12 @@
     "BSE Sensex",
     "India economy"
   ],
+  "financial_feeds": [
+    "https://economictimes.indiatimes.com/rssfeedsdefault.cms",
+    "https://www.moneycontrol.com/rss/latestnews.xml",
+    "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EBSESN&region=IN&lang=en-IN",
+    "https://www.ndtv.com/business/rss"
+  ],
   "tickers": {
     "RELIANCE": {
       "name": "Reliance Industries Limited",

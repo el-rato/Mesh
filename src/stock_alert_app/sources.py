@@ -98,6 +98,13 @@ def fetch_google_news(query: str, country_code: str = "US") -> list[Article]:
     return fetch_rss(google_news_url(query, country_code), query)
 
 
+def fetch_financial_feeds(feed_urls: list[str], fallback_query: str = "") -> list[Article]:
+    articles: list[Article] = []
+    for url in feed_urls:
+        articles.extend(fetch_rss(url, fallback_query or url))
+    return articles
+
+
 def fetch_yahoo_finance(symbol: str, region: str = "US", query: str = "") -> list[Article]:
     return fetch_rss(yahoo_finance_url(symbol, region), query or symbol)
 

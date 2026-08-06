@@ -28,6 +28,7 @@ class Market:
     yahoo_suffix: str
     tickers: Dict[str, Ticker]
     rss_queries: List[str] = field(default_factory=list)
+    financial_feeds: List[str] = field(default_factory=list)
 
     def get_ticker(self, symbol: str) -> Ticker:
         return self.tickers[symbol.upper()]
@@ -53,6 +54,7 @@ def load_market(path: Path) -> Market:
         yahoo_suffix=data.get("yahoo_suffix", ""),
         tickers=tickers,
         rss_queries=data.get("rss_queries", []),
+        financial_feeds=data.get("financial_feeds", []),
     )
 
 

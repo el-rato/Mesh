@@ -10,7 +10,7 @@ from typing import Iterable
 from .config import settings
 from .db import Database
 from .markets import Market, load_markets
-from .sources import fetch_google_news
+from .sources import fetch_google_news, fetch_financial_feeds
 from .sentiment.pipeline import SentimentPipeline
 from .sentiment.scorers import LexiconScorer
 from .ingest import MarketIngestor
@@ -77,37 +77,47 @@ def discover_from_feeds(
         if not market:
             continue
 
-        queries = market.rss_queries
-        for query in queries:
-            articles = fetch_google_news(query, market.country)
-            ticker_hits: dict[str, list[str]] = {}
+    for code in market_codes:
+        market = markets.get(code)
+        if not market:
+            continue
 
-            for art in articles:
+        ticker_hits: dict[str, list[str]] = {}
+
+        for query in market.rss_queries:
+            for art in fetch_google_news(query, market.country):
                 full = f"{art.title} {art.summary}"
                 matches = extract_companies(full, reverse_map)
                 for ticker, name in matches:
-                    if ticker in seen_tickers:
+                    if ticker in seen_tickers or ticker in market.tickers:
                         continue
-                    if ticker not in market.tickers:
-                        ticker_hits.setdefault(ticker, []).append(f"{art.title} — {art.summary[:120]}")
+                    ticker_hits.setdefault(ticker, []).append(f"{art.title} — {art.summary[:120]}")
 
-            for ticker, headlines in ticker_hits.items():
-                if len(headlines) < min_articles:
+        for art in fetch_financial_feeds(market.financial_feeds):
+            full = f"{art.title} {art.summary}"
+            matches = extract_companies(full, reverse_map)
+            for ticker, name in matches:
+                if ticker in seen_tickers or ticker in market.tickers:
                     continue
-                combined = " | ".join(headlines)
-                scored = pipeline.scorer.score(combined) if pipeline.scorer else LexiconScorer().score(combined)
-                if scored.score >= min_score:
-                    results.append(DiscoveredTicker(
-                        ticker=ticker,
-                        company=company_map[ticker][0],
-                        market=code,
-                        score=scored.score,
-                        headlines=headlines,
-                        matched_keywords=[h.split("—")[0].strip() for h in headlines],
-                    ))
-                    seen_tickers.add(ticker)
-                    if len(results) >= max_new_per_cycle:
-                        return results
+                ticker_hits.setdefault(ticker, []).append(f"{art.title} — {art.summary[:120]}")
+
+        for ticker, headlines in ticker_hits.items():
+            if len(headlines) < min_articles:
+                continue
+            combined = " | ".join(headlines)
+            scored = pipeline.scorer.score(combined) if pipeline.scorer else LexiconScorer().score(combined)
+            if scored.score >= min_score:
+                results.append(DiscoveredTicker(
+                    ticker=ticker,
+                    company=company_map[ticker][0],
+                    market=code,
+                    score=scored.score,
+                    headlines=headlines,
+                    matched_keywords=[h.split("—")[0].strip() for h in headlines],
+                ))
+                seen_tickers.add(ticker)
+                if len(results) >= max_new_per_cycle:
+                    return results
 
     return results
 
