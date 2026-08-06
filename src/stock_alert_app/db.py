@@ -64,6 +64,14 @@ CREATE TABLE IF NOT EXISTS verdicts (
     UNIQUE(market, ticker, decided_at)
 );
 
+CREATE TABLE IF NOT EXISTS watchlist (
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    company TEXT NOT NULL DEFAULT '',
+    added_at TEXT NOT NULL,
+    PRIMARY KEY (market, ticker)
+);
+
 CREATE INDEX IF NOT EXISTS idx_news_ticker ON news_items(market, ticker);
 CREATE INDEX IF NOT EXISTS idx_verdicts_ticker ON verdicts(market, ticker);
 """
@@ -214,3 +222,32 @@ class Database:
                        ORDER BY v.combined_score DESC"""
                 ).fetchall()
             return [dict(r) for r in rows]
+
+    def add_to_watchlist(self, market: str, ticker: str, company: str = "") -> bool:
+        with self.connect() as conn:
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO watchlist (market, ticker, company, added_at)
+                   VALUES (?, ?, ?, ?)""",
+                (market, ticker.upper(), company, utc_now()),
+            )
+            return cur.rowcount > 0
+
+    def remove_from_watchlist(self, market: str, ticker: str) -> bool:
+        with self.connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM watchlist WHERE market = ? AND ticker = ?",
+                (market, ticker.upper()),
+            )
+            return cur.rowcount > 0
+
+    def watchlist(self) -> List[Dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM watchlist ORDER BY added_at DESC"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def watchlist_keys(self) -> set[tuple[str, str]]:
+        with self.connect() as conn:
+            rows = conn.execute("SELECT market, ticker FROM watchlist").fetchall()
+            return {(r["market"], r["ticker"].upper()) for r in rows}

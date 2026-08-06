@@ -57,6 +57,7 @@ def discover_from_feeds(
     min_score: float = 0.25,
     max_new_per_cycle: int = 10,
     *,
+    min_articles: int = 5,
     use_lexicon: bool = True,
 ) -> list[DiscoveredTicker]:
     company_map = load_company_mapping()
@@ -91,6 +92,8 @@ def discover_from_feeds(
                         ticker_hits.setdefault(ticker, []).append(f"{art.title} — {art.summary[:120]}")
 
             for ticker, headlines in ticker_hits.items():
+                if len(headlines) < min_articles:
+                    continue
                 combined = " | ".join(headlines)
                 scored = pipeline.scorer.score(combined) if pipeline.scorer else LexiconScorer().score(combined)
                 if scored.score >= min_score:

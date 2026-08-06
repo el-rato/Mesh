@@ -74,6 +74,7 @@ def _build_parser() -> argparse.ArgumentParser:
     discover = sub.add_parser("discover", help="scan broad feeds for new tickers with bullish sentiment")
     discover.add_argument("--market", nargs="*", default=None, help="market codes to scan")
     discover.add_argument("--min-score", type=float, default=0.25, help="minimum sentiment score to consider (0-1)")
+    discover.add_argument("--min-articles", type=int, default=5, help="minimum article mentions required (default 5)")
     discover.add_argument("--max", type=int, default=10, help="max new tickers per run")
     discover.add_argument("--no-finbert", action="store_true", help="use lexicon scorer")
     discover.add_argument("--register", action="store_true", help="auto-register discovered tickers")
@@ -167,6 +168,7 @@ def main() -> None:
             codes,
             min_score=args.min_score,
             max_new_per_cycle=args.max,
+            min_articles=args.min_articles,
             use_lexicon=args.no_finbert,
         )
         if not results:

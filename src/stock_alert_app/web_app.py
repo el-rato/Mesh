@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from .config import settings
 from .db import Database
@@ -12,6 +13,12 @@ from .db import Database
 app = FastAPI(title="StockVerdict", version="0.1.0")
 
 UI_DIR = Path(__file__).resolve().parent / "web"
+
+
+class WatchItem(BaseModel):
+    market: str
+    ticker: str
+    company: str = ""
 
 
 def _db() -> Database:
@@ -82,10 +89,54 @@ def get_history(market: str, ticker: str) -> list[dict[str, object]]:
     return db.recent_verdicts(market, ticker, limit=100)
 
 
+@app.get("/api/watchlist")
+def get_watchlist() -> list[dict[str, object]]:
+    db = _db()
+    db.init_schema()
+    latest = {f"{r['market']}:{r['ticker']}": r for r in db.latest_verdicts()}
+    out: list[dict[str, object]] = []
+    for w in db.watchlist():
+        item: dict[str, object] = {
+            "market": w["market"],
+            "ticker": w["ticker"],
+            "company": w["company"],
+            "added_at": w["added_at"],
+        }
+        v = latest.get(f"{w['market']}:{w['ticker']}")
+        if v:
+            item["verdict"] = v["verdict"]
+            item["confidence"] = v["confidence"]
+            item["news_score"] = v["news_score"]
+            item["price_score"] = v["price_score"]
+            item["combined_score"] = v["combined_score"]
+            item["reason"] = [v["reason"]] if v["reason"] else []
+            item["decided_at"] = v["decided_at"]
+        out.append(item)
+    return out
+
+
+@app.post("/api/watchlist")
+def add_watchlist(item: WatchItem) -> dict[str, object]:
+    if not item.market or not item.ticker:
+        raise HTTPException(status_code=422, detail="market and ticker are required")
+    db = _db()
+    db.init_schema()
+    added = db.add_to_watchlist(item.market, item.ticker, item.company)
+    return {"added": added, "market": item.market.upper(), "ticker": item.ticker.upper()}
+
+
+@app.delete("/api/watchlist")
+def delete_watchlist(market: str, ticker: str) -> dict[str, object]:
+    db = _db()
+    removed = db.remove_from_watchlist(market, ticker)
+    return {"removed": removed, "market": market.upper(), "ticker": ticker.upper()}
+
+
 @app.get("/api/discover")
 def discover(
     market: str | None = None,
     min_score: float = 0.2,
+    min_articles: int = 5,
     max_results: int = 20,
 ) -> list[dict[str, object]]:
     from .discover import discover_from_feeds
@@ -94,6 +145,7 @@ def discover(
     results = discover_from_feeds(
         market_codes,
         min_score=min_score,
+        min_articles=min_articles,
         max_new_per_cycle=max_results,
         use_lexicon=True,
     )
@@ -104,6 +156,7 @@ def discover(
             "company": d.company,
             "score": d.score,
             "headlines": d.headlines[:5],
+            "article_count": len(d.headlines),
             "matched_keywords": d.matched_keywords,
         }
         for d in results
