@@ -1,0 +1,81 @@
+{
+  "code": "TSE",
+  "name": "Tokyo Stock Exchange",
+  "country": "JP",
+  "currency": "JPY",
+  "timezone": "Asia/Tokyo",
+  "yahoo_suffix": ".T",
+  "rss_queries": [
+    "Nikkei 225",
+    "Tokyo stock market",
+    "Japan economy"
+  ],
+  "financial_feeds": [
+    "https://finance.yahoo.com/rss/headline?s=^N225",
+    "https://www.nikkei.com/rss/nk_market.xml",
+    "https://www.reuters.com/markets/japan/rss",
+    "https://www.bloomberg.com/feed/podcast/etf-report.xml"
+  ],
+  "tickers": {
+    "7203": {
+      "name": "Toyota Motor",
+      "keywords": ["Toyota Motor", "Toyota"]
+    },
+    "6758": {
+      "name": "Sony Group",
+      "keywords": ["Sony Group", "Sony"]
+    },
+    "9984": {
+      "name": "SoftBank Group",
+      "keywords": ["SoftBank Group", "SoftBank"]
+    },
+    "6861": {
+      "name": "Keyence",
+      "keywords": ["Keyence"]
+    },
+    "9983": {
+      "name": "Fast Retailing",
+      "keywords": ["Fast Retailing", "Uniqlo"]
+    },
+    "6594": {
+      "name": "Nidec",
+      "keywords": ["Nidec"]
+    },
+    "4063": {
+      "name": "Shin-Etsu Chemical",
+      "keywords": ["Shin-Etsu Chemical", "Shin-Etsu"]
+    },
+    "4568": {
+      "name": "Daiichi Sankyo",
+      "keywords": ["Daiichi Sankyo"]
+    },
+    "8306": {
+      "name": "Mitsubishi UFJ Financial Group",
+      "keywords": ["Mitsubishi UFJ", "MUFG"]
+    },
+    "9432": {
+      "name": "NTT",
+      "keywords": ["NTT", "Nippon Telegraph"]
+    },
+    "8035": {
+      "name": "Tokyo Electron",
+      "keywords": ["Tokyo Electron"]
+    },
+    "4661": {
+      "name": "Oriental Land",
+      "keywords": ["Oriental Land", "Disney Japan"]
+    },
+    "6981": {
+      "name": "Murata Manufacturing",
+      "keywords": ["Murata Manufacturing", "Murata"]
+    },
+    "8316": {
+      "name": "Sumitomo Mitsui Financial Group",
+      "keywords": ["Sumitomo Mitsui", "SMFG"]
+    },
+    "6367": {
+      "name": "Daikin Industries",
+      "keywords": ["Daikin Industries", "Daikin"]
+    }
+  }
+}

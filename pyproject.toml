@@ -14,6 +14,7 @@ dependencies = [
     "transformers>=4.40",
     "google-genai>=2.17.0",
     "python-dotenv>=1.2.2",
+    "praw>=8.0.2",
 ]
 
 [project.scripts]

@@ -1,0 +1,81 @@
+{
+  "code": "XETRA",
+  "name": "XETRA / Frankfurt Stock Exchange",
+  "country": "DE",
+  "currency": "EUR",
+  "timezone": "Europe/Berlin",
+  "yahoo_suffix": ".DE",
+  "rss_queries": [
+    "DAX 40",
+    "Germany stock market",
+    "German economy"
+  ],
+  "financial_feeds": [
+    "https://finance.yahoo.com/rss/headline?s=^GDAXI",
+    "https://www.boerse-frankfurt.de/rss/news",
+    "https://www.handelsblatt.com/rss",
+    "https://www.reuters.com/markets/europe/germany/rss"
+  ],
+  "tickers": {
+    "SAP": {
+      "name": "SAP SE",
+      "keywords": ["SAP SE", "SAP"]
+    },
+    "SIE": {
+      "name": "Siemens AG",
+      "keywords": ["Siemens AG", "Siemens"]
+    },
+    "DTE": {
+      "name": "Deutsche Telekom AG",
+      "keywords": ["Deutsche Telekom", "Telekom"]
+    },
+    "ALV": {
+      "name": "Allianz SE",
+      "keywords": ["Allianz SE", "Allianz"]
+    },
+    "BMW": {
+      "name": "BMW AG",
+      "keywords": ["BMW AG", "BMW"]
+    },
+    "VOW3": {
+      "name": "Volkswagen AG",
+      "keywords": ["Volkswagen AG", "Volkswagen", "VW"]
+    },
+    "BAS": {
+      "name": "BASF SE",
+      "keywords": ["BASF SE", "BASF"]
+    },
+    "BAYN": {
+      "name": "Bayer AG",
+      "keywords": ["Bayer AG", "Bayer"]
+    },
+    "DHL": {
+      "name": "Deutsche Post AG",
+      "keywords": ["Deutsche Post", "DHL"]
+    },
+    "MUV2": {
+      "name": "Munich Re",
+      "keywords": ["Munich Re", "Muenchener Rueck"]
+    },
+    "IFX": {
+      "name": "Infineon Technologies",
+      "keywords": ["Infineon Technologies", "Infineon"]
+    },
+    "DPW": {
+      "name": "Deutsche Post AG",
+      "keywords": ["Deutsche Post"]
+    },
+    "MRK": {
+      "name": "Merck KGaA",
+      "keywords": ["Merck KGaA", "Merck"]
+    },
+    "RWE": {
+      "name": "RWE AG",
+      "keywords": ["RWE AG", "RWE"]
+    },
+    "EOAN": {
+      "name": "E.ON SE",
+      "keywords": ["E.ON SE", "E.ON"]
+    }
+  }
+}

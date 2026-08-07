@@ -1,0 +1,81 @@
+{
+  "code": "ASX",
+  "name": "Australian Securities Exchange",
+  "country": "AU",
+  "currency": "AUD",
+  "timezone": "Australia/Sydney",
+  "yahoo_suffix": ".AX",
+  "rss_queries": [
+    "ASX 200",
+    "Australia stock market",
+    "Australian economy"
+  ],
+  "financial_feeds": [
+    "https://finance.yahoo.com/rss/headline?s=^AXJO",
+    "https://www.afr.com/rss.xml",
+    "https://www.asx.com.au/asx/statistics/rss.xml",
+    "https://www.reuters.com/markets/australia/rss"
+  ],
+  "tickers": {
+    "BHP": {
+      "name": "BHP Group",
+      "keywords": ["BHP Group", "BHP"]
+    },
+    "CBA": {
+      "name": "Commonwealth Bank of Australia",
+      "keywords": ["Commonwealth Bank", "CBA"]
+    },
+    "CSL": {
+      "name": "CSL Limited",
+      "keywords": ["CSL Limited", "CSL"]
+    },
+    "NAB": {
+      "name": "National Australia Bank",
+      "keywords": ["National Australia Bank", "NAB"]
+    },
+    "WBC": {
+      "name": "Westpac Banking Corporation",
+      "keywords": ["Westpac Banking", "Westpac"]
+    },
+    "ANZ": {
+      "name": "ANZ Group Holdings",
+      "keywords": ["ANZ Group", "ANZ"]
+    },
+    "WES": {
+      "name": "Wesfarmers",
+      "keywords": ["Wesfarmers"]
+    },
+    "MQG": {
+      "name": "Macquarie Group",
+      "keywords": ["Macquarie Group", "Macquarie"]
+    },
+    "TLS": {
+      "name": "Telstra Group",
+      "keywords": ["Telstra Group", "Telstra"]
+    },
+    "WOW": {
+      "name": "Woolworths Group",
+      "keywords": ["Woolworths Group", "Woolworths"]
+    },
+    "RIO": {
+      "name": "Rio Tinto",
+      "keywords": ["Rio Tinto"]
+    },
+    "FMG": {
+      "name": "Fortescue Metals Group",
+      "keywords": ["Fortescue Metals", "Fortescue"]
+    },
+    "TCL": {
+      "name": "Transurban Group",
+      "keywords": ["Transurban Group", "Transurban"]
+    },
+    "STO": {
+      "name": "Santos Limited",
+      "keywords": ["Santos Limited", "Santos"]
+    },
+    "COL": {
+      "name": "Coles Group",
+      "keywords": ["Coles Group", "Coles"]
+    }
+  }
+}

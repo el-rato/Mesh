@@ -7,110 +7,166 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
   :root {
-    --bg: #0f1218;
-    --panel: #171c26;
-    --panel2: #1f2634;
-    --border: #2a3342;
-    --text: #e6ebf2;
-    --muted: #8a94a6;
-    --bull: #22c55e;
+    --bg: #0a0e17;
+    --bg-elevated: #111827;
+    --panel: #141d2e;
+    --panel2: #1a2538;
+    --border: #273549;
+    --border-light: #334155;
+    --text: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --accent: #3b82f6;
+    --accent-hover: #60a5fa;
+    --accent-glow: rgba(59,130,246,0.3);
+    --bull: #10b981;
+    --bull-bg: rgba(16,185,129,0.12);
     --bear: #ef4444;
-    --neutral: #facc15;
+    --bear-bg: rgba(239,68,68,0.12);
+    --neutral: #f59e0b;
+    --neutral-bg: rgba(245,158,11,0.12);
+    --purple: #a855f7;
+    --purple-bg: rgba(168,85,247,0.12);
+    --shadow: rgba(0,0,0,0.3);
+    --shadow-lg: rgba(0,0,0,0.5);
+    --radius: 12px;
+    --radius-sm: 8px;
+    --transition: 0.2s ease;
   }
   * { box-sizing: border-box; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
   body {
-    margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    margin: 0; font-family: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
     background: var(--bg); color: var(--text); min-height: 100vh;
+    background-image: 
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(59,130,246,0.06), transparent),
+      radial-gradient(ellipse 60% 40% at 100% 100%, rgba(168,85,247,0.04), transparent);
   }
   header {
-    padding: 18px 28px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
-    background: var(--panel);
+    padding: 16px 28px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    background: linear-gradient(180deg, var(--panel), var(--bg-elevated));
+    backdrop-filter: blur(10px);
+    position: sticky; top: 0; z-index: 100;
   }
-  header h1 { font-size: 20px; margin: 0; letter-spacing: 0.3px; }
-  header .tag { color: var(--muted); font-size: 13px; }
+  header h1 { font-size: 22px; margin: 0; font-weight: 700; letter-spacing: -0.02em;
+    background: linear-gradient(90deg, var(--text), var(--accent));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  header .tag { color: var(--text-muted); font-size: 12px; font-weight: 500; }
   .controls { display: flex; gap: 10px; align-items: center; margin-left: auto; flex-wrap: wrap; }
+  .market-select-wrapper { position: relative; }
   select, button, input {
     background: var(--panel2); color: var(--text); border: 1px solid var(--border);
-    padding: 8px 12px; border-radius: 8px; font-size: 13px; cursor: pointer;
+    padding: 10px 14px; border-radius: var(--radius-sm); font-size: 13px; cursor: pointer;
+    transition: all var(--transition);
   }
-  button.refresh { background: #2563eb; border-color: #2563eb; font-weight: 600; }
-  button.refresh:hover { background: #3b82f6; }
-  button.secondary { background: var(--panel2); border-color: var(--border); }
-  button.secondary:hover { background: #2a3342; }
-  main { padding: 24px 28px; }
-  .tabs { display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
-  .tab { padding: 8px 16px; border-radius: 8px 8px 0 0; background: var(--panel2); color: var(--muted); border: none; cursor: pointer; font-size: 13px; }
-  .tab.active { background: var(--bg); color: var(--text); border-bottom: 2px solid #2563eb; }
-  .tab:hover:not(.active) { color: var(--text); }
-  .tab-panel { display: none; }
+  select { appearance: none; padding-right: 36px; min-width: 180px; }
+  .market-select-wrapper::after {
+    content: ""; position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+    width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent;
+    border-top: 6px solid var(--text-muted); pointer-events: none;
+  }
+  select:hover, input:hover { border-color: var(--border-light); }
+  select:focus, input:focus, button:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+  button { font-weight: 600; }
+  button.refresh { background: var(--accent); border-color: var(--accent); color: white; }
+  button.refresh:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: 0 4px 12px var(--accent-glow); }
+  button.refresh:active { transform: translateY(0); }
+  button.refresh.loading { opacity: 0.7; cursor: wait; }
+  button.secondary { background: var(--panel2); border-color: var(--border); color: var(--text); }
+  button.secondary:hover { background: var(--border); border-color: var(--border-light); }
+  main { padding: 28px 32px; max-width: 1600px; margin: 0 auto; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 24px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  .tab { padding: 10px 20px; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); border: none; cursor: pointer; font-size: 13px; font-weight: 600; transition: all var(--transition); }
+  .tab:hover:not(.active) { color: var(--text); background: var(--panel); }
+  .tab.active { color: var(--accent); background: var(--accent-glow); }
+  .tab-panel { display: none; animation: fadeIn 0.3s ease; }
   .tab-panel.active { display: block; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
   .card {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-    padding: 16px; cursor: pointer; transition: transform 0.1s, border-color 0.1s;
+    background: linear-gradient(180deg, var(--panel), var(--bg-elevated));
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 20px; cursor: pointer; transition: all var(--transition);
+    position: relative; overflow: hidden;
   }
-  .card:hover { border-color: #3b82f6; transform: translateY(-2px); }
-  @keyframes popIn { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
-  .pop-in { animation: popIn .25s ease-out; }
-  .card .symbol { font-size: 18px; font-weight: 700; }
-  .card .name { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
-  .badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 700; }
-  .badge.bull { background: rgba(34,197,94,.15); color: var(--bull); }
-  .badge.bear { background: rgba(239,68,68,.15); color: var(--bear); }
-  .badge.neutral { background: rgba(250,204,21,.15); color: var(--neutral); }
-  .badge.discover { background: rgba(37,99,235,.15); color: #60a5fa; }
-  .badge.buy { background: rgba(34,197,94,.15); color: var(--bull); }
-  .badge.sell { background: rgba(239,68,68,.15); color: var(--bear); }
-  .badge.hold { background: rgba(250,204,21,.15); color: var(--neutral); }
-  .badge.avoid { background: rgba(139,92,246,.18); color: #a78bfa; }
-  .row { display: flex; justify-content: space-between; margin-top: 10px; font-size: 13px; }
-  .muted { color: var(--muted); }
-  .conf-bar { height: 6px; border-radius: 3px; background: var(--panel2); margin-top: 8px; overflow: hidden; }
-  .conf-bar > span { display: block; height: 100%; border-radius: 3px; }
-  .reason { margin-top: 10px; font-size: 12px; color: var(--muted); line-height: 1.4; }
-  .empty { text-align: center; color: var(--muted); padding: 60px 0; }
-  .error { color: var(--bear); text-align: center; padding: 40px; }
-  .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
-  .card-btns { display: flex; gap: 6px; flex-shrink: 0; }
-  .watch-btn.analyze-btn { background: rgba(139,92,246,.14); color: #a78bfa; border-color: rgba(139,92,246,.35); }
-  .watch-btn.analyze-btn:hover { border-color: #a78bfa; }
+  .card::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: transparent; transition: all var(--transition); }
+  .card:hover { border-color: var(--accent); transform: translateY(-4px); box-shadow: 0 12px 32px var(--shadow-lg); }
+  .card:hover::before { background: linear-gradient(90deg, var(--accent), var(--purple)); }
+  .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 16px; }
+  .card .symbol { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+  .card .name { color: var(--text-muted); font-size: 12px; font-weight: 500; margin-top: 2px; }
+  .badge { display: inline-flex; align-items: center; padding: 6px 12px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; }
+  .badge.bull { background: var(--bull-bg); color: var(--bull); }
+  .badge.bear { background: var(--bear-bg); color: var(--bear); }
+  .badge.neutral { background: var(--neutral-bg); color: var(--neutral); }
+  .badge.buy { background: var(--bull-bg); color: var(--bull); }
+  .badge.sell { background: var(--bear-bg); color: var(--bear); }
+  .badge.hold { background: var(--neutral-bg); color: var(--neutral); }
+  .badge.avoid { background: var(--purple-bg); color: var(--purple); }
+  .badge.discover { background: rgba(59,130,246,0.15); color: var(--accent); }
+  .row { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 13px; }
+  .row .label { color: var(--text-muted); font-weight: 500; }
+  .row .value { font-weight: 600; color: var(--text); }
+  .conf-bar { height: 6px; border-radius: 3px; background: var(--panel2); margin-top: 10px; overflow: hidden; }
+  .conf-bar > span { display: block; height: 100%; border-radius: 3px; transition: width 0.5s ease; }
+  .reason { margin-top: 14px; font-size: 12px; color: var(--text-muted); line-height: 1.6; padding: 12px; background: var(--bg); border-radius: var(--radius-sm); border: 1px solid var(--border); }
+  .empty { text-align: center; color: var(--text-muted); padding: 60px 20px; font-size: 14px; }
+  .empty-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.3; display: block; }
+  .error { color: var(--bear); text-align: center; padding: 40px; background: var(--bear-bg); border-radius: var(--radius); border: 1px solid rgba(239,68,68,0.2); }
+  .card-btns { display: flex; gap: 8px; flex-shrink: 0; }
+  .watch-btn.analyze-btn { background: var(--purple-bg); color: var(--purple); border-color: rgba(168,85,247,0.3); }
+  .watch-btn.analyze-btn:hover { border-color: var(--purple); background: rgba(168,85,247,0.2); }
   .watch-btn {
-    flex-shrink: 0; padding: 4px 10px; font-size: 12px; font-weight: 600;
-    border-radius: 20px; background: var(--panel2); border: 1px solid var(--border);
-    color: var(--text); cursor: pointer; transition: all .15s ease;
+    flex-shrink: 0; padding: 8px 14px; font-size: 12px; font-weight: 600;
+    border-radius: 999px; background: var(--panel2); border: 1px solid var(--border);
+    color: var(--text); cursor: pointer; transition: all var(--transition);
+    display: inline-flex; align-items: center; gap: 6px;
   }
-  .watch-btn:hover { border-color: #3b82f6; }
+  .watch-btn:hover { border-color: var(--accent); color: var(--accent); }
   .watch-btn:disabled { opacity: .6; cursor: wait; }
-  .watch-btn.watched { background: rgba(250,204,21,.12); color: var(--neutral); border-color: rgba(250,204,21,.4); }
-  .updated { font-size: 12px; color: var(--muted); }
-  .analysis-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-top: 16px; }
-  .analysis-panel h2 { margin: 0 0 4px; font-size: 20px; }
-  .analysis-panel .a-sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
-  .analysis-panel .a-summary { font-size: 14px; line-height: 1.6; margin-bottom: 20px; }
-  .analysis-panel ul { margin: 8px 0 18px; padding-left: 20px; font-size: 13px; line-height: 1.6; }
-  .analysis-panel li { margin-bottom: 4px; }
-  .risk-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }
-  .chart-row { display: flex; gap: 20px; flex-wrap: wrap; }
-  .chart-row canvas { flex: 1; min-width: 300px; background: var(--panel2); border-radius: 8px; }
-  @media (max-width: 900px) { .risk-charts { grid-template-columns: 1fr; } }
-  .discover-controls { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
-  .discover-controls label { font-size: 12px; color: var(--muted); }
+  .watch-btn.watched { background: var(--neutral-bg); color: var(--neutral); border-color: rgba(245,158,11,0.3); }
+  .watch-btn.watched:hover { border-color: var(--neutral); color: var(--neutral); }
+  .updated { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+  .analysis-panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-top: 16px; }
+  .analysis-panel h2 { margin: 0 0 4px; font-size: 22px; font-weight: 700; }
+  .analysis-panel .a-sub { color: var(--text-muted); font-size: 13px; margin-bottom: 16px; }
+  .analysis-panel .a-summary { font-size: 14px; line-height: 1.7; margin-bottom: 20px; color: var(--text); }
+  .analysis-panel h3 { margin: 20px 0 8px; font-size: 13px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; }
+  .analysis-panel ul { margin: 8px 0 18px; padding-left: 20px; font-size: 13px; line-height: 1.7; }
+  .analysis-panel li { margin-bottom: 6px; color: var(--text-secondary); }
+  .risk-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 24px 0; }
+  .chart-row { display: flex; gap: 24px; flex-wrap: wrap; }
+  .chart-row canvas { flex: 1; min-width: 320px; background: var(--panel2); border-radius: var(--radius); border: 1px solid var(--border); padding: 16px; }
+  @media (max-width: 1000px) { .risk-charts { grid-template-columns: 1fr; } }
+  .discover-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 24px; padding: 20px; background: var(--panel); border-radius: var(--radius); border: 1px solid var(--border); }
+  .discover-controls > * { flex: 1; min-width: 140px; }
+  .discover-controls label { font-size: 12px; color: var(--text-muted); font-weight: 500; display: block; margin-bottom: 4px; }
+  .discover-controls input { width: 100%; }
   /* detail drawer */
-  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; z-index: 50; }
-  .overlay.open { display: block; }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; z-index: 50; backdrop-filter: blur(4px); }
+  .overlay.open { display: block; animation: fadeIn 0.2s ease; }
   .drawer {
-    position: fixed; top: 0; right: 0; height: 100%; width: min(560px, 92vw);
-    background: var(--panel); border-left: 1px solid var(--border); z-index: 60;
-    transform: translateX(100%); transition: transform 0.2s ease; overflow-y: auto; padding: 24px;
+    position: fixed; top: 0; right: 0; height: 100%; width: min(580px, 95vw);
+    background: linear-gradient(180deg, var(--panel), var(--bg-elevated)); border-left: 1px solid var(--border); z-index: 60;
+    transform: translateX(100%); transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); overflow-y: auto; padding: 28px;
   }
   .drawer.open { transform: translateX(0); }
-  .drawer .close { float: right; background: none; border: none; color: var(--muted); font-size: 22px; }
-  .news-item { border-bottom: 1px solid var(--border); padding: 12px 0; }
-  .news-item .src { color: var(--muted); font-size: 11px; }
-  .news-item .sender { font-weight: 600; }
-  h3 { margin: 18px 0 6px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .drawer .close { float: right; background: var(--panel2); border: 1px solid var(--border); color: var(--text-muted); font-size: 24px; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all var(--transition); }
+  .drawer .close:hover { background: var(--bear-bg); color: var(--bear); border-color: var(--bear); }
+  .news-item { border-bottom: 1px solid var(--border); padding: 16px 0; }
+  .news-item:last-child { border-bottom: none; }
+  .news-item .src { color: var(--text-muted); font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
+  .news-item .sender { font-weight: 600; margin-top: 4px; color: var(--text); }
+  .news-item .sentiment { font-size: 12px; margin-top: 6px; padding: 4px 8px; border-radius: 999px; display: inline-block; }
+  h3 { margin: 20px 0 8px; font-size: 13px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; }
   .loading { opacity: 0.6; pointer-events: none; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .loading-pulse { animation: pulse 1.5s ease-in-out infinite; }
+  .pop-in { animation: popIn .3s cubic-bezier(0.16, 1, 0.3, 1); }
+  @keyframes popIn { from { opacity: 0; transform: translateY(12px) scale(.98); } to { opacity: 1; transform: none; } }
+  .skeleton { background: linear-gradient(90deg, var(--panel2) 25%, var(--border) 50%, var(--panel2) 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: var(--radius-sm); }
+  @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 </style>
 </head>
 <body>
@@ -118,11 +174,13 @@
   <h1>StockVerdict</h1>
   <span class="tag" id="scored-info">the app that reads the news, then decides</span>
   <div class="controls">
-    <select id="market-select">
-      <option value="">-- market --</option>
-    </select>
-    <input type="text" id="analyze-ticker" placeholder="Ticker e.g. AAPL" style="width:120px">
-    <button class="refresh" id="analyze-btn">Analyze</button>
+    <div class="market-select-wrapper">
+      <select id="market-select">
+        <option value="">All Markets</option>
+      </select>
+    </div>
+    <input type="text" id="analyze-ticker" placeholder="Ticker (e.g. AAPL)" style="width:140px">
+    <button class="refresh" id="analyze-btn">AI Analyze</button>
     <button class="refresh" id="refresh-btn">Refresh</button>
   </div>
 </header>
@@ -137,12 +195,12 @@
   </div>
 
   <div class="tab-panel active" id="panel-verdicts">
-    <div class="empty" id="loading">Loading verdicts…</div>
+    <div class="empty" id="loading"><span class="empty-icon">📊</span>Loading verdicts…</div>
     <div class="grid" id="grid"></div>
   </div>
 
   <div class="tab-panel" id="panel-watchlist">
-    <div class="empty" id="watchlist-loading" style="display:none">Loading watchlist…</div>
+    <div class="empty" id="watchlist-loading" style="display:none"><span class="empty-icon">👁</span>Loading watchlist…</div>
     <div class="grid" id="watchlist-grid"></div>
   </div>
 
@@ -151,18 +209,27 @@
       <span class="muted" id="agent-updated"></span>
       <button class="refresh" id="agent-btn">Run Gemini Analysis</button>
     </div>
-    <div class="empty" id="agent-loading" style="display:none">Asking Gemini… this can take a minute.</div>
+    <div class="empty" id="agent-loading" style="display:none"><span class="empty-icon loading-pulse">🤖</span>Asking Gemini… this can take a minute.</div>
     <div class="grid" id="agent-grid"></div>
   </div>
 
   <div class="tab-panel" id="panel-risk">
     <div class="discover-controls">
-      <input type="text" id="risk-tickers" placeholder="Tickers (comma-separated) e.g. AAPL,MSFT,TSLA" style="width:300px">
-      <input type="number" id="risk-aversion" value="3" step="0.5" min="0.5" max="10" style="width:80px" title="Risk aversion">
-      <input type="text" id="risk-period" value="2y" style="width:80px" title="Period">
+      <div style="flex: 1 1 280px;">
+        <label>Tickers (comma-separated)</label>
+        <input type="text" id="risk-tickers" placeholder="AAPL, MSFT, TSLA, NVDA" style="width:100%">
+      </div>
+      <div style="flex: 0 0 120px;">
+        <label>Risk Aversion (λ)</label>
+        <input type="number" id="risk-aversion" value="3" step="0.5" min="0.5" max="10" style="width:100%" title="Risk aversion">
+      </div>
+      <div style="flex: 0 0 100px;">
+        <label>Period</label>
+        <input type="text" id="risk-period" value="2y" style="width:100%" title="Period">
+      </div>
       <button class="refresh" id="risk-btn">Run Risk Analysis</button>
     </div>
-    <div class="empty" id="risk-loading" style="display:none">Computing LSTM + Black-Litterman…</div>
+    <div class="empty" id="risk-loading" style="display:none"><span class="empty-icon loading-pulse">⚙</span>Computing LSTM + Black-Litterman…</div>
     <div class="risk-charts">
       <div class="chart-row">
         <canvas id="risk-lstm-chart"></canvas>
@@ -176,40 +243,50 @@
   </div>
 
   <div class="analysis-panel" id="analysis-panel" style="display:none">
-    <div class="empty" id="analysis-loading" style="display:none">Analyzing… this can take a minute.</div>
+    <div class="empty" id="analysis-loading" style="display:none"><span class="empty-icon loading-pulse">🤖</span>Analyzing… this can take a minute.</div>
     <div id="analysis-content"></div>
   </div>
 
   <div class="tab-panel" id="panel-discover">
     <div class="discover-controls">
-      <label>Min score:</label>
-      <input type="number" id="discover-min-score" value="0.2" step="0.05" min="0" max="1" style="width:80px">
-      <label>Max:</label>
-      <input type="number" id="discover-max" value="20" step="5" min="1" max="100" style="width:70px">
+      <div>
+        <label>Min Score</label>
+        <input type="number" id="discover-min-score" value="0.2" step="0.05" min="0" max="1" style="width:100px">
+      </div>
+      <div>
+        <label>Max Results</label>
+        <input type="number" id="discover-max" value="20" step="5" min="1" max="100" style="width:100px">
+      </div>
+      <div>
+        <label>Min Articles</label>
+        <input type="number" id="discover-min-articles" value="5" step="1" min="1" max="50" style="width:100px">
+      </div>
       <button class="refresh" id="discover-btn">Run Discovery</button>
     </div>
-    <div class="empty" id="discover-loading" style="display:none">Scanning feeds…</div>
+    <div class="empty" id="discover-loading" style="display:none"><span class="empty-icon loading-pulse">🔍</span>Scanning feeds…</div>
     <div class="grid" id="discover-grid"></div>
   </div>
 </main>
 
 <div class="overlay" id="overlay"></div>
 <aside class="drawer" id="drawer">
-  <button class="close" id="close-btn">&times;</button>
+  <button class="close" id="close-btn" aria-label="Close">&times;</button>
   <div id="drawer-content"></div>
 </aside>
 
 <script>
 const $ = (id) => document.getElementById(id);
+const CHART_COLORS = {
+  bull: '#10b981', bear: '#ef4444', neutral: '#f59e0b', purple: '#a855f7',
+  blue: '#3b82f6', blueLight: 'rgba(59,130,246,0.15)', blueBorder: 'rgba(59,130,246,1)',
+  grid: 'rgba(148,163,184,0.1)', text: '#94a3b8'
+};
 
 async function fetchJSON(url, opts) {
   const r = await fetch(url, opts);
   if (!r.ok) {
     let detail = "HTTP " + r.status;
-    try {
-      const j = await r.json();
-      if (j.detail) detail = j.detail;
-    } catch (e) { /* keep generic message */ }
+    try { const j = await r.json(); if (j.detail) detail = j.detail; } catch (e) {}
     throw new Error(detail);
   }
   return r.json();
@@ -220,107 +297,70 @@ function badge(v) {
   const cls = b === "bull" || b === "bullish" ? "bull" : (b === "bear" || b === "bearish") ? "bear" : "neutral";
   return `<span class="badge ${cls}">${v.verdict || v.label?.toUpperCase() || 'NEUTRAL'}</span>`;
 }
-
-function badgeDiscover(score) {
-  const cls = score >= 0.3 ? 'bull' : score >= 0.1 ? 'neutral' : 'bear';
-  return `<span class="badge ${cls}">${(score*100).toFixed(0)}%</span>`;
-}
-
-function confColor(v) {
-  return v === "BULL" ? "var(--bull)" : v === "BEAR" ? "var(--bear)" : "var(--neutral)";
-}
+function badgeDiscover(score) { const cls = score >= 0.3 ? 'bull' : score >= 0.1 ? 'neutral' : 'bear'; return `<span class="badge ${cls}">${(score*100).toFixed(0)}%</span>`; }
+function badgeAction(action) { const a = (action || "").toLowerCase(); const cls = a === "buy" ? "buy" : a === "sell" ? "sell" : a === "hold" ? "hold" : "avoid"; return `<span class="badge ${cls}">${(action || "AVOID").toUpperCase()}</span>`; }
+function confColor(v) { return v === "BULL" ? "var(--bull)" : v === "BEAR" ? "var(--bear)" : "var(--neutral)"; }
+function getRiskColor(signal) { return signal === "BULLISH" ? "var(--bull)" : signal === "BEARISH" ? "var(--bear)" : "var(--neutral)"; }
 
 const watched = new Set();
-function isWatched(market, ticker) {
-  return watched.has(`${market}:${ticker}`);
-}
-function watchBtn(market, ticker, company) {
-  const on = isWatched(market, ticker);
-  return `<button class="watch-btn ${on ? 'watched' : ''}" data-watch="${market}:${ticker}" data-company="${(company || '').replace(/"/g, '&quot;')}">${on ? '★ Watched' : '☆ Add to watchlist'}</button>`;
-}
-function analyzeBtn(market, ticker) {
-  return `<button class="watch-btn analyze-btn" data-analyze="${market}:${ticker}" title="AI analysis for ${ticker}">AI</button>`;
-}
-function cardButtons(market, ticker, company) {
-  return `<div class="card-btns">${analyzeBtn(market, ticker)}${watchBtn(market, ticker, company)}</div>`;
-}
+function isWatched(market, ticker) { return watched.has(`${market}:${ticker}`); }
+function watchBtn(market, ticker, company) { const on = isWatched(market, ticker); return `<button class="watch-btn ${on ? 'watched' : ''}" data-watch="${market}:${ticker}" data-company="${(company || '').replace(/"/g, '"')}">${on ? '★ Watched' : '☆ Watch'}</button>`; }
+function analyzeBtn(market, ticker) { return `<button class="watch-btn analyze-btn" data-analyze="${market}:${ticker}" title="AI analysis for ${ticker}">AI</button>`; }
+function cardButtons(market, ticker, company) { return `<div class="card-btns">${analyzeBtn(market, ticker)}${watchBtn(market, ticker, company)}</div>`; }
 
 function renderVerdicts(list) {
-  const grid = $("grid");
-  grid.innerHTML = "";
-  if (!list.length) {
-    $("panel-verdicts").innerHTML = `<div class="empty">No verdicts yet. Run <code>stock-alert-app verdict</code> then refresh.</div>`;
-    return;
-  }
+  const grid = $("grid"); grid.innerHTML = "";
+  if (!list.length) { $("panel-verdicts").innerHTML = `<div class="empty"><span class="empty-icon">📊</span>No verdicts yet. Run <code>stock-alert-app verdict</code> then refresh.</div>`; return; }
   list.sort((a, b) => b.combined_score - a.combined_score);
   for (const v of list) {
-    const el = document.createElement("div");
-    el.className = "card";
+    const el = document.createElement("div"); el.className = "card";
     el.innerHTML = `
       <div class="card-head">
-        <div>
-          <div class="symbol">${v.ticker}</div>
-          <div class="name">${v.market}</div>
-        </div>
+        <div><div class="symbol">${v.ticker}</div><div class="name">${v.market}</div></div>
         ${cardButtons(v.market, v.ticker, v.market)}
       </div>
       ${badge(v)}
-      <div class="row"><span class="muted">Confidence</span><span>${(v.confidence*100).toFixed(0)}%</span></div>
+      <div class="row"><span class="label">Confidence</span><span class="value">${(v.confidence*100).toFixed(0)}%</span></div>
       <div class="conf-bar"><span style="width:${v.confidence*100}%; background:${confColor(v.verdict)}"></span></div>
-      <div class="row"><span class="muted">Combined</span><span>${v.combined_score.toFixed(3)}</span></div>
-      <div class="row"><span class="muted">News / Price</span><span>${v.news_score.toFixed(2)} / ${v.price_score.toFixed(2)}</span></div>
+      <div class="row"><span class="label">Combined</span><span class="value">${v.combined_score.toFixed(3)}</span></div>
+      <div class="row"><span class="label">News / Price</span><span class="value">${v.news_score.toFixed(2)} / ${v.price_score.toFixed(2)}</span></div>
       <div class="reason">${v.reason.join("")}</div>
-    `;
-    el.onclick = () => openDetail(v);
-    grid.appendChild(el);
+    `; el.onclick = () => openDetail(v); grid.appendChild(el);
   }
 }
 
 function renderDiscover(list) {
-  const grid = $("discover-grid");
-  grid.innerHTML = "";
-  if (!list.length) {
-    grid.innerHTML = `<div class="empty">No bullish discoveries. Adjust score or run again.</div>`;
-    return;
-  }
+  const grid = $("discover-grid"); grid.innerHTML = "";
+  if (!list.length) { grid.innerHTML = `<div class="empty"><span class="empty-icon">🔍</span>No bullish discoveries. Adjust score or run again.</div>`; return; }
   list.sort((a, b) => b.score - a.score);
   for (const d of list) {
-    const el = document.createElement("div");
-    el.className = "card";
+    const el = document.createElement("div"); el.className = "card";
     el.innerHTML = `
       <div class="card-head">
-        <div>
-          <div class="symbol">${d.ticker}</div>
-          <div class="name">${d.company} (${d.market})</div>
-        </div>
+        <div><div class="symbol">${d.ticker}</div><div class="name">${d.company} (${d.market})</div></div>
         ${cardButtons(d.market, d.ticker, d.company)}
       </div>
       ${badgeDiscover(d.score)}
-      <div class="row"><span class="muted">Sentiment</span><span>${d.score.toFixed(3)}</span></div>
-      <div class="row"><span class="muted">Articles</span><span>${d.article_count ?? d.headlines.length}</span></div>
+      <div class="row"><span class="label">Sentiment</span><span class="value">${d.score.toFixed(3)}</span></div>
+      <div class="row"><span class="label">Articles</span><span class="value">${d.article_count ?? d.headlines.length}</span></div>
       <div class="reason">${d.headlines.slice(0,2).map(h => '→ ' + h).join('<br>')}</div>
-    `;
-    grid.appendChild(el);
+    `; grid.appendChild(el);
   }
 }
 
 function watchCard(w) {
-  const el = document.createElement("div");
-  el.className = "card";
+  const el = document.createElement("div"); el.className = "card";
   const hasVerdict = !!w.verdict;
   el.innerHTML = `
     <div class="card-head">
-      <div>
-        <div class="symbol">${w.ticker}</div>
-        <div class="name">${w.company || w.market} (${w.market})</div>
-      </div>
+      <div><div class="symbol">${w.ticker}</div><div class="name">${w.company || w.market} (${w.market})</div></div>
       ${cardButtons(w.market, w.ticker, w.company)}
     </div>
     ${hasVerdict ? badge(w) : '<span class="badge neutral">COMPUTING…</span>'}
     ${hasVerdict ? `
-      <div class="row"><span class="muted">Confidence</span><span>${(w.confidence*100).toFixed(0)}%</span></div>
+      <div class="row"><span class="label">Confidence</span><span class="value">${(w.confidence*100).toFixed(0)}%</span></div>
       <div class="conf-bar"><span style="width:${w.confidence*100}%; background:${confColor(w.verdict)}"></span></div>
-      <div class="row"><span class="muted">Combined</span><span>${w.combined_score.toFixed(3)}</span></div>
+      <div class="row"><span class="label">Combined</span><span class="value">${w.combined_score.toFixed(3)}</span></div>
     ` : '<div class="reason">Fetching news and price…</div>'}
   `;
   el.onclick = () => openDetail({ market: w.market, ticker: w.ticker, verdict: w.verdict || 'NEUTRAL', confidence: w.confidence || 0, news_score: w.news_score || 0, price_score: w.price_score || 0, combined_score: w.combined_score || 0, reason: (w.reason && w.reason.length ? w.reason : ['watchlist item']) });
@@ -328,148 +368,68 @@ function watchCard(w) {
 }
 
 function renderWatchlist(list) {
-  const grid = $("watchlist-grid");
-  grid.innerHTML = "";
-  if (!list.length) {
-    grid.innerHTML = `<div class="empty">Your watchlist is empty. Open the Discover tab and click "Add to watchlist" on any stock.</div>`;
-    return;
-  }
+  const grid = $("watchlist-grid"); grid.innerHTML = "";
+  if (!list.length) { grid.innerHTML = `<div class="empty"><span class="empty-icon">👁</span>Your watchlist is empty. Open the Discover tab and click "Watch" on any stock.</div>`; return; }
   list.sort((a, b) => (b.combined_score || -99) - (a.combined_score || -99));
-  list.forEach((w) => {
-    const el = watchCard(w);
-    el.classList.add("pop-in");
-    grid.appendChild(el);
-  });
-}
-
-function badgeAction(action) {
-  const a = (action || "").toLowerCase();
-  const cls = a === "buy" ? "buy" : a === "sell" ? "sell" : a === "hold" ? "hold" : "avoid";
-  return `<span class="badge ${cls}">${(action || "AVOID").toUpperCase()}</span>`;
+  list.forEach((w) => { const el = watchCard(w); el.classList.add("pop-in"); grid.appendChild(el); });
 }
 
 function renderRecommendations(data) {
-  const grid = $("agent-grid");
-  grid.innerHTML = "";
+  const grid = $("agent-grid"); grid.innerHTML = "";
   const list = data.recommendations || [];
   $("agent-updated").textContent = data.generated_at ? "Generated " + new Date(data.generated_at).toLocaleString() : "";
-  if (!list.length) {
-    grid.innerHTML = `<div class="empty">No recommendations yet. Click "Run Gemini Analysis" to generate them.</div>`;
-    return;
-  }
+  if (!list.length) { grid.innerHTML = `<div class="empty"><span class="empty-icon">🤖</span>No recommendations yet. Click "Run Gemini Analysis" to generate them.</div>`; return; }
   const order = { BUY: 0, HOLD: 1, SELL: 2, AVOID: 3 };
   list.sort((a, b) => (order[a.action] ?? 9) - (order[b.action] ?? 9) || b.confidence - a.confidence);
   for (const r of list) {
-    const el = document.createElement("div");
-    el.className = "card";
+    const el = document.createElement("div"); el.className = "card";
+    const barColor = r.action === "BUY" ? "var(--bull)" : r.action === "SELL" ? "var(--bear)" : r.action === "HOLD" ? "var(--neutral)" : "var(--purple)";
     el.innerHTML = `
       <div class="card-head">
-        <div>
-          <div class="symbol">${r.ticker}</div>
-          <div class="name">${r.company || r.market} (${r.market})</div>
-        </div>
+        <div><div class="symbol">${r.ticker}</div><div class="name">${r.company || r.market} (${r.market})</div></div>
         ${cardButtons(r.market, r.ticker, r.company)}
       </div>
       ${badgeAction(r.action)}
-      <div class="row"><span class="muted">Confidence</span><span>${(r.confidence*100).toFixed(0)}%</span></div>
-      <div class="conf-bar"><span style="width:${r.confidence*100}%; background:${r.action === "BUY" ? "var(--bull)" : r.action === "SELL" ? "var(--bear)" : r.action === "HOLD" ? "var(--neutral)" : "#a78bfa"}"></span></div>
+      <div class="row"><span class="label">Confidence</span><span class="value">${(r.confidence*100).toFixed(0)}%</span></div>
+      <div class="conf-bar"><span style="width:${r.confidence*100}%; background:${barColor}"></span></div>
       <div class="reason">${r.rationale}</div>
-    `;
-    el.onclick = () => openDetail({ market: r.market, ticker: r.ticker, verdict: r.action === "BUY" ? "BULL" : r.action === "SELL" ? "BEAR" : "NEUTRAL", confidence: r.confidence, news_score: 0, price_score: 0, combined_score: 0, reason: [r.rationale] });
-    el.classList.add("pop-in");
-    grid.appendChild(el);
+    `; el.onclick = () => openDetail({ market: r.market, ticker: r.ticker, verdict: r.action === "BUY" ? "BULL" : r.action === "SELL" ? "BEAR" : "NEUTRAL", confidence: r.confidence, news_score: 0, price_score: 0, combined_score: 0, reason: [r.rationale] }); el.classList.add("pop-in"); grid.appendChild(el);
   }
 }
 
 async function loadRecommendations() {
-  try {
-    const market = $("market-select").value;
-    const q = market ? `?market=${encodeURIComponent(market)}` : "";
-    const data = await fetchJSON("/api/agent" + q);
-    renderRecommendations(data);
-  } catch (e) {
-    $("agent-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`;
-  }
+  try { const market = $("market-select").value; const q = market ? `?market=${encodeURIComponent(market)}` : ""; const data = await fetchJSON("/api/agent" + q); renderRecommendations(data); } catch (e) { $("agent-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`; }
 }
 
 async function runAgent() {
-  $("agent-loading").style.display = "block";
-  $("agent-grid").innerHTML = "";
-  $("agent-btn").classList.add("loading");
-  $("agent-btn").disabled = true;
-  try {
-    const market = $("market-select").value;
-    const q = market ? `?market=${encodeURIComponent(market)}&live=1` : "?live=1";
-    const data = await fetchJSON("/api/agent" + q);
-    renderRecommendations(data);
-  } catch (e) {
-    $("agent-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`;
-  } finally {
-    $("agent-loading").style.display = "none";
-    $("agent-btn").classList.remove("loading");
-    $("agent-btn").disabled = false;
-  }
+  $("agent-loading").style.display = "block"; $("agent-grid").innerHTML = ""; $("agent-btn").classList.add("loading"); $("agent-btn").disabled = true;
+  try { const market = $("market-select").value; const q = market ? `?market=${encodeURIComponent(market)}&live=1` : "?live=1"; const data = await fetchJSON("/api/agent" + q); renderRecommendations(data); } catch (e) { $("agent-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`; } finally { $("agent-loading").style.display = "none"; $("agent-btn").classList.remove("loading"); $("agent-btn").disabled = false; }
 }
 
 function renderAnalysis(a) {
   const content = $("analysis-content");
   content.innerHTML = `
-    <h2>${a.ticker} ${badgeAction(a.action)} <span style="color:var(--muted);font-size:14px;font-weight:400">(${a.market}${a.company ? " · " + a.company : ""})</span></h2>
+    <h2>${a.ticker} ${badgeAction(a.action)} <span style="color:var(--text-muted);font-size:14px;font-weight:400">(${a.market}${a.company ? " · " + a.company : ""})</span></h2>
     <div class="a-sub">Confidence ${(a.confidence*100).toFixed(0)}%</div>
     <div class="a-summary">${a.summary}</div>
-    <h3>Key points</h3>
-    <ul>${(a.key_points || []).map(p => `<li>${p}</li>`).join("") || "<li class='muted'>none</li>"}</ul>
-    <h3>Risks</h3>
-    <ul style="color:var(--bear)">${(a.risks || []).map(r => `<li>${r}</li>`).join("") || "<li class='muted'>none</li>"}</ul>
-    <h3>Catalysts</h3>
-    <ul style="color:var(--bull)">${(a.catalysts || []).map(c => `<li>${c}</li>`).join("") || "<li class='muted'>none</li>"}</ul>
+    <h3>Key points</h3><ul>${(a.key_points || []).map(p => `<li>${p}</li>`).join("") || "<li class='muted'>none</li>"}</ul>
+    <h3>Risks</h3><ul style="color:var(--bear)">${(a.risks || []).map(r => `<li>${r}</li>`).join("") || "<li class='muted'>none</li>"}</ul>
+    <h3>Catalysts</h3><ul style="color:var(--bull)">${(a.catalysts || []).map(c => `<li>${c}</li>`).join("") || "<li class='muted'>none</li>"}</ul>
   `;
 }
 
 async function runAnalysis(market, ticker) {
-  const panel = $("analysis-panel");
-  panel.style.display = "block";
-  $("analysis-loading").style.display = "block";
-  $("analysis-content").innerHTML = "";
-  $("analyze-btn").classList.add("loading");
-  $("analyze-btn").disabled = true;
+  const panel = $("analysis-panel"); panel.style.display = "block"; $("analysis-loading").style.display = "block"; $("analysis-content").innerHTML = ""; $("analyze-btn").classList.add("loading"); $("analyze-btn").disabled = true;
   const mkt = market || $("market-select").value;
-  try {
-    if (!ticker) {
-      ticker = $("analyze-ticker").value.trim();
-    }
-    if (!mkt || !ticker) {
-      throw new Error("Select a market and enter a ticker");
-    }
-    const q = `?market=${encodeURIComponent(mkt)}&ticker=${encodeURIComponent(ticker)}`;
-    const data = await fetchJSON("/api/analyze" + q);
-    renderAnalysis(data);
-    panel.scrollIntoView({ behavior: "smooth", block: "start" });
-  } catch (e) {
-    $("analysis-content").innerHTML = `<div class="error">Error: ${e.message}</div>`;
-  } finally {
-    $("analysis-loading").style.display = "none";
-    $("analyze-btn").classList.remove("loading");
-    $("analyze-btn").disabled = false;
-  }
-}
-
-function getRiskColor(signal) {
-  return signal === "BULLISH" ? "var(--bull)" : signal === "BEARISH" ? "var(--bear)" : "var(--neutral)";
+  try { if (!ticker) ticker = $("analyze-ticker").value.trim(); if (!mkt || !ticker) throw new Error("Select a market and enter a ticker"); const q = `?market=${encodeURIComponent(mkt)}&ticker=${encodeURIComponent(ticker)}`; const data = await fetchJSON("/api/analyze" + q); renderAnalysis(data); panel.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (e) { $("analysis-content").innerHTML = `<div class="error">Error: ${e.message}</div>`; } finally { $("analysis-loading").style.display = "none"; $("analyze-btn").classList.remove("loading"); $("analyze-btn").disabled = false; }
 }
 
 function renderRiskCharts(data) {
-  const results = data.results || [];
-  if (!results.length) return;
-
+  const results = data.results || []; if (!results.length) return;
   const lstmCtx = document.getElementById("risk-lstm-chart").getContext("2d");
   const blCtx = document.getElementById("risk-bl-chart").getContext("2d");
   const portCtx = document.getElementById("risk-portfolio-chart").getContext("2d");
-
-  if (window.lstmChart) window.lstmChart.destroy();
-  if (window.blChart) window.blChart.destroy();
-  if (window.portChart) window.portChart.destroy();
-
+  if (window.lstmChart) window.lstmChart.destroy(); if (window.blChart) window.blChart.destroy(); if (window.portChart) window.portChart.destroy();
   const tickers = results.map(r => r.ticker);
   const lstmReturns = results.map(r => r.lstm?.predicted_return ?? 0);
   const lstmSignals = results.map(r => r.lstm?.signal ?? "N/A");
@@ -477,294 +437,101 @@ function renderRiskCharts(data) {
   const blReturns = results.map(r => r.black_litterman?.expected_return ?? 0);
 
   window.lstmChart = new Chart(lstmCtx, {
-    type: "bar",
-    data: {
-      labels: tickers,
-      datasets: [{
-        label: "LSTM Predicted Return",
-        data: lstmReturns,
-        backgroundColor: lstmSignals.map(getRiskColor),
-        borderColor: lstmSignals.map(getRiskColor),
-        borderWidth: 1,
-      }]
-    },
-    options: { responsive: true, plugins: { title: { display: true, text: "LSTM Predicted Returns" }}, scales: { y: { beginAtZero: false } } }
+    type: "bar", data: { labels: tickers, datasets: [{ label: "LSTM Predicted Return", data: lstmReturns, backgroundColor: lstmSignals.map(getRiskColor), borderColor: lstmSignals.map(getRiskColor), borderWidth: 0, borderRadius: 6, borderSkipped: false }] },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, title: { display: true, text: "LSTM Predicted Returns", color: '#94a3b8', font: { size: 13, weight: '600' }, padding: { bottom: 16 } } }, scales: { x: { grid: { display: false }, ticks: { color: '#64748b', font: { size: 11 } } }, y: { grid: { color: CHART_COLORS.grid }, ticks: { color: '#64748b', font: { size: 11 }, callback: v => (v*100).toFixed(1) + '%' } } } }
   });
 
   window.blChart = new Chart(blCtx, {
-    type: "bar",
-    data: {
-      labels: tickers,
-      datasets: [{
-        label: "BL Optimal Weight (%)",
-        data: blWeights.map(w => w * 100),
-        backgroundColor: "rgba(59,130,246,0.6)",
-        borderColor: "rgba(59,130,246,1)",
-        borderWidth: 1,
-      }, {
-        label: "BL Expected Return",
-        data: blReturns,
-        backgroundColor: "rgba(139,92,246,0.6)",
-        borderColor: "rgba(139,92,246,1)",
-        borderWidth: 1,
-        type: "line",
-        yAxisID: "y1",
-      }]
-    },
-    options: { responsive: true, plugins: { title: { display: true, text: "Black-Litterman Weights & Returns" }}, scales: { y: { beginAtZero: true, title: { display: true, text: "Weight %" }}, y1: { type: "linear", display: true, position: "right", title: { display: true, text: "Expected Return" } } } }
+    type: "bar", data: { labels: tickers, datasets: [{ label: "BL Weight (%)", data: blWeights.map(w => w * 100), backgroundColor: CHART_COLORS.blueLight, borderColor: CHART_COLORS.blueBorder, borderWidth: 0, borderRadius: 6, borderSkipped: false, yAxisID: 'y' }, { label: "BL Expected Return", data: blReturns, backgroundColor: 'rgba(168,85,247,0.15)', borderColor: '#a855f7', borderWidth: 2, borderRadius: 6, borderSkipped: false, type: "line", yAxisID: 'y1', tension: 0.3, pointBackgroundColor: '#a855f7', pointBorderColor: '#fff', pointRadius: 4, pointHoverRadius: 6 }] },
+    options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { display: true, position: 'top', labels: { color: '#94a3b8', font: { size: 11 }, usePointStyle: true, padding: 16 } }, title: { display: true, text: "Black-Litterman Weights & Returns", color: '#94a3b8', font: { size: 13, weight: '600' }, padding: { bottom: 16 } } }, scales: { x: { grid: { display: false }, ticks: { color: '#64748b', font: { size: 11 } } }, y: { type: 'linear', position: 'left', grid: { color: CHART_COLORS.grid }, ticks: { color: '#64748b', font: { size: 11 }, callback: v => v.toFixed(1) + '%' }, title: { display: true, text: 'Weight %', color: '#94a3b8', font: { size: 11 } } }, y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, ticks: { color: '#64748b', font: { size: 11 }, callback: v => (v*100).toFixed(2) + '%' }, title: { display: true, text: 'Expected Return', color: '#94a3b8', font: { size: 11 } } } } }
   });
 
   const port = data.results?.[0]?.portfolio_metrics;
   if (port && port.sharpe !== null) {
+    const metrics = [
+      { label: 'Sharpe', value: Math.min(port.sharpe * 20, 100), max: 100, color: port.sharpe > 1 ? CHART_COLORS.bull : port.sharpe > 0.5 ? CHART_COLORS.neutral : CHART_COLORS.bear },
+      { label: 'Stability', value: Math.max(100 - (port.volatility || 0) * 1000, 0), max: 100, color: CHART_COLORS.blue },
+      { label: 'VaR Safety', value: Math.max(100 - (port.var_95 || 0) * 1000, 0), max: 100, color: CHART_COLORS.purple },
+      { label: 'Risk Level', value: port.sharpe > 1 ? 80 : port.sharpe > 0.5 ? 50 : 20, max: 100, color: port.sharpe > 1 ? CHART_COLORS.bull : port.sharpe > 0.5 ? CHART_COLORS.neutral : CHART_COLORS.bear },
+    ];
     window.portChart = new Chart(portCtx, {
-      type: "radar",
-      data: {
-        labels: ["Sharpe Ratio", "Volatility (inv)", "VaR95 (inv)", "Risk Level (inv)"],
-        datasets: [{
-          label: "Portfolio Risk Profile",
-          data: [
-            Math.min(port.sharpe * 20, 100),
-            Math.max(100 - (port.volatility || 0) * 1000, 0),
-            Math.max(100 - (port.var_95 || 0) * 1000, 0),
-            port.sharpe > 1 ? 80 : port.sharpe > 0.5 ? 50 : 20,
-          ],
-          backgroundColor: "rgba(34,197,94,0.2)",
-          borderColor: "var(--bull)",
-          borderWidth: 2,
-        }]
-      },
-      options: { responsive: true, plugins: { title: { display: true, text: "Portfolio Risk Radar" }}, scales: { r: { beginAtZero: true, max: 100 } } }
+      type: "radar", data: { labels: metrics.map(m => m.label), datasets: [{ label: "Portfolio Risk Profile", data: metrics.map(m => m.value), backgroundColor: 'rgba(59,130,246,0.1)', borderColor: CHART_COLORS.blue, borderWidth: 2, pointBackgroundColor: metrics.map(m => m.color), pointBorderColor: '#fff', pointRadius: 5, pointHoverRadius: 7 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, title: { display: true, text: "Portfolio Risk Radar", color: '#94a3b8', font: { size: 13, weight: '600' }, padding: { bottom: 16 } } }, scales: { r: { beginAtZero: true, max: 100, grid: { color: CHART_COLORS.grid }, angleLines: { color: CHART_COLORS.grid }, pointLabels: { color: '#94a3b8', font: { size: 11 } }, ticks: { display: false } } } }
     });
   }
 }
 
 async function runRiskAnalysis() {
-  const panel = $("risk-grid");
-  $("risk-loading").style.display = "block";
-  panel.innerHTML = "";
-  $("risk-btn").classList.add("loading");
-  $("risk-btn").disabled = true;
-  try {
-    const tickers = $("risk-tickers").value.trim();
-    const aversion = $("risk-aversion").value;
-    const period = $("risk-period").value.trim() || "2y";
-    if (!tickers) throw new Error("Enter at least one ticker");
-    const q = `?tickers=${encodeURIComponent(tickers)}&risk_aversion=${aversion}&period=${encodeURIComponent(period)}`;
-    const data = await fetchJSON("/api/risk" + q);
-    renderRiskCharts(data);
-    renderRiskGrid(data);
-  } catch (e) {
-    $("risk-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`;
-  } finally {
-    $("risk-loading").style.display = "none";
-    $("risk-btn").classList.remove("loading");
-    $("risk-btn").disabled = false;
-  }
+  const panel = $("risk-grid"); $("risk-loading").style.display = "block"; panel.innerHTML = ""; $("risk-btn").classList.add("loading"); $("risk-btn").disabled = true;
+  try { const tickers = $("risk-tickers").value.trim(); const aversion = $("risk-aversion").value; const period = $("risk-period").value.trim() || "2y"; if (!tickers) throw new Error("Enter at least one ticker"); const q = `?tickers=${encodeURIComponent(tickers)}&risk_aversion=${aversion}&period=${encodeURIComponent(period)}`; const data = await fetchJSON("/api/risk" + q); renderRiskCharts(data); renderRiskGrid(data); } catch (e) { $("risk-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`; } finally { $("risk-loading").style.display = "none"; $("risk-btn").classList.remove("loading"); $("risk-btn").disabled = false; }
 }
 
 function renderRiskGrid(data) {
-  const grid = $("risk-grid");
-  const results = data.results || [];
-  if (!results.length) {
-    grid.innerHTML = `<div class="empty">No risk data returned.</div>`;
-    return;
-  }
+  const grid = $("risk-grid"); const results = data.results || [];
+  if (!results.length) { grid.innerHTML = `<div class="empty"><span class="empty-icon">⚙</span>No risk data returned.</div>`; return; }
   grid.innerHTML = "";
   for (const r of results) {
-    const el = document.createElement("div");
-    el.className = "card";
-    const lstm = r.lstm || {};
-    const bl = r.black_litterman || {};
+    const el = document.createElement("div"); el.className = "card"; const lstm = r.lstm || {}; const bl = r.black_litterman || {};
     el.innerHTML = `
       <div class="card-head">
-        <div>
-          <div class="symbol">${r.ticker}</div>
-          <div class="name">Risk: <strong>${r.risk_level}</strong></div>
-        </div>
+        <div><div class="symbol">${r.ticker}</div><div class="name">Risk: <strong>${r.risk_level}</strong></div></div>
         ${cardButtons(r.ticker.split(":")[0] || "NYSE", r.ticker, "")}
       </div>
-      <div class="row"><span class="muted">LSTM</span><span style="color:${getRiskColor(lstm.signal)}">${lstm.signal || "N/A"}</span></div>
-      <div class="row"><span class="muted">Pred. Return</span><span>${lstm.predicted_return ? lstm.predicted_return.toFixed(4) : "N/A"}</span></div>
-      <div class="row"><span class="muted">BL Weight</span><span>${bl.weight ? (bl.weight*100).toFixed(2) + "%" : "N/A"}</span></div>
-      <div class="row"><span class="muted">BL Exp. Ret</span><span>${bl.expected_return ? bl.expected_return.toFixed(4) : "N/A"}</span></div>
+      <div class="row"><span class="label">LSTM Signal</span><span class="value" style="color:${getRiskColor(lstm.signal)}">${lstm.signal || "N/A"}</span></div>
+      <div class="row"><span class="label">Pred. Return</span><span class="value">${lstm.predicted_return ? lstm.predicted_return.toFixed(4) : "N/A"}</span></div>
+      <div class="row"><span class="label">BL Weight</span><span class="value">${bl.weight ? (bl.weight*100).toFixed(2) + "%" : "N/A"}</span></div>
+      <div class="row"><span class="label">BL Exp. Return</span><span class="value">${bl.expected_return ? bl.expected_return.toFixed(4) : "N/A"}</span></div>
       ${r.portfolio_metrics && r.portfolio_metrics.sharpe !== null ? `
-        <div class="row"><span class="muted">Portfolio Sharpe</span><span>${r.portfolio_metrics.sharpe.toFixed(3)}</span></div>
-        <div class="row"><span class="muted">Portfolio Vol</span><span>${r.portfolio_metrics.volatility.toFixed(4)}</span></div>
-        <div class="row"><span class="muted">VaR 95%</span><span>${r.portfolio_metrics.var_95.toFixed(4)}</span></div>
+        <div class="row"><span class="label">Portfolio Sharpe</span><span class="value">${r.portfolio_metrics.sharpe.toFixed(3)}</span></div>
+        <div class="row"><span class="label">Portfolio Vol</span><span class="value">${r.portfolio_metrics.volatility.toFixed(4)}</span></div>
+        <div class="row"><span class="label">VaR 95%</span><span class="value">${r.portfolio_metrics.var_95.toFixed(4)}</span></div>
       ` : ""}
-    `;
-    grid.appendChild(el);
+    `; grid.appendChild(el);
   }
 }
 
-async function loadVerdicts() {
-  try {
-    const market = $("market-select").value;
-    const q = market ? `?market=${encodeURIComponent(market)}` : "";
-    const data = await fetchJSON("/api/verdicts" + q);
-    renderVerdicts(Object.values(data));
-  } catch (e) {
-    $("panel-verdicts").innerHTML = `<div class="error">Error: ${e.message}</div>`;
-  }
-}
-
-async function loadWatchlist() {
-  try {
-    const list = await fetchJSON("/api/watchlist");
-    watched.clear();
-    list.forEach((w) => watched.add(`${w.market}:${w.ticker}`));
-    renderWatchlist(list);
-  } catch (e) {
-    $("watchlist-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`;
-  }
-}
+async function loadVerdicts() { try { const market = $("market-select").value; const q = market ? `?market=${encodeURIComponent(market)}` : ""; const data = await fetchJSON("/api/verdicts" + q); renderVerdicts(Object.values(data)); } catch (e) { $("panel-verdicts").innerHTML = `<div class="error">Error: ${e.message}</div>`; } }
+async function loadWatchlist() { try { const list = await fetchJSON("/api/watchlist"); watched.clear(); list.forEach((w) => watched.add(`${w.market}:${w.ticker}`)); renderWatchlist(list); } catch (e) { $("watchlist-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`; } }
 
 async function toggleWatch(market, ticker, company, btn) {
-  const key = `${market}:${ticker}`;
-  const on = isWatched(market, ticker);
-  const orig = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = on ? "Removing…" : "Adding…";
-  try {
-    let verdict = null;
-    if (on) {
-      await fetchJSON(`/api/watchlist?market=${encodeURIComponent(market)}&ticker=${encodeURIComponent(ticker)}`, { method: "DELETE" });
-      watched.delete(key);
-    } else {
-      const res = await fetchJSON("/api/watchlist", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ market, ticker, company: company || "" }),
-      });
-      watched.add(key);
-      if (res.verdict) verdict = res.verdict;
-    }
-    document.querySelectorAll(`[data-watch="${key}"]`).forEach((b) => {
-      b.className = "watch-btn " + (isWatched(market, ticker) ? "watched" : "");
-      b.textContent = isWatched(market, ticker) ? "★ Watched" : "☆ Add to watchlist";
-    });
-    if (!on && verdict) {
-      // place the live verdict card at the top of the watchlist immediately
-      const grid = $("watchlist-grid");
-      const el = watchCard({ ...verdict, market, ticker, company: company || "" });
-      el.classList.add("pop-in");
-      grid.prepend(el);
-    } else {
-      await loadWatchlist();
-    }
-  } catch (e) {
-    btn.textContent = orig;
-    alert("Watchlist error: " + e.message);
-  } finally {
-    btn.disabled = false;
-  }
+  const key = `${market}:${ticker}`; const on = isWatched(market, ticker); const orig = btn.textContent; btn.disabled = true; btn.textContent = on ? "Removing…" : "Adding…";
+  try { let verdict = null; if (on) { await fetchJSON(`/api/watchlist?market=${encodeURIComponent(market)}&ticker=${encodeURIComponent(ticker)}`, { method: "DELETE" }); watched.delete(key); } else { const res = await fetchJSON("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ market, ticker, company: company || "" }) }); watched.add(key); if (res.verdict) verdict = res.verdict; }
+    document.querySelectorAll(`[data-watch="${key}"]`).forEach((b) => { b.className = "watch-btn " + (isWatched(market, ticker) ? "watched" : ""); b.textContent = isWatched(market, ticker) ? "★ Watched" : "☆ Watch"; });
+    if (!on && verdict) { const grid = $("watchlist-grid"); const el = watchCard({ ...verdict, market, ticker, company: company || "" }); el.classList.add("pop-in"); grid.prepend(el); } else { await loadWatchlist(); }
+  } catch (e) { btn.textContent = orig; alert("Watchlist error: " + e.message); } finally { btn.disabled = false; }
 }
 
-let lastUpdated = null;
-function touchUpdated() {
-  lastUpdated = new Date();
-  $("scored-info").textContent = "last updated " + lastUpdated.toLocaleTimeString();
-}
+let lastUpdated = null; function touchUpdated() { lastUpdated = new Date(); $("scored-info").textContent = "last updated " + lastUpdated.toLocaleTimeString(); }
 
 async function runDiscover() {
-  $("discover-loading").style.display = "block";
-  $("discover-grid").innerHTML = "";
-  $("discover-btn").classList.add("loading");
-  try {
-    const market = $("market-select").value;
-    const minScore = parseFloat($("discover-min-score").value) || 0.2;
-    const max = parseInt($("discover-max").value) || 20;
-    const params = new URLSearchParams();
-    if (market) params.append("market", market);
-    params.append("min_score", minScore.toString());
-    params.append("max_results", max.toString());
-    const data = await fetchJSON(`/api/discover?${params.toString()}`);
-    renderDiscover(data);
-  } catch (e) {
-    $("discover-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`;
-  } finally {
-    $("discover-loading").style.display = "none";
-    $("discover-btn").classList.remove("loading");
-  }
+  $("discover-loading").style.display = "block"; $("discover-grid").innerHTML = ""; $("discover-btn").classList.add("loading"); $("discover-btn").disabled = true;
+  try { const market = $("market-select").value; const minScore = parseFloat($("discover-min-score").value) || 0.2; const max = parseInt($("discover-max").value) || 20; const minArticles = parseInt($("discover-min-articles").value) || 5; const params = new URLSearchParams(); if (market) params.append("market", market); params.append("min_score", minScore); params.append("max_results", max); params.append("min_articles", minArticles); const data = await fetchJSON(`/api/discover?${params.toString()}`); renderDiscover(data); } catch (e) { $("discover-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`; } finally { $("discover-loading").style.display = "none"; $("discover-btn").classList.remove("loading"); $("discover-btn").disabled = false; }
 }
 
 async function openDetail(v) {
-  $("drawer").classList.add("open");
-  $("overlay").classList.add("open");
+  $("drawer").classList.add("open"); $("overlay").classList.add("open");
   const news = await fetchJSON(`/api/news?market=${v.market}&ticker=${v.ticker}`);
   const history = await fetchJSON(`/api/history/${v.market}/${v.ticker}`);
   $("drawer-content").innerHTML = `
-    <h2>${v.ticker} <span style="color:var(--muted)">(${v.market})</span> ${badge(v)}</h2>
-    <div class="row"><span class="muted">Combined</span><span>${v.combined_score.toFixed(3)}</span></div>
-    <div class="reason">${v.reason.join("")}</div>
-    <h3>Latest verdicts</h3>
-    ${history.slice(0,5).map(h => `<div class="news-item">${h.decided_at} — ${badge({verdict:h.verdict,label:h.verdict,norm:h.verdict})}</div>`).join("") || '<div class="muted">none</div>'}
-    <h3>Headlines</h3>
-    ${news.map(n => `
-      <div class="news-item">
-        <div class="sender">${n.title}</div>
-        <div class="src">${n.source} · ${n.published_at} · sentiment ${n.sentiment_label || "n/a"}</div>
-      </div>`).join("") || '<div class="muted">no headlines</div>'}
+    <h2>${v.ticker} <span style="color:var(--text-muted);font-size:14px;font-weight:400">(${v.market})</span> ${badge(v)}</h2>
+    <div class="a-sub">Confidence ${(v.confidence*100).toFixed(0)}% · Combined ${v.combined_score.toFixed(3)}</div>
+    <div class="a-summary">${v.reason.join("")}</div>
+    <h3>Price History</h3>
+    ${history.slice(0,5).map(h => `<div class="news-item"><div class="sender">${h.decided_at}</div><div class="src">${h.verdict}</div></div>`).join("") || '<div class="muted">none</div>'}
+    <h3>Latest Headlines</h3>
+    ${news.map(n => `<div class="news-item"><div class="sender">${n.title}</div><div class="src">${n.source} · ${n.published_at} <span class="sentiment" style="background:${(n.sentiment_label==='positive'?'var(--bull-bg)':n.sentiment_label==='negative'?'var(--bear-bg)':'var(--neutral-bg)')};color:${n.sentiment_label==='positive'?'var(--bull)':n.sentiment_label==='negative'?'var(--bear)':'var(--neutral)'}">${n.sentiment_label || 'n/a'}</span></div></div>`).join("") || '<div class="muted">no headlines</div>'}
   `;
 }
 
 async function init() {
-  try {
-    const markets = await fetchJSON("/api/markets");
-    const sel = $("market-select");
-    markets.forEach((m) => {
-      const o = document.createElement("option");
-      o.value = m.code;
-      o.textContent = `${m.code} — ${m.name}`;
-      sel.appendChild(o);
-    });
-  } catch (e) { /* optional */ }
-
-  // Tab switching
-  document.querySelectorAll('.tab').forEach(btn => {
-    btn.onclick = () => {
-      document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-      btn.classList.add('active');
-      $(`panel-${btn.dataset.tab}`).classList.add('active');
-    };
-  });
-
-  $("refresh-btn").onclick = refreshAll;
-  $("market-select").onchange = refreshAll;
-  $("discover-btn").onclick = runDiscover;
-  $("agent-btn").onclick = runAgent;
-  $("analyze-btn").onclick = () => runAnalysis($("market-select").value, $("analyze-ticker").value.trim());
-  $("analyze-ticker").addEventListener("keydown", (e) => { if (e.key === "Enter") runAnalysis($("market-select").value, $("analyze-ticker").value.trim()); });
-  $("risk-btn").onclick = runRiskAnalysis;
-  $("close-btn").onclick = () => { $("drawer").classList.remove("open"); $("overlay").classList.remove("open"); };
-  $("overlay").onclick = () => { $("drawer").classList.remove("open"); $("overlay").classList.remove("open"); };
-
-  // Delegate watch-button clicks (buttons stop propagation so card click still opens detail)
-  document.addEventListener("click", (e) => {
-    const aBtn = e.target.closest(".analyze-btn");
-    if (aBtn) {
-      e.stopPropagation();
-      const [market, ticker] = aBtn.dataset.analyze.split(":");
-      runAnalysis(market, ticker);
-      return;
-    }
-    const btn = e.target.closest(".watch-btn");
-    if (!btn) return;
-    e.stopPropagation();
-    const [market, ticker] = btn.dataset.watch.split(":");
-    toggleWatch(market, ticker, btn.dataset.company, btn);
-  });
-
-  await refreshAll();
-  await loadRecommendations();
-  setInterval(refreshAll, 30000);
+  try { const markets = await fetchJSON("/api/markets"); const sel = $("market-select"); markets.forEach((m) => { const o = document.createElement("option"); o.value = m.code; o.textContent = `${m.code} — ${m.name}`; sel.appendChild(o); }); } catch (e) { console.warn("Failed to load markets", e); }
+  document.querySelectorAll('.tab').forEach(btn => { btn.onclick = () => { document.querySelectorAll('.tab').forEach(b => b.classList.remove('active')); document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active')); btn.classList.add('active'); $(`panel-${btn.dataset.tab}`).classList.add('active'); }; });
+  $("refresh-btn").onclick = refreshAll; $("market-select").onchange = refreshAll; $("discover-btn").onclick = runDiscover; $("agent-btn").onclick = runAgent; $("analyze-btn").onclick = () => runAnalysis($("market-select").value, $("analyze-ticker").value.trim()); $("analyze-ticker").addEventListener("keydown", (e) => { if (e.key === "Enter") runAnalysis($("market-select").value, $("analyze-ticker").value.trim()); }); $("risk-btn").onclick = runRiskAnalysis; $("close-btn").onclick = () => { $("drawer").classList.remove("open"); $("overlay").classList.remove("open"); }; $("overlay").onclick = () => { $("drawer").classList.remove("open"); $("overlay").classList.remove("open"); };
+  document.addEventListener("click", (e) => { const aBtn = e.target.closest(".analyze-btn"); if (aBtn) { e.stopPropagation(); const [market, ticker] = aBtn.dataset.analyze.split(":"); runAnalysis(market, ticker); return; } const btn = e.target.closest(".watch-btn"); if (!btn) return; e.stopPropagation(); const [market, ticker] = btn.dataset.watch.split(":"); toggleWatch(market, ticker, btn.dataset.company, btn); });
+  await refreshAll(); setInterval(refreshAll, 30000);
 }
-
-async function refreshAll() {
-  await Promise.all([loadVerdicts(), loadWatchlist()]);
-  touchUpdated();
-}
+async function refreshAll() { await Promise.all([loadVerdicts(), loadWatchlist(), loadRecommendations()]); touchUpdated(); }
+function touchUpdated() { lastUpdated = new Date(); $("scored-info").textContent = "last updated " + lastUpdated.toLocaleTimeString(); }
 init();
 </script>
 </body>

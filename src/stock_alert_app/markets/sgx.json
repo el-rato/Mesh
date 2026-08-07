@@ -1,0 +1,81 @@
+{
+  "code": "SGX",
+  "name": "Singapore Exchange",
+  "country": "SG",
+  "currency": "SGD",
+  "timezone": "Asia/Singapore",
+  "yahoo_suffix": ".SI",
+  "rss_queries": [
+    "Straits Times Index",
+    "Singapore stock market",
+    "Singapore economy"
+  ],
+  "financial_feeds": [
+    "https://finance.yahoo.com/rss/headline?s=^STI",
+    "https://www.businesstimes.com.sg/rss.xml",
+    "https://www.sgx.com/rss.xml",
+    "https://www.reuters.com/markets/asia/singapore/rss"
+  ],
+  "tickers": {
+    "D05": {
+      "name": "DBS Group Holdings",
+      "keywords": ["DBS Group", "DBS Bank"]
+    },
+    "O39": {
+      "name": "Oversea-Chinese Banking Corp",
+      "keywords": ["OCBC", "Oversea-Chinese Banking"]
+    },
+    "U11": {
+      "name": "United Overseas Bank",
+      "keywords": ["UOB", "United Overseas Bank"]
+    },
+    "Z74": {
+      "name": "Singapore Telecommunications",
+      "keywords": ["SingTel", "Singapore Telecommunications"]
+    },
+    "C38U": {
+      "name": "CapitaLand Integrated Commercial Trust",
+      "keywords": ["CapitaLand Integrated", "CICT"]
+    },
+    "C6L": {
+      "name": "Singapore Airlines",
+      "keywords": ["Singapore Airlines", "SIA"]
+    },
+    "Y92": {
+      "name": "Thai Beverage",
+      "keywords": ["Thai Beverage", "ThaiBev"]
+    },
+    "M44U": {
+      "name": "Mapletree Logistics Trust",
+      "keywords": ["Mapletree Logistics", "MLT"]
+    },
+    "N2IU": {
+      "name": "Mapletree Industrial Trust",
+      "keywords": ["Mapletree Industrial", "MIT"]
+    },
+    "J69U": {
+      "name": "Frasers Logistics & Commercial Trust",
+      "keywords": ["Frasers Logistics", "FLCT"]
+    },
+    "A17U": {
+      "name": "Ascendas REIT",
+      "keywords": ["Ascendas REIT", "A-REIT"]
+    },
+    "K71U": {
+      "name": "Keppel DC REIT",
+      "keywords": ["Keppel DC REIT", "KDC REIT"]
+    },
+    "O32U": {
+      "name": "Mapletree Pan Asia Commercial Trust",
+      "keywords": ["Mapletree Pan Asia", "MPACT"]
+    },
+    "ME8U": {
+      "name": "Frasers Centrepoint Trust",
+      "keywords": ["Frasers Centrepoint", "FCT"]
+    },
+    "BTO": {
+      "name": "BOC Aviation",
+      "keywords": ["BOC Aviation", "BOC"]
+    }
+  }
+}

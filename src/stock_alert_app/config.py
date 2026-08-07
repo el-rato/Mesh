@@ -34,13 +34,16 @@ class Settings:
     db_path: Path = field(default_factory=lambda: _env_path("STOCK_ALERT_DB", Path("data/stock_verdict.db")))
     markets_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parent / "markets")
 
-    default_markets: tuple[str, ...] = ("BSE", "NYSE", "LSE")
+    default_markets: tuple[str, ...] = ("BSE", "NYSE", "LSE", "KRX", "TSE", "HKEX", "ASX", "XETRA", "TSX", "SGX")
 
     news_api_key: str = field(default_factory=lambda: os.getenv("NEWS_API_KEY", ""))
     llm_api_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", ""))
     llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "gpt-4o-mini"))
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.6-flash"))
+    reddit_client_id: str = field(default_factory=lambda: os.getenv("REDDIT_CLIENT_ID", ""))
+    reddit_client_secret: str = field(default_factory=lambda: os.getenv("REDDIT_CLIENT_SECRET", ""))
+    reddit_user_agent: str = field(default_factory=lambda: os.getenv("REDDIT_USER_AGENT", "StockVerdict/0.1"))
 
     news_weight: float = field(default_factory=lambda: _env_float("STOCK_ALERT_NEWS_WEIGHT", 0.6))
     price_weight: float = field(default_factory=lambda: _env_float("STOCK_ALERT_PRICE_WEIGHT", 0.4))

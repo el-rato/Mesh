@@ -1,0 +1,61 @@
+{
+  "code": "KRX",
+  "name": "Korea Exchange",
+  "country": "KR",
+  "currency": "KRW",
+  "timezone": "Asia/Seoul",
+  "yahoo_suffix": ".KS",
+  "rss_queries": [
+    "KOSPI",
+    "Korea stock market",
+    "South Korea economy"
+  ],
+  "financial_feeds": [
+    "https://finance.yahoo.com/rss/headline?s=^KS11",
+    "https://www.mk.co.kr/rss/30000009/",
+    "https://www.edaily.co.kr/rss/rss.xml",
+    "https://www.hankyung.com/rss/finance.xml"
+  ],
+  "tickers": {
+    "005930": {
+      "name": "Samsung Electronics",
+      "keywords": ["Samsung Electronics", "Samsung"]
+    },
+    "000660": {
+      "name": "SK Hynix",
+      "keywords": ["SK Hynix", "Hynix"]
+    },
+    "035420": {
+      "name": "NAVER",
+      "keywords": ["NAVER", "Naver Corp"]
+    },
+    "051910": {
+      "name": "LG Chem",
+      "keywords": ["LG Chem"]
+    },
+    "006400": {
+      "name": "Samsung SDI",
+      "keywords": ["Samsung SDI"]
+    },
+    "035720": {
+      "name": "Kakao",
+      "keywords": ["Kakao", "Kakao Corp"]
+    },
+    "005380": {
+      "name": "Hyundai Motor",
+      "keywords": ["Hyundai Motor", "Hyundai"]
+    },
+    "000270": {
+      "name": "Kia",
+      "keywords": ["Kia", "Kia Corp"]
+    },
+    "068270": {
+      "name": "Celltrion",
+      "keywords": ["Celltrion"]
+    },
+    "105560": {
+      "name": "KB Financial Group",
+      "keywords": ["KB Financial", "KB Group"]
+    }
+  }
+}

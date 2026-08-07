@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import yfinance as yf
 
 from ..config import settings
@@ -55,8 +56,12 @@ def _fetch_price_history(tickers: list[str], period: str = "2y") -> tuple[np.nda
         data = yf.download(tickers, period=period, interval="1d", auto_adjust=True, progress=False)
         if data is None or data.empty:
             return None, []
-        if isinstance(data.columns, tuple):
-            closes = data["Close"]
+        # yfinance returns MultiIndex columns (OHLCV, ticker) for multiple tickers
+        if isinstance(data.columns, pd.MultiIndex):
+            if 'Close' in data.columns.get_level_values(0):
+                closes = data['Close']
+            else:
+                return None, []
         else:
             closes = data
         if closes.empty:
