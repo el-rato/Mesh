@@ -224,3 +224,68 @@ class LLMScorer:
             negative=max(-score, 0.0),
             neutral=1.0 - abs(score),
         )
+
+
+class OllamaScorer:
+    """Local LLM-based scorer using Ollama (e.g., Gemma, Llama, etc.)."""
+
+    name = "ollama"
+
+    def __init__(self, base_url: str = "http://localhost:11434", model: str = "gemma2:27b") -> None:
+        self._base_url = base_url.rstrip("/")
+        self._model = model
+
+    def score(self, text: str) -> SentimentResult:
+        import json
+        import urllib.request
+
+        prompt = (
+            "You are a financial sentiment analyst. Score the sentiment of this "
+            "financial news headline/summary from -1 (very bearish) to +1 (very bullish). "
+            "Return ONLY JSON: {\"score\": float, \"label\": \"positive|negative|neutral\"}\n\n"
+            f"Text: {text[:2000]}"
+        )
+
+        payload = {
+            "model": self._model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.0, "num_predict": 100},
+        }
+
+        req = urllib.request.Request(
+            f"{self._base_url}/api/generate",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode())
+
+        response_text = data.get("response", "").strip()
+
+        # Parse JSON from response
+        try:
+            result = json.loads(response_text)
+        except json.JSONDecodeError:
+            # Try to extract JSON from text
+            start = response_text.find("{")
+            end = response_text.rfind("}")
+            if start != -1 and end != -1:
+                result = json.loads(response_text[start:end + 1])
+            else:
+                raise RuntimeError(f"Ollama returned non-JSON: {response_text[:200]}")
+
+        score = _clamp(float(result.get("score", 0.0)))
+        label = result.get("label", "neutral")
+        if score > 0.15 and label == "neutral":
+            label = "positive"
+        elif score < -0.15 and label == "neutral":
+            label = "negative"
+        return SentimentResult(
+            score=round(score, 4),
+            label=label,
+            positive=max(score, 0.0),
+            negative=max(-score, 0.0),
+            neutral=1.0 - abs(score),
+        )

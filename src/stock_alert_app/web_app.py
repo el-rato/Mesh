@@ -174,10 +174,12 @@ def discover(
 def agent_recommendations(
     market: str | None = None,
     live: bool = False,
+    provider: str = "gemini",
+    model: str | None = None,
 ) -> dict[str, object]:
-    """Return Gemini trading recommendations.
+    """Return LLM trading recommendations.
 
-    When live=1, orchestrates fresh data and asks Gemini now (may take a while).
+    When live=1, orchestrates fresh data and asks the LLM now (may take a while).
     Otherwise returns the latest persisted recommendations.
     """
     db = _db()
@@ -187,7 +189,7 @@ def agent_recommendations(
 
         try:
             market_codes = [market] if market else None
-            recs = run_agent(market_codes=market_codes)
+            recs = run_agent(market_codes=market_codes, provider=provider, model=model)
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc))
         items = [r.as_dict() for r in recs]
@@ -222,14 +224,16 @@ def analyze_ticker(
     market: str,
     ticker: str,
     company: str = "",
+    provider: str = "gemini",
+    model: str | None = None,
 ) -> dict[str, object]:
-    """Deep-dive Gemini analysis for a single, user-selected ticker."""
+    """Deep-dive LLM analysis for a single, user-selected ticker."""
     if not market or not ticker:
         raise HTTPException(status_code=422, detail="market and ticker are required")
     from .agent import run_agent_analysis
 
     try:
-        analysis = run_agent_analysis(market_code=market, ticker=ticker, company=company)
+        analysis = run_agent_analysis(market_code=market, ticker=ticker, company=company, provider=provider, model=model)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     return analysis.as_dict()

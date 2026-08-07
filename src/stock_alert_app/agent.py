@@ -117,20 +117,29 @@ def _load_agent_context(
 
 
 class TradingAgent:
-    """Decides BUY/HOLD/SELL/AVOID using Gemini over orchestrated market data."""
+    """Decides BUY/HOLD/SELL/AVOID using an LLM over orchestrated market data."""
 
-    name = "gemini"
-
-    def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
-        self.api_key = api_key or settings.gemini_api_key
-        self.model = model or settings.gemini_model
-        if not self.api_key:
-            raise RuntimeError(
-                "TradingAgent requires GEMINI_API_KEY. Set it in the environment or config."
-            )
-        from google import genai  # type: ignore
-
-        self._client = genai.Client(api_key=self.api_key)
+    def __init__(
+        self,
+        provider: str = "gemini",
+        api_key: str | None = None,
+        model: str | None = None,
+        ollama_base_url: str | None = None,
+    ) -> None:
+        self.provider = provider.lower()
+        if self.provider == "gemini":
+            self.api_key = api_key or settings.gemini_api_key
+            self.model = model or settings.gemini_model
+            if not self.api_key:
+                raise RuntimeError("TradingAgent requires GEMINI_API_KEY for Gemini provider.")
+            from google import genai  # type: ignore
+            self._client = genai.Client(api_key=self.api_key)
+        elif self.provider == "ollama":
+            self.ollama_base_url = ollama_base_url or settings.ollama_base_url
+            self.model = model or settings.ollama_model
+            self._client = None  # Not needed for Ollama
+        else:
+            raise ValueError(f"Unknown provider: {provider}. Use 'gemini' or 'ollama'.")
 
     @staticmethod
     def _build_prompt(context: AgentContext) -> str:
@@ -153,16 +162,45 @@ class TradingAgent:
             + json.dumps(context.to_compact_dict(), default=str)
         )
 
+    def decide_context(self, context: AgentContext) -> list[Recommendation]:
+        prompt = self._build_prompt(context)
+        logger.info("Asking %s (%s) for trading recommendations…", self.provider, self.model)
+
+        if self.provider == "gemini":
+            response = self._client.models.generate_content(model=self.model, contents=prompt)
+            text = (response.text or "").strip()
+        elif self.provider == "ollama":
+            text = self._call_ollama(prompt)
+        else:
+            raise RuntimeError(f"Unknown provider: {self.provider}")
+
+        return self._parse(text)
+
     def decide(self, market_codes: Iterable[str] | None = None, db_path: str | None = None) -> list[Recommendation]:
         context = _load_agent_context(market_codes=market_codes, db_path=db_path, include_news=True)
         return self.decide_context(context)
 
-    def decide_context(self, context: AgentContext) -> list[Recommendation]:
-        prompt = self._build_prompt(context)
-        logger.info("Asking Gemini (%s) for trading recommendations…", self.model)
-        response = self._client.models.generate_content(model=self.model, contents=prompt)
-        text = (response.text or "").strip()
-        return self._parse(text)
+    def _call_ollama(self, prompt: str) -> str:
+        import json
+        import urllib.request
+
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.0, "num_predict": 2000},
+        }
+
+        req = urllib.request.Request(
+            f"{self.ollama_base_url}/api/generate",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read().decode())
+
+        return (data.get("response", "") or "").strip()
 
     def _parse(self, text: str) -> list[Recommendation]:
         try:
@@ -171,11 +209,11 @@ class TradingAgent:
             start = text.find("{")
             end = text.rfind("}")
             if start == -1 or end == -1:
-                raise RuntimeError(f"Gemini returned no JSON:\n{text[:500]}")
+                raise RuntimeError(f"{self.provider} returned no JSON:\n{text[:500]}")
             try:
                 data = json.loads(text[start : end + 1])
             except json.JSONDecodeError as exc:
-                raise RuntimeError(f"Could not parse Gemini response: {exc}\n{text[:500]}") from exc
+                raise RuntimeError(f"Could not parse {self.provider} response: {exc}\n{text[:500]}") from exc
 
         recs: list[Recommendation] = []
         for item in data.get("recommendations", []):
@@ -245,9 +283,15 @@ class TradingAgent:
             "DATA:\n" + json.dumps(data_payload, default=str)
         )
 
-        logger.info("Asking Gemini (%s) to analyze %s:%s…", self.model, market_code, ticker)
-        response = self._client.models.generate_content(model=self.model, contents=prompt)
-        return self._parse_analysis((response.text or "").strip(), market_code, ticker, company)
+        logger.info("Asking %s (%s) to analyze %s:%s…", self.provider, self.model, market_code, ticker)
+        if self.provider == "gemini":
+            response = self._client.models.generate_content(model=self.model, contents=prompt)
+            text = (response.text or "").strip()
+        elif self.provider == "ollama":
+            text = self._call_ollama(prompt)
+        else:
+            raise RuntimeError(f"Unknown provider: {self.provider}")
+        return self._parse_analysis(text, market_code, ticker, company)
 
     def _parse_analysis(self, text: str, market: str, ticker: str, company: str) -> StockAnalysis:
         try:
@@ -283,8 +327,11 @@ def run_agent(
     db_path: str | None = None,
     *,
     persist: bool = True,
+    provider: str = "gemini",
+    model: str | None = None,
+    ollama_base_url: str | None = None,
 ) -> list[Recommendation]:
-    agent = TradingAgent()
+    agent = TradingAgent(provider=provider, model=model, ollama_base_url=ollama_base_url)
     recs = agent.decide(market_codes=market_codes, db_path=db_path)
     if persist:
         db = Database(db_path or settings.db_path)
@@ -299,6 +346,9 @@ def run_agent_analysis(
     ticker: str,
     company: str = "",
     db_path: str | None = None,
+    provider: str = "gemini",
+    model: str | None = None,
+    ollama_base_url: str | None = None,
 ) -> StockAnalysis:
-    agent = TradingAgent()
+    agent = TradingAgent(provider=provider, model=model, ollama_base_url=ollama_base_url)
     return agent.analyze_ticker(market_code, ticker, company, db_path=db_path)

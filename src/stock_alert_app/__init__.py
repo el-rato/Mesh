@@ -79,18 +79,22 @@ def _build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--no-finbert", action="store_true", help="use lexicon scorer")
     discover.add_argument("--register", action="store_true", help="auto-register discovered tickers")
 
-    agent = sub.add_parser("agent", help="use Gemini to recommend BUY/HOLD/SELL/AVOID per ticker")
+    agent = sub.add_parser("agent", help="use LLM to recommend BUY/HOLD/SELL/AVOID per ticker")
     agent.add_argument("--market", nargs="*", default=None, help="market codes to analyze")
     agent.add_argument(
         "--json", action="store_true", default=False,
         help="print recommendations as JSON",
     )
     agent.add_argument("--no-persist", action="store_true", help="do not save recommendations to the DB")
+    agent.add_argument("--provider", default="gemini", choices=["gemini", "ollama"], help="LLM provider (gemini or ollama)")
+    agent.add_argument("--model", default=None, help="model name (gemini: gemini-3.6-flash, ollama: gemma2:27b)")
 
-    analyze = sub.add_parser("analyze", help="deep-dive Gemini analysis for one specific stock")
+    analyze = sub.add_parser("analyze", help="deep-dive LLM analysis for one specific stock")
     analyze.add_argument("ticker", help="stock ticker symbol, e.g. AAPL or RELIANCE")
     analyze.add_argument("--market", required=True, help="market code, e.g. NYSE, BSE, LSE")
     analyze.add_argument("--company", default="", help="optional company name")
+    analyze.add_argument("--provider", default="gemini", choices=["gemini", "ollama"], help="LLM provider (gemini or ollama)")
+    analyze.add_argument("--model", default=None, help="model name (gemini: gemini-3.6-flash, ollama: gemma2:27b)")
 
     risk = sub.add_parser("risk", help="LSTM + Black-Litterman risk analysis for tickers")
     risk.add_argument("tickers", nargs="+", help="ticker symbols, e.g. AAPL MSFT TSLA")
@@ -217,14 +221,16 @@ def main() -> None:
         recommendations = run_agent(
             market_codes=args.market,
             persist=not args.no_persist,
+            provider=args.provider,
+            model=args.model,
         )
         if args.json:
             print(json.dumps([r.as_dict() for r in recommendations], indent=2))
         else:
             if not recommendations:
-                print("No recommendations returned by Gemini.")
+                print(f"No recommendations returned by {args.provider}.")
                 return
-            print("Gemini trading recommendations:")
+            print(f"{args.provider.capitalize()} trading recommendations:")
             for r in recommendations:
                 print(
                     f"  {r.market}:{r.ticker:<10} {r.action:<6} "
@@ -239,6 +245,8 @@ def main() -> None:
             market_code=args.market,
             ticker=args.ticker,
             company=args.company,
+            provider=args.provider,
+            model=args.model,
         )
         print(f"{analysis.market}:{analysis.ticker} ({analysis.company}) — {analysis.action} "
               f"(conf {analysis.confidence:.2f})")

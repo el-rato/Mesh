@@ -179,6 +179,12 @@
         <option value="">All Markets</option>
       </select>
     </div>
+    <div class="market-select-wrapper" style="min-width:160px;">
+      <select id="provider-select">
+        <option value="gemini">Gemini</option>
+        <option value="ollama">Ollama (Local)</option>
+      </select>
+    </div>
     <input type="text" id="analyze-ticker" placeholder="Ticker (e.g. AAPL)" style="width:140px">
     <button class="refresh" id="analyze-btn">AI Analyze</button>
     <button class="refresh" id="refresh-btn">Refresh</button>
@@ -437,8 +443,10 @@ async function loadRecommendations() {
 }
 
 async function runAgent() {
+  const provider = $("provider-select").value;
+  const model = provider === "ollama" ? "gemma2:27b" : undefined;
   $("agent-loading").style.display = "block"; $("agent-grid").innerHTML = ""; $("agent-btn").classList.add("loading"); $("agent-btn").disabled = true;
-  try { const market = $("market-select").value; const q = market ? `?market=${encodeURIComponent(market)}&live=1` : "?live=1"; const data = await fetchJSON("/api/agent" + q); renderRecommendations(data); } catch (e) { $("agent-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`; } finally { $("agent-loading").style.display = "none"; $("agent-btn").classList.remove("loading"); $("agent-btn").disabled = false; }
+  try { const market = $("market-select").value; const q = market ? `?market=${encodeURIComponent(market)}&live=1&provider=${provider}` : `?live=1&provider=${provider}`; const data = await fetchJSON("/api/agent" + q); renderRecommendations(data); } catch (e) { $("agent-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`; } finally { $("agent-loading").style.display = "none"; $("agent-btn").classList.remove("loading"); $("agent-btn").disabled = false; }
 }
 
 function renderAnalysis(a) {
@@ -454,9 +462,10 @@ function renderAnalysis(a) {
 }
 
 async function runAnalysis(market, ticker) {
+  const provider = $("provider-select").value;
   const panel = $("analysis-panel"); panel.style.display = "block"; $("analysis-loading").style.display = "block"; $("analysis-content").innerHTML = ""; $("analyze-btn").classList.add("loading"); $("analyze-btn").disabled = true;
   const mkt = market || $("market-select").value;
-  try { if (!ticker) ticker = $("analyze-ticker").value.trim(); if (!mkt || !ticker) throw new Error("Select a market and enter a ticker"); const q = `?market=${encodeURIComponent(mkt)}&ticker=${encodeURIComponent(ticker)}`; const data = await fetchJSON("/api/analyze" + q); renderAnalysis(data); panel.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (e) { $("analysis-content").innerHTML = `<div class="error">Error: ${e.message}</div>`; } finally { $("analysis-loading").style.display = "none"; $("analyze-btn").classList.remove("loading"); $("analyze-btn").disabled = false; }
+  try { if (!ticker) ticker = $("analyze-ticker").value.trim(); if (!mkt || !ticker) throw new Error("Select a market and enter a ticker"); const q = `?market=${encodeURIComponent(mkt)}&ticker=${encodeURIComponent(ticker)}&provider=${provider}`; const data = await fetchJSON("/api/analyze" + q); renderAnalysis(data); panel.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (e) { $("analysis-content").innerHTML = `<div class="error">Error: ${e.message}</div>`; } finally { $("analysis-loading").style.display = "none"; $("analyze-btn").classList.remove("loading"); $("analyze-btn").disabled = false; }
 }
 
 function renderRiskCharts(data) {
