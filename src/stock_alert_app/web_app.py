@@ -273,6 +273,31 @@ def portfolio_risk(
     return result or {"error": "insufficient data"}
 
 
+@app.get("/api/reddit")
+def reddit_recommendations(
+    subreddits: str = "",
+    limit: int = 50,
+    time_filter: str = "day",
+    min_mentions: int = 2,
+    min_score: int = 10,
+) -> dict[str, object]:
+    """Reddit stock recommendations from subreddit scanning."""
+    sub_list = [s.strip() for s in subreddits.split(",") if s.strip()] if subreddits else None
+    from .reddit_scanner import run_reddit_scan
+
+    try:
+        recs = run_reddit_scan(
+            subreddits=sub_list,
+            limit_per_sub=limit,
+            time_filter=time_filter,
+            min_mentions=min_mentions,
+            min_score=min_score,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"recommendations": [r.as_dict() for r in recs]}
+
+
 app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
 
 

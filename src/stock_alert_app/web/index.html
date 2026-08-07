@@ -192,6 +192,7 @@
     <button class="tab" data-tab="discover">Discover</button>
     <button class="tab" data-tab="recommendations">AI Recommendations</button>
     <button class="tab" data-tab="risk">Risk Analysis</button>
+    <button class="tab" data-tab="reddit">Reddit Intel</button>
   </div>
 
   <div class="tab-panel active" id="panel-verdicts">
@@ -240,6 +241,40 @@
       </div>
     </div>
     <div class="grid" id="risk-grid"></div>
+  </div>
+
+  <div class="tab-panel" id="panel-reddit">
+    <div class="discover-controls">
+      <div style="flex: 1 1 280px;">
+        <label>Subreddits (comma-separated)</label>
+        <input type="text" id="reddit-subreddits" placeholder="wallstreetbets,stocks,investing" style="width:100%">
+      </div>
+      <div style="flex: 0 0 120px;">
+        <label>Posts per Sub</label>
+        <input type="number" id="reddit-limit" value="50" min="10" max="200" style="width:100%">
+      </div>
+      <div style="flex: 0 0 140px;">
+        <label>Time Filter</label>
+        <select id="reddit-time" style="width:100%">
+          <option value="hour">Hour</option>
+          <option value="day" selected>Day</option>
+          <option value="week">Week</option>
+          <option value="month">Month</option>
+          <option value="year">Year</option>
+        </select>
+      </div>
+      <div style="flex: 0 0 120px;">
+        <label>Min Mentions</label>
+        <input type="number" id="reddit-min-mentions" value="2" min="1" max="20" style="width:100%">
+      </div>
+      <div style="flex: 0 0 120px;">
+        <label>Min Score</label>
+        <input type="number" id="reddit-min-score" value="10" min="0" max="1000" style="width:100%">
+      </div>
+      <button class="refresh" id="reddit-btn">Scan Reddit</button>
+    </div>
+    <div class="empty" id="reddit-loading" style="display:none"><span class="empty-icon loading-pulse">🔴</span>Scanning Reddit… this can take a minute.</div>
+    <div class="grid" id="reddit-grid"></div>
   </div>
 
   <div class="analysis-panel" id="analysis-panel" style="display:none">

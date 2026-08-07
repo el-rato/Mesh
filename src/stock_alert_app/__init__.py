@@ -99,6 +99,14 @@ def _build_parser() -> argparse.ArgumentParser:
     risk.add_argument("--risk-aversion", type=float, default=3.0, help="Black-Litterman risk aversion")
     risk.add_argument("--portfolio", action="store_true", help="run portfolio-level optimization only")
 
+    reddit = sub.add_parser("reddit", help="scan Reddit for stock mentions and sentiment")
+    reddit.add_argument("--subreddits", nargs="+", default=None, help="subreddits to scan (default: wallstreetbets, stocks, investing, etc.)")
+    reddit.add_argument("--limit", type=int, default=50, help="posts per subreddit")
+    reddit.add_argument("--time", default="day", choices=["hour", "day", "week", "month", "year", "all"], help="time filter")
+    reddit.add_argument("--min-mentions", type=int, default=2, help="minimum mentions per ticker")
+    reddit.add_argument("--min-score", type=int, default=10, help="minimum total score")
+    reddit.add_argument("--json", action="store_true", help="output as JSON")
+
     return parser
 
 
@@ -278,6 +286,35 @@ def main() -> None:
             print(f"{r.ticker}: LSTM={lstm_sig} ({lstm_ret} @ {lstm_conf}) | BL weight={bl_w} | Risk={r.risk_level}")
             if r.portfolio_sharpe is not None:
                 print(f"  Portfolio: Sharpe={r.portfolio_sharpe:.3f} Vol={r.portfolio_vol:.4f} VaR95={r.var_95:.4f}")
+        return
+
+    if args.command == "reddit":
+        from .reddit_scanner import run_reddit_scan
+
+        recs = run_reddit_scan(
+            subreddits=args.subreddits,
+            limit_per_sub=args.limit,
+            time_filter=args.time,
+            min_mentions=args.min_mentions,
+            min_score=args.min_score,
+        )
+        if args.json:
+            print(json.dumps([r.as_dict() for r in recs], indent=2))
+        else:
+            if not recs:
+                print("No recommendations found.")
+                return
+            print(f"Reddit Recommendations ({len(recs)} tickers):")
+            for r in recs:
+                subs = ", ".join(r.subreddits)
+                print(f"  {r.ticker}: {r.mentions} mentions, score={r.total_score}, sentiment={r.sentiment_label} ({r.avg_sentiment:.2f})")
+                print(f"    subreddits: {subs}")
+                if r.top_posts:
+                    print(f"    top: {r.top_posts[0]['title'][:60]} (r/{r.top_posts[0]['subreddit']}, {r.top_posts[0]['score']} pts)")
+                if r.bullish_signals:
+                    print(f"    📈 bullish: {r.bullish_signals[0]}")
+                if r.bearish_signals:
+                    print(f"    📉 bearish: {r.bearish_signals[0]}")
         return
 
     scaffold()
