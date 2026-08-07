@@ -83,6 +83,13 @@ CREATE TABLE IF NOT EXISTS agent_recommendations (
     generated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS discovered_tickers (
+    ticker TEXT NOT NULL,
+    market TEXT NOT NULL,
+    discovered_at TEXT NOT NULL,
+    PRIMARY KEY (ticker, market)
+);
+
 CREATE INDEX IF NOT EXISTS idx_agent_recs_generated ON agent_recommendations(generated_at);
 CREATE INDEX IF NOT EXISTS idx_news_ticker ON news_items(market, ticker);
 CREATE INDEX IF NOT EXISTS idx_verdicts_ticker ON verdicts(market, ticker);
@@ -309,3 +316,20 @@ class Database:
                        ORDER BY confidence DESC"""
                 ).fetchall()
             return [dict(r) for r in rows]
+
+    def get_recently_discovered(self, cooldown_days: int = 7) -> set[str]:
+        cutoff = datetime.now(timezone.utc).timestamp() - cooldown_days * 86400
+        cutoff_iso = datetime.fromtimestamp(cutoff, timezone.utc).isoformat()
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT ticker FROM discovered_tickers WHERE discovered_at > ?",
+                (cutoff_iso,),
+            ).fetchall()
+            return {r["ticker"].upper() for r in rows}
+
+    def mark_discovered(self, ticker: str, market: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO discovered_tickers (ticker, market, discovered_at) VALUES (?, ?, ?)",
+                (ticker.upper(), market, utc_now()),
+            )

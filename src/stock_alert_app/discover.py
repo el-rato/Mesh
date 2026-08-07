@@ -59,6 +59,7 @@ def discover_from_feeds(
     *,
     min_articles: int = 5,
     use_lexicon: bool = True,
+    cooldown_days: int = 7,
 ) -> list[DiscoveredTicker]:
     company_map = load_company_mapping()
     reverse_map = build_reverse_mapping(company_map)
@@ -69,13 +70,8 @@ def discover_from_feeds(
     scorer = LexiconScorer() if use_lexicon else None
     pipeline = SentimentPipeline(db, scorer=scorer, prefer_finbert=not use_lexicon)
 
-    seen_tickers: set[str] = set()
+    seen_tickers = _get_recently_discovered(db, cooldown_days)
     results: list[DiscoveredTicker] = []
-
-    for code in market_codes:
-        market = markets.get(code)
-        if not market:
-            continue
 
     for code in market_codes:
         market = markets.get(code)
@@ -116,10 +112,19 @@ def discover_from_feeds(
                     matched_keywords=[h.split("—")[0].strip() for h in headlines],
                 ))
                 seen_tickers.add(ticker)
+                _mark_discovered(db, ticker, code)
                 if len(results) >= max_new_per_cycle:
                     return results
 
     return results
+
+
+def _get_recently_discovered(db: Database, cooldown_days: int) -> set[str]:
+    return db.get_recently_discovered(cooldown_days)
+
+
+def _mark_discovered(db: Database, ticker: str, market: str) -> None:
+    db.mark_discovered(ticker, market)
 
 
 def auto_register_tickers(discovered: list[DiscoveredTicker]) -> list[str]:

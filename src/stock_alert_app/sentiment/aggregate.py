@@ -7,10 +7,39 @@ from datetime import datetime, timezone
 from .scorers import SentimentResult
 
 RELIABLE_SOURCES = {
-    "reuters", "bloomberg", "wall street journal", "wsj", "financial times",
-    "ft", "cnbc", "marketwatch", "barron's", "the economist", "axios",
-    "associated press", "ap", "yahoo finance", "investing.com",
+    "reuters",
+    "bloomberg",
+    "wall street journal",
+    "financial times",
+    "cnbc",
+    "marketwatch",
+    "barron's",
+    "the economist",
+    "axios",
+    "associated press",
+    "yahoo finance",
+    "investing.com",
+    "nikkei",
+    "nikkei asia",
+    "morningstar",
+    "fortune",
+    "forbes",
+    "business standard",
+    "the hindu businessline",
+    "moneycontrol",
+    "bbc business",
+    "the guardian business",
+    "al jazeera business",
+    "the straits times",
+    "south china morning post",
+    "les echos",
+    "handelsblatt",
+    "caixin",
+    "coindesk",
+    "techcrunch",
+    "mining.com",
 }
+
 
 
 @dataclass
