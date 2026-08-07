@@ -97,8 +97,11 @@ class RedditScanner:
         if self._reddit is not None:
             return self._reddit
         if not self.client_id or not self.client_secret:
-            logger.warning("Reddit API credentials not configured")
-            return None
+            raise RuntimeError(
+                "Reddit API credentials not configured. Add REDDIT_CLIENT_ID and "
+                "REDDIT_CLIENT_SECRET to .env (get them from "
+                "https://www.reddit.com/prefs/apps, create a 'script' app)."
+            )
         try:
             self._reddit = praw.Reddit(
                 client_id=self.client_id,
@@ -177,6 +180,12 @@ class RedditScanner:
     ) -> list[RedditRecommendation]:
         """Scan subreddits and return aggregated recommendations."""
         subs = subreddits or SUBREDDITS
+        if not self.client_id or not self.client_secret:
+            raise RuntimeError(
+                "Reddit API credentials not configured. Add REDDIT_CLIENT_ID and "
+                "REDDIT_CLIENT_SECRET to .env (get them from "
+                "https://www.reddit.com/prefs/apps, create a 'script' app)."
+            )
         all_posts: list[RedditPost] = []
 
         for sub in subs:

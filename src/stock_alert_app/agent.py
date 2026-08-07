@@ -66,29 +66,56 @@ class AgentContext:
     watchlist: list[dict] = field(default_factory=list)
     news: dict[str, list[dict]] = field(default_factory=dict)
 
-    def to_compact_dict(self) -> dict:
+    def to_compact_dict(self, max_characters: int = 180_000) -> dict:
+        """Compact context into a dict, truncating to stay within a token budget.
+
+        Rough heuristic: ~4 chars per token, so max_characters keeps the data well
+        under the model's context limit (e.g. 1M tokens for Gemini 3.x).
+        """
+        def _trunc(s: str, limit: int) -> str:
+            return s if len(s) <= limit else s[:limit].rstrip() + "…"
+
         verdicts_out = []
+        total = 0
         for key, v in self.verdicts.items():
-            verdicts_out.append(
-                {
-                    "market": v.market,
-                    "ticker": v.ticker,
-                    "verdict": v.verdict,
-                    "confidence": round(v.confidence, 4),
-                    "news_score": round(v.news_score, 4),
-                    "price_score": round(v.price_score, 4),
-                    "combined_score": round(v.combined_score, 4),
-                    "reason": v.reason,
+            entry = {
+                "market": v.market,
+                "ticker": v.ticker,
+                "verdict": v.verdict,
+                "confidence": round(v.confidence, 4),
+                "news_score": round(v.news_score, 4),
+                "price_score": round(v.price_score, 4),
+                "combined_score": round(v.combined_score, 4),
+                "reason": _trunc(str(v.reason), 300),
+            }
+            total += sum(len(str(x)) for x in entry.values())
+            if total > max_characters:
+                break
+            verdicts_out.append(entry)
+
+        news_out: dict[str, list[dict]] = {}
+        for key, items in self.news.items():
+            kept = []
+            for n in items:
+                capped = {
+                    "title": _trunc(str(n.get("title", "")), 200),
+                    "source": str(n.get("source", ""))[:50],
+                    "sentiment": str(n.get("sentiment", "")),
                 }
-            )
+                total += sum(len(str(x)) for x in capped.values())
+                if total > max_characters:
+                    break
+                kept.append(capped)
+            news_out[key] = kept
+
         return {
             "verdicts": verdicts_out,
             "watchlist": self.watchlist,
-            "top_news": self.news,
+            "top_news": news_out,
         }
 
 
-def _latest_news_map(db: Database, verdicts: dict[str, Verdict], limit: int = 5) -> dict[str, list[dict]]:
+def _latest_news_map(db: Database, verdicts: dict[str, Verdict], limit: int = 3) -> dict[str, list[dict]]:
     news_map: dict[str, list[dict]] = {}
     for key, v in verdicts.items():
         items = db.recent_news(v.market, v.ticker, limit=limit)
@@ -142,8 +169,8 @@ class TradingAgent:
             raise ValueError(f"Unknown provider: {provider}. Use 'gemini' or 'ollama'.")
 
     @staticmethod
-    def _build_prompt(context: AgentContext) -> str:
-        return (
+    def _build_prompt(context: AgentContext, max_tokens: int = 40_000) -> str:
+        prompt_head = (
             "You are a professional portfolio trading agent. Use ONLY the provided data. "
             "For every ticker in 'verdicts', decide an action:\n"
             "- BUY: strong positive signals (bullish news + positive price momentum + reasonable valuation)\n"
@@ -159,8 +186,11 @@ class TradingAgent:
             '{"recommendations": [{"market": str, "ticker": str, "action": '
             '"BUY|HOLD|SELL|AVOID", "confidence": float, "rationale": str}]}\n\n'
             "DATA:\n"
-            + json.dumps(context.to_compact_dict(), default=str)
         )
+        # ~4 chars per token; cap the data payload so the whole prompt stays under max_tokens.
+        budget_chars = max_tokens * 4 - len(prompt_head)
+        payload = json.dumps(context.to_compact_dict(max_characters=budget_chars), default=str)
+        return prompt_head + payload
 
     def decide_context(self, context: AgentContext) -> list[Recommendation]:
         prompt = self._build_prompt(context)

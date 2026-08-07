@@ -444,7 +444,6 @@ async function loadRecommendations() {
 
 async function runAgent() {
   const provider = $("provider-select").value;
-  const model = provider === "ollama" ? "gemma2:27b" : undefined;
   $("agent-loading").style.display = "block"; $("agent-grid").innerHTML = ""; $("agent-btn").classList.add("loading"); $("agent-btn").disabled = true;
   try { const market = $("market-select").value; const q = market ? `?market=${encodeURIComponent(market)}&live=1&provider=${provider}` : `?live=1&provider=${provider}`; const data = await fetchJSON("/api/agent" + q); renderRecommendations(data); } catch (e) { $("agent-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`; } finally { $("agent-loading").style.display = "none"; $("agent-btn").classList.remove("loading"); $("agent-btn").disabled = false; }
 }

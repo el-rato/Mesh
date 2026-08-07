@@ -87,14 +87,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     agent.add_argument("--no-persist", action="store_true", help="do not save recommendations to the DB")
     agent.add_argument("--provider", default="gemini", choices=["gemini", "ollama"], help="LLM provider (gemini or ollama)")
-    agent.add_argument("--model", default=None, help="model name (gemini: gemini-3.6-flash, ollama: gemma2:27b)")
+    agent.add_argument("--model", default=None, help="model name (gemini: gemini-3.5-flash-lite, ollama: gemma4:latest)")
 
     analyze = sub.add_parser("analyze", help="deep-dive LLM analysis for one specific stock")
     analyze.add_argument("ticker", help="stock ticker symbol, e.g. AAPL or RELIANCE")
     analyze.add_argument("--market", required=True, help="market code, e.g. NYSE, BSE, LSE")
     analyze.add_argument("--company", default="", help="optional company name")
     analyze.add_argument("--provider", default="gemini", choices=["gemini", "ollama"], help="LLM provider (gemini or ollama)")
-    analyze.add_argument("--model", default=None, help="model name (gemini: gemini-3.6-flash, ollama: gemma2:27b)")
+    analyze.add_argument("--model", default=None, help="model name (gemini: gemini-3.5-flash-lite, ollama: gemma4:latest)")
 
     risk = sub.add_parser("risk", help="LSTM + Black-Litterman risk analysis for tickers")
     risk.add_argument("tickers", nargs="+", help="ticker symbols, e.g. AAPL MSFT TSLA")
