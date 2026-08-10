@@ -320,7 +320,7 @@ def hedge_funds() -> list[dict[str, object]]:
 @app.get("/api/funds/refresh")
 def refresh_hedge_funds() -> dict[str, object]:
     """Fetch the latest 13F filings from SEC EDGAR for all tracked funds."""
-    from .institutional import run_institutional_fetch, fund_summaries
+    from .institutional import fund_summaries, run_institutional_fetch
 
     filings = run_institutional_fetch()
     return {
