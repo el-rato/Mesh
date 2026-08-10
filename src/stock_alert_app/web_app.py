@@ -13,6 +13,13 @@ from .db import Database
 app = FastAPI(title="StockVerdict", version="0.1.0")
 
 UI_DIR = Path(__file__).resolve().parent / "web"
+FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+
+
+def _ui_assets_dir() -> Path:
+    if (FRONTEND_DIR / "index.html").is_file():
+        return FRONTEND_DIR
+    return UI_DIR
 
 
 class WatchItem(BaseModel):
@@ -302,9 +309,144 @@ def reddit_recommendations(
     return {"recommendations": [r.as_dict() for r in recs]}
 
 
-app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
+@app.get("/api/funds")
+def hedge_funds() -> list[dict[str, object]]:
+    """Latest 13F summary for each tracked hedge fund."""
+    from .institutional import fund_summaries
+
+    return fund_summaries(_db())
+
+
+@app.get("/api/funds/refresh")
+def refresh_hedge_funds() -> dict[str, object]:
+    """Fetch the latest 13F filings from SEC EDGAR for all tracked funds."""
+    from .institutional import run_institutional_fetch, fund_summaries
+
+    filings = run_institutional_fetch()
+    return {
+        "fetched": [f.fund_name for f in filings],
+        "summaries": fund_summaries(_db()),
+    }
+
+
+@app.get("/api/funds/{cik}")
+def hedge_fund_detail(cik: str) -> dict[str, object]:
+    """Detailed holdings + quarterly changes for one fund."""
+    from .institutional import compute_quarterly_changes
+
+    db = _db()
+    db.init_schema()
+    filings = db.fund_filings(cik=cik, limit=2)
+    if not filings:
+        raise HTTPException(status_code=404, detail="fund not found")
+    latest = filings[0]
+    changes = compute_quarterly_changes(cik, db)
+    return {
+        "cik": latest["cik"],
+        "fund": latest["fund_name"],
+        "form": latest["form"],
+        "filing_date": latest["filing_date"],
+        "period_of_report": latest["period_of_report"],
+        "holdings": [
+            {
+                "cusip": h["cusip"],
+                "issuer": h["issuer"],
+                "ticker": h["ticker"],
+                "value": h["value_thousands"],
+                "shares": h["shares"],
+                "shares_type": h["shares_type"],
+                "put_call": h["put_call"],
+                "pct_portfolio": h["pct_portfolio"],
+            }
+            for h in db.fund_holdings(latest["id"], limit=500)
+        ],
+        "changes": [
+            {
+                "ticker": c.ticker,
+                "issuer": c.issuer,
+                "action": c.action,
+                "prev_shares": c.prev_shares,
+                "curr_shares": c.curr_shares,
+                "change_shares": c.change_shares,
+                "change_pct": round(c.change_pct, 4),
+                "value": c.value_thousands,
+            }
+            for c in changes
+        ],
+    }
+
+
+@app.get("/api/indexes")
+def get_indexes(market: str | None = None) -> list[dict[str, object]]:
+    """Latest index snapshots, optionally filtered by market."""
+    db = _db()
+    db.init_schema()
+    snapshots = db.latest_index_snapshots(market=market)
+    return [
+        {
+            "market": s["market"],
+            "symbol": s["symbol"],
+            "name": s["name"],
+            "close": s["close"],
+            "open": s["open"],
+            "high": s["high"],
+            "low": s["low"],
+            "volume": s["volume"],
+            "change_pct": s["change_pct"],
+            "fetched_at": s["fetched_at"],
+        }
+        for s in snapshots
+    ]
+
+
+@app.get("/api/indexes/refresh")
+def refresh_indexes(market: str | None = None) -> list[dict[str, object]]:
+    """Fetch fresh index snapshots and return them."""
+    from .indexes import run_index_fetch
+
+    codes = [market] if market else None
+    snapshots = run_index_fetch(codes)
+    return [s.as_dict() for s in snapshots]
+
+
+@app.get("/api/indexes/{symbol}/history")
+def index_history(symbol: str, range: str = "1mo") -> dict[str, object]:
+    """OHLC history for an index at a given range (1d/1w/1mo/1y/all)."""
+    from .indexes import index_history as fetch_history
+
+    rows = fetch_history(symbol, range)
+    return {"symbol": symbol, "range": range, "data": rows}
+
+
+@app.get("/api/chart/{market}/{ticker}")
+def chart_data(market: str, ticker: str, range: str = "1mo") -> dict[str, object]:
+    """Stock chart OHLC data for any ticker at a given range (1d/1w/1mo/1y/all)."""
+    from .indexes import index_history as fetch_history
+    from .markets import load_markets
+
+    markets = load_markets(settings.markets_dir)
+    m = markets.get(market.upper())
+    suffix = m.yahoo_suffix if m else ""
+    symbol = f"{ticker.upper()}{suffix}"
+    rows = fetch_history(symbol, range)
+    return {"market": market.upper(), "ticker": ticker.upper(), "symbol": symbol, "range": range, "data": rows}
 
 
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
-    return FileResponse(UI_DIR / "index.html")
+    return FileResponse(_ui_assets_dir() / "index.html")
+
+
+# SPA fallback: serve built React assets from frontend/dist when present, or
+# any unmatched path falls back to index.html so client-side routes work.
+if (FRONTEND_DIR / "index.html").is_file():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def spa(full_path: str) -> FileResponse:
+        candidate = FRONTEND_DIR / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(FRONTEND_DIR / "index.html")
+else:
+    app.mount("/static", StaticFiles(directory=UI_DIR), name="static")

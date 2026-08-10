@@ -111,6 +111,18 @@ def _build_parser() -> argparse.ArgumentParser:
     reddit.add_argument("--min-score", type=int, default=10, help="minimum total score")
     reddit.add_argument("--json", action="store_true", help="output as JSON")
 
+    funds = sub.add_parser("funds", help="fetch hedge fund 13F filings from SEC EDGAR")
+    funds.add_argument("--json", action="store_true", help="print fund summaries as JSON")
+
+    indexes = sub.add_parser("indexes", help="fetch benchmark index snapshots per market")
+    indexes.add_argument("--market", nargs="*", default=None, help="market codes to fetch")
+    indexes.add_argument("--json", action="store_true", help="print snapshots as JSON")
+
+    chart = sub.add_parser("chart", help="print OHLC chart data for a ticker/index")
+    chart.add_argument("symbol", help="Yahoo symbol, e.g. AAPL, ^GSPC, RELIANCE.NS")
+    chart.add_argument("--range", default="1mo", choices=["1d", "1w", "1mo", "1y", "all"], help="chart range")
+    chart.add_argument("--json", action="store_true", help="print as JSON")
+
     return parser
 
 
@@ -320,9 +332,62 @@ def main() -> None:
                 if r.top_posts:
                     print(f"    top: {r.top_posts[0]['title'][:60]} (r/{r.top_posts[0]['subreddit']}, {r.top_posts[0]['score']} pts)")
                 if r.bullish_signals:
-                    print(f"    📈 bullish: {r.bullish_signals[0]}")
+                    print(f"    bullish: {r.bullish_signals[0]}")
                 if r.bearish_signals:
-                    print(f"    📉 bearish: {r.bearish_signals[0]}")
+                    print(f"    bearish: {r.bearish_signals[0]}")
+        return
+
+    if args.command == "funds":
+        from .institutional import run_institutional_fetch, fund_summaries
+        from .db import Database
+
+        filings = run_institutional_fetch()
+        print(f"Fetched {len(filings)} hedge fund 13F filings from SEC EDGAR:")
+        if args.json:
+            print(json.dumps(fund_summaries(Database(settings.db_path)), indent=2))
+        else:
+            for s in fund_summaries(Database(settings.db_path)):
+                print(f"\n  {s['fund']} ({s['cik']}) — filed {s['filing_date']} ({s['period_of_report']})")
+                print(f"    top holdings: " + ", ".join(
+                    f"{h['ticker'] or h['issuer']} ${h['value']/1e6:.0f}M" for h in s["top_holdings"][:6]
+                ))
+                buys = [c for c in s["changes"] if c["action"] in ("BUY", "NEW")]
+                sells = [c for c in s["changes"] if c["action"] in ("SELL", "EXITED")]
+                if buys:
+                    print("    buys: " + ", ".join(f"{c['ticker']} ({c['change_pct']:+.0%})" for c in buys[:6]))
+                if sells:
+                    print("    sells: " + ", ".join(f"{c['ticker']} ({c['change_pct']:+.0%})" for c in sells[:6]))
+        return
+
+    if args.command == "indexes":
+        from .indexes import run_index_fetch
+
+        snapshots = run_index_fetch(market_codes=args.market)
+        if args.json:
+            print(json.dumps([s.as_dict() for s in snapshots], indent=2))
+        else:
+            if not snapshots:
+                print("No index data fetched.")
+                return
+            print(f"Index Snapshots ({len(snapshots)}):")
+            for s in snapshots:
+                arrow = "+" if s.change_pct >= 0 else "-"
+                print(f"  [{s.market}] {s.name:<28} {s.close:>12,.2f}  {arrow}{abs(s.change_pct)*100:.2f}%")
+        return
+
+    if args.command == "chart":
+        from .indexes import index_history
+
+        rows = index_history(args.symbol, args.range)
+        if args.json:
+            print(json.dumps(rows, indent=2))
+        else:
+            if not rows:
+                print(f"No data for {args.symbol}.")
+                return
+            print(f"{args.symbol} — {args.range} ({len(rows)} bars):")
+            for r in rows[:12]:
+                print(f"  {r['date']}  O={r['open']:>10.2f} H={r['high']:>10.2f} L={r['low']:>10.2f} C={r['close']:>10.2f} V={r['volume']:,}")
         return
 
     scaffold()

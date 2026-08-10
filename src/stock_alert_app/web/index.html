@@ -199,6 +199,8 @@
     <button class="tab" data-tab="recommendations">AI Recommendations</button>
     <button class="tab" data-tab="risk">Risk Analysis</button>
     <button class="tab" data-tab="reddit">Reddit Intel</button>
+    <button class="tab" data-tab="funds">Hedge Funds</button>
+    <button class="tab" data-tab="indexes">Indexes</button>
   </div>
 
   <div class="tab-panel active" id="panel-verdicts">
@@ -283,6 +285,33 @@
     <div class="grid" id="reddit-grid"></div>
   </div>
 
+  <div class="tab-panel" id="panel-funds">
+    <div class="discover-controls">
+      <button class="refresh" id="funds-btn">Refresh 13F Data</button>
+      <span class="muted" id="funds-updated"></span>
+    </div>
+    <div class="empty" id="funds-loading" style="display:none"><span class="empty-icon loading-pulse">🏛</span>Fetching hedge fund 13F filings from SEC EDGAR…</div>
+    <div class="grid" id="funds-grid"></div>
+  </div>
+
+  <div class="tab-panel" id="panel-indexes">
+    <div class="discover-controls">
+      <button class="refresh" id="indexes-btn">Refresh Indexes</button>
+      <div style="flex: 1 1 280px; display:flex; align-items:center; gap:8px;">
+        <label style="margin:0">Range:</label>
+        <select id="index-range" style="width:140px">
+          <option value="1d">1 Day</option>
+          <option value="1w">1 Week</option>
+          <option value="1mo" selected>1 Month</option>
+          <option value="1y">1 Year</option>
+          <option value="all">All Time</option>
+        </select>
+      </div>
+    </div>
+    <div class="empty" id="indexes-loading" style="display:none"><span class="empty-icon loading-pulse">📈</span>Loading index data…</div>
+    <div class="grid" id="indexes-grid"></div>
+  </div>
+
   <div class="analysis-panel" id="analysis-panel" style="display:none">
     <div class="empty" id="analysis-loading" style="display:none"><span class="empty-icon loading-pulse">🤖</span>Analyzing… this can take a minute.</div>
     <div id="analysis-content"></div>
@@ -365,8 +394,10 @@ function renderVerdicts(list) {
       <div class="conf-bar"><span style="width:${v.confidence*100}%; background:${confColor(v.verdict)}"></span></div>
       <div class="row"><span class="label">Combined</span><span class="value">${v.combined_score.toFixed(3)}</span></div>
       <div class="row"><span class="label">News / Price</span><span class="value">${v.news_score.toFixed(2)} / ${v.price_score.toFixed(2)}</span></div>
+      <div style="margin-top:10px;height:120px"><canvas data-pchart="${v.market}:${v.ticker}" data-range="1mo"></canvas></div>
       <div class="reason">${v.reason.join("")}</div>
     `; el.onclick = () => openDetail(v); grid.appendChild(el);
+    renderMiniPriceChart(el.querySelector("canvas"), v.market, v.ticker, "1mo");
   }
 }
 
@@ -534,6 +565,131 @@ function renderRiskGrid(data) {
 }
 
 async function loadVerdicts() { try { const market = $("market-select").value; const q = market ? `?market=${encodeURIComponent(market)}` : ""; const data = await fetchJSON("/api/verdicts" + q); renderVerdicts(Object.values(data)); } catch (e) { $("panel-verdicts").innerHTML = `<div class="error">Error: ${e.message}</div>`; } }
+
+function renderFundCard(s) {
+  const el = document.createElement("div"); el.className = "card";
+  const buys = (s.changes || []).filter(c => c.action === "BUY" || c.action === "NEW");
+  const sells = (s.changes || []).filter(c => c.action === "SELL" || c.action === "EXITED");
+  const top = (s.top_holdings || []).map(h => {
+    const t = h.ticker || h.issuer;
+    return `<div class="row"><span class="label">${t}</span><span class="value">$${(h.value/1e6).toFixed(0)}M</span></div>`;
+  }).join("");
+  el.innerHTML = `
+    <div class="card-head">
+      <div><div class="symbol">${s.fund}</div><div class="name">13F · filed ${s.filing_date || "n/a"}</div></div>
+    </div>
+    <div class="row"><span class="label">Period</span><span class="value">${s.period_of_report || "n/a"}</span></div>
+    <div class="row"><span class="label">Top Holdings</span><span class="value">${(s.total_holdings || 0)}</span></div>
+    ${top.slice(0,4)}
+    ${buys.length ? `<div class="reason" style="color:var(--bull)">▲ Buys: ${buys.slice(0,4).map(b => b.ticker || b.issuer).join(", ") || "n/a"}</div>` : ""}
+    ${sells.length ? `<div class="reason" style="color:var(--bear)">▼ Sells: ${sells.slice(0,4).map(x => x.ticker || x.issuer).join(", ") || "n/a"}</div>` : ""}
+  `;
+  el.onclick = () => openFundDetail(s);
+  return el;
+}
+
+function renderFunds(list) {
+  const grid = $("funds-grid"); grid.innerHTML = "";
+  if (!list.length) { grid.innerHTML = `<div class="empty"><span class="empty-icon">🏛</span>No hedge fund data yet. Click "Refresh 13F Data".</div>`; return; }
+  list.forEach(s => { const el = renderFundCard(s); el.classList.add("pop-in"); grid.appendChild(el); });
+}
+
+async function loadFunds() {
+  try { const data = await fetchJSON("/api/funds"); renderFunds(data); } catch (e) { $("funds-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`; }
+}
+
+async function refreshFunds() {
+  $("funds-loading").style.display = "block"; $("funds-grid").innerHTML = ""; $("funds-btn").classList.add("loading"); $("funds-btn").disabled = true;
+  try { const data = await fetchJSON("/api/funds/refresh"); renderFunds(data.summaries || data); $("funds-updated").textContent = "Updated " + new Date().toLocaleTimeString(); } catch (e) { $("funds-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`; } finally { $("funds-loading").style.display = "none"; $("funds-btn").classList.remove("loading"); $("funds-btn").disabled = false; }
+}
+
+async function openFundDetail(s) {
+  $("drawer").classList.add("open"); $("overlay").classList.add("open");
+  let detail = s;
+  try { detail = await fetchJSON(`/api/funds/${encodeURIComponent(s.cik)}`); } catch (e) {}
+  const holdings = (detail.holdings || []).slice(0, 20);
+  const changes = detail.changes || [];
+  const changeRows = changes.slice(0, 15).map(c => {
+    const cls = c.action === "BUY" || c.action === "NEW" ? "bull" : c.action === "SELL" || c.action === "EXITED" ? "bear" : "neutral";
+    return `<div class="news-item"><div class="sender">${c.ticker || c.issuer} <span class="badge ${cls}">${c.action}</span></div><div class="src">Δ ${c.change_shares.toLocaleString()} shares (${(c.change_pct*100).toFixed(1)}%) · $${(c.value/1e6).toFixed(0)}M</div></div>`;
+  }).join("");
+  $("drawer-content").innerHTML = `
+    <h2>${detail.fund} <span style="color:var(--text-muted);font-size:14px;font-weight:400">(13F · ${detail.filing_date || "n/a"})</span></h2>
+    <div class="a-sub">Period of report: ${detail.period_of_report || "n/a"}</div>
+    <h3>Top Holdings</h3>
+    ${holdings.map(h => `<div class="news-item"><div class="sender">${h.ticker || h.issuer}</div><div class="src">$${(h.value/1e6).toFixed(0)}M · ${(h.shares||0).toLocaleString()} sh · ${(h.pct_portfolio*100).toFixed(2)}%</div></div>`).join("") || '<div class="muted">none</div>'}
+    <h3>Quarterly Changes (Buys/Sells)</h3>
+    ${changeRows || '<div class="muted">need a prior quarter to compare</div>'}
+  `;
+}
+
+async function loadIndexes() {
+  $("indexes-loading").style.display = "block"; $("indexes-grid").innerHTML = "";
+  try { const market = $("market-select").value; const q = market ? `?market=${encodeURIComponent(market)}` : ""; const data = await fetchJSON("/api/indexes" + q); renderIndexes(data); } catch (e) { $("indexes-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`; } finally { $("indexes-loading").style.display = "none"; }
+}
+
+async function refreshIndexes() {
+  $("indexes-loading").style.display = "block"; $("indexes-grid").innerHTML = ""; $("indexes-btn").classList.add("loading"); $("indexes-btn").disabled = true;
+  try { const market = $("market-select").value; const q = market ? `?market=${encodeURIComponent(market)}` : ""; const data = await fetchJSON("/api/indexes/refresh" + q); renderIndexes(data); } catch (e) { $("indexes-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`; } finally { $("indexes-loading").style.display = "none"; $("indexes-btn").classList.remove("loading"); $("indexes-btn").disabled = false; }
+}
+
+function renderIndexes(list) {
+  const grid = $("indexes-grid"); grid.innerHTML = "";
+  if (!list.length) { grid.innerHTML = `<div class="empty"><span class="empty-icon">📈</span>No index snapshots yet. Click "Refresh Indexes".</div>`; return; }
+  const range = $("index-range").value;
+  list.forEach(s => {
+    const el = document.createElement("div"); el.className = "card";
+    const up = s.change_pct >= 0;
+    el.innerHTML = `
+      <div class="card-head">
+        <div><div class="symbol" style="font-size:18px">${s.name}</div><div class="name">${s.market} · ${s.symbol}</div></div>
+      </div>
+      <div class="row"><span class="label">Close</span><span class="value">${Number(s.close).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+      <div class="row"><span class="label">Change</span><span class="value" style="color:${up?'var(--bull)':'var(--bear)'}">${up?'+':''}${(s.change_pct*100).toFixed(2)}%</span></div>
+      <div class="row"><span class="label">O / H / L</span><span class="value">${Number(s.open).toFixed(0)} / ${Number(s.high).toFixed(0)} / ${Number(s.low).toFixed(0)}</span></div>
+      <div style="margin-top:10px;height:120px"><canvas data-ichart="${s.symbol}" data-range="${range}"></canvas></div>
+    `;
+    grid.appendChild(el);
+    renderMiniChart(el.querySelector("canvas"), s.symbol, range);
+  });
+}
+
+function renderMiniChart(canvas, symbol, range) {
+  const ctx = canvas.getContext("2d");
+  const opts = { responsive: true, maintainAspectRatio: false, animation: false,
+    plugins: { legend: { display: false }, tooltip: { enabled: true } },
+    scales: { x: { display: false }, y: { display: false } } };
+  fetchJSON(`/api/indexes/${encodeURIComponent(symbol)}/history?range=${range}`).then(d => {
+    const pts = (d.data || []).map(r => r.close);
+    if (!pts.length) return;
+    const up = pts[pts.length-1] >= pts[0];
+    const color = up ? CHART_COLORS.bull : CHART_COLORS.bear;
+    new Chart(ctx, {
+      type: "line",
+      data: { labels: (d.data||[]).map(r => r.date), datasets: [{ data: pts, borderColor: color, backgroundColor: up ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)', borderWidth: 2, pointRadius: 0, fill: true, tension: 0.3 }] },
+      options: opts
+    });
+  }).catch(() => {});
+}
+
+function renderMiniPriceChart(canvas, market, ticker, range) {
+  const ctx = canvas.getContext("2d");
+  const opts = { responsive: true, maintainAspectRatio: false, animation: false,
+    plugins: { legend: { display: false } },
+    scales: { x: { display: false }, y: { display: false } } };
+  fetchJSON(`/api/chart/${encodeURIComponent(market)}/${encodeURIComponent(ticker)}?range=${range}`).then(d => {
+    const pts = (d.data || []).map(r => r.close);
+    if (!pts.length) return;
+    const up = pts[pts.length-1] >= pts[0];
+    const color = up ? CHART_COLORS.bull : CHART_COLORS.bear;
+    new Chart(ctx, {
+      type: "line",
+      data: { labels: (d.data||[]).map(r => r.date), datasets: [{ data: pts, borderColor: color, backgroundColor: up ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)', borderWidth: 2, pointRadius: 0, fill: true, tension: 0.3 }] },
+      options: opts
+    });
+  }).catch(() => {});
+}
+
 async function loadWatchlist() { try { const list = await fetchJSON("/api/watchlist"); watched.clear(); list.forEach((w) => watched.add(`${w.market}:${w.ticker}`)); renderWatchlist(list); } catch (e) { $("watchlist-grid").innerHTML = `<div class="error">Error: ${e.message}</div>`; } }
 
 async function toggleWatch(market, ticker, company, btn) {
@@ -555,25 +711,51 @@ async function openDetail(v) {
   $("drawer").classList.add("open"); $("overlay").classList.add("open");
   const news = await fetchJSON(`/api/news?market=${v.market}&ticker=${v.ticker}`);
   const history = await fetchJSON(`/api/history/${v.market}/${v.ticker}`);
+  const rng = (v._range || "1mo");
   $("drawer-content").innerHTML = `
     <h2>${v.ticker} <span style="color:var(--text-muted);font-size:14px;font-weight:400">(${v.market})</span> ${badge(v)}</h2>
     <div class="a-sub">Confidence ${(v.confidence*100).toFixed(0)}% · Combined ${v.combined_score.toFixed(3)}</div>
     <div class="a-summary">${v.reason.join("")}</div>
+    <h3>Price Chart</h3>
+    <div class="discover-controls" style="margin-bottom:8px;padding:8px 12px">
+      ${["1d","1w","1mo","1y","all"].map(r => `<button class="watch-btn ${r===rng?'watched':''}" data-crange="${r}">${r==="all"?"All":r.toUpperCase()}</button>`).join("")}
+    </div>
+    <div style="height:260px"><canvas id="drawer-chart"></canvas></div>
     <h3>Price History</h3>
     ${history.slice(0,5).map(h => `<div class="news-item"><div class="sender">${h.decided_at}</div><div class="src">${h.verdict}</div></div>`).join("") || '<div class="muted">none</div>'}
     <h3>Latest Headlines</h3>
     ${news.map(n => `<div class="news-item"><div class="sender">${n.title}</div><div class="src">${n.source} · ${n.published_at} <span class="sentiment" style="background:${(n.sentiment_label==='positive'?'var(--bull-bg)':n.sentiment_label==='negative'?'var(--bear-bg)':'var(--neutral-bg)')};color:${n.sentiment_label==='positive'?'var(--bull)':n.sentiment_label==='negative'?'var(--bear)':'var(--neutral)'}">${n.sentiment_label || 'n/a'}</span></div></div>`).join("") || '<div class="muted">no headlines</div>'}
   `;
+  document.querySelectorAll('[data-crange]').forEach(b => { b.onclick = () => { openDetail({ ...v, _range: b.dataset.crange }); }; });
+  drawDrawerChart(v.market, v.ticker, rng);
+}
+
+function drawDrawerChart(market, ticker, range) {
+  const ctx = document.getElementById("drawer-chart").getContext("2d");
+  if (window.drawerChart) window.drawerChart.destroy();
+  fetchJSON(`/api/chart/${encodeURIComponent(market)}/${encodeURIComponent(ticker)}?range=${range}`).then(d => {
+    const pts = (d.data || []);
+    if (!pts.length) return;
+    const up = pts[pts.length-1].close >= pts[0].close;
+    const color = up ? CHART_COLORS.bull : CHART_COLORS.bear;
+    window.drawerChart = new Chart(ctx, {
+      type: "line",
+      data: { labels: pts.map(r => r.date), datasets: [{ label: ticker, data: pts.map(r => r.close), borderColor: color, backgroundColor: up ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', borderWidth: 2, pointRadius: 0, fill: true, tension: 0.3 }] },
+      options: { responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { display: true, grid: { color: CHART_COLORS.grid }, ticks: { color: '#64748b', font: { size: 10 }, maxTicksLimit: 6 } }, y: { display: true, grid: { color: CHART_COLORS.grid }, ticks: { color: '#64748b', font: { size: 10 } } } } }
+    });
+  }).catch(() => {});
 }
 
 async function init() {
   try { const markets = await fetchJSON("/api/markets"); const sel = $("market-select"); markets.forEach((m) => { const o = document.createElement("option"); o.value = m.code; o.textContent = `${m.code} — ${m.name}`; sel.appendChild(o); }); } catch (e) { console.warn("Failed to load markets", e); }
   document.querySelectorAll('.tab').forEach(btn => { btn.onclick = () => { document.querySelectorAll('.tab').forEach(b => b.classList.remove('active')); document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active')); btn.classList.add('active'); $(`panel-${btn.dataset.tab}`).classList.add('active'); }; });
-  $("refresh-btn").onclick = refreshAll; $("market-select").onchange = refreshAll; $("discover-btn").onclick = runDiscover; $("agent-btn").onclick = runAgent; $("analyze-btn").onclick = () => runAnalysis($("market-select").value, $("analyze-ticker").value.trim()); $("analyze-ticker").addEventListener("keydown", (e) => { if (e.key === "Enter") runAnalysis($("market-select").value, $("analyze-ticker").value.trim()); }); $("risk-btn").onclick = runRiskAnalysis; $("close-btn").onclick = () => { $("drawer").classList.remove("open"); $("overlay").classList.remove("open"); }; $("overlay").onclick = () => { $("drawer").classList.remove("open"); $("overlay").classList.remove("open"); };
+  $("refresh-btn").onclick = refreshAll; $("market-select").onchange = refreshAll; $("discover-btn").onclick = runDiscover; $("agent-btn").onclick = runAgent; $("analyze-btn").onclick = () => runAnalysis($("market-select").value, $("analyze-ticker").value.trim()); $("analyze-ticker").addEventListener("keydown", (e) => { if (e.key === "Enter") runAnalysis($("market-select").value, $("analyze-ticker").value.trim()); }); $("risk-btn").onclick = runRiskAnalysis; $("funds-btn").onclick = refreshFunds; $("indexes-btn").onclick = refreshIndexes; $("index-range").onchange = loadIndexes; $("close-btn").onclick = () => { $("drawer").classList.remove("open"); $("overlay").classList.remove("open"); }; $("overlay").onclick = () => { $("drawer").classList.remove("open"); $("overlay").classList.remove("open"); };
   document.addEventListener("click", (e) => { const aBtn = e.target.closest(".analyze-btn"); if (aBtn) { e.stopPropagation(); const [market, ticker] = aBtn.dataset.analyze.split(":"); runAnalysis(market, ticker); return; } const btn = e.target.closest(".watch-btn"); if (!btn) return; e.stopPropagation(); const [market, ticker] = btn.dataset.watch.split(":"); toggleWatch(market, ticker, btn.dataset.company, btn); });
   await refreshAll(); setInterval(refreshAll, 30000);
 }
-async function refreshAll() { await Promise.all([loadVerdicts(), loadWatchlist(), loadRecommendations()]); touchUpdated(); }
+async function refreshAll() { await Promise.all([loadVerdicts(), loadWatchlist(), loadRecommendations(), loadFunds(), loadIndexes()]); touchUpdated(); }
 function touchUpdated() { lastUpdated = new Date(); $("scored-info").textContent = "last updated " + lastUpdated.toLocaleTimeString(); }
 init();
 </script>

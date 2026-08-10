@@ -90,6 +90,49 @@ CREATE TABLE IF NOT EXISTS discovered_tickers (
     PRIMARY KEY (ticker, market)
 );
 
+CREATE TABLE IF NOT EXISTS fund_filings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cik TEXT NOT NULL,
+    fund_name TEXT NOT NULL DEFAULT '',
+    form TEXT NOT NULL DEFAULT '13F-HR',
+    accession TEXT NOT NULL,
+    filing_date TEXT NOT NULL,
+    period_of_report TEXT NOT NULL DEFAULT '',
+    fetched_at TEXT NOT NULL,
+    UNIQUE(cik, accession)
+);
+
+CREATE TABLE IF NOT EXISTS fund_holdings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fund_filing_id INTEGER NOT NULL REFERENCES fund_filings(id) ON DELETE CASCADE,
+    cusip TEXT NOT NULL DEFAULT '',
+    issuer TEXT NOT NULL DEFAULT '',
+    ticker TEXT NOT NULL DEFAULT '',
+    value_thousands REAL NOT NULL DEFAULT 0,
+    shares REAL NOT NULL DEFAULT 0,
+    shares_type TEXT NOT NULL DEFAULT 'SH',
+    put_call TEXT NOT NULL DEFAULT '',
+    pct_portfolio REAL NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_fund_holdings_filing ON fund_holdings(fund_filing_id);
+CREATE INDEX IF NOT EXISTS idx_fund_holdings_ticker ON fund_holdings(ticker);
+
+CREATE TABLE IF NOT EXISTS index_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    market TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    fetched_at TEXT NOT NULL,
+    close REAL NOT NULL DEFAULT 0,
+    open REAL NOT NULL DEFAULT 0,
+    high REAL NOT NULL DEFAULT 0,
+    low REAL NOT NULL DEFAULT 0,
+    volume INTEGER NOT NULL DEFAULT 0,
+    change_pct REAL NOT NULL DEFAULT 0,
+    UNIQUE(market, symbol, fetched_at)
+);
+
 CREATE INDEX IF NOT EXISTS idx_agent_recs_generated ON agent_recommendations(generated_at);
 CREATE INDEX IF NOT EXISTS idx_news_ticker ON news_items(market, ticker);
 CREATE INDEX IF NOT EXISTS idx_verdicts_ticker ON verdicts(market, ticker);
@@ -333,3 +376,92 @@ class Database:
                 "INSERT OR REPLACE INTO discovered_tickers (ticker, market, discovered_at) VALUES (?, ?, ?)",
                 (ticker.upper(), market, utc_now()),
             )
+
+    def upsert_fund_filing(
+        self,
+        cik: str,
+        fund_name: str,
+        form: str,
+        accession: str,
+        filing_date: str,
+        period_of_report: str = "",
+    ) -> int:
+        with self.connect() as conn:
+            cur = conn.execute(
+                """INSERT INTO fund_filings (cik, fund_name, form, accession, filing_date, period_of_report, fetched_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(cik, accession) DO UPDATE SET
+                     fund_name=excluded.fund_name, filing_date=excluded.filing_date,
+                     period_of_report=excluded.period_of_report, fetched_at=excluded.fetched_at""",
+                (cik, fund_name, form, accession, filing_date, period_of_report, utc_now()),
+            )
+            row = conn.execute(
+                "SELECT id FROM fund_filings WHERE cik = ? AND accession = ?", (cik, accession)
+            ).fetchone()
+            return int(row["id"])
+
+    def replace_fund_holdings(self, fund_filing_id: int, holdings: List[Dict[str, Any]]) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM fund_holdings WHERE fund_filing_id = ?", (fund_filing_id,))
+            conn.executemany(
+                """INSERT INTO fund_holdings
+                   (fund_filing_id, cusip, issuer, ticker, value_thousands, shares, shares_type, put_call, pct_portfolio)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (
+                        fund_filing_id,
+                        h.get("cusip", ""),
+                        h.get("issuer", ""),
+                        h.get("ticker", ""),
+                        h.get("value_thousands", h.get("value", 0.0)),
+                        float(h.get("shares", 0.0)),
+                        h.get("shares_type", "SH"),
+                        h.get("put_call", ""),
+                        float(h.get("pct_portfolio", 0.0)),
+                    )
+                    for h in holdings
+                ],
+            )
+
+    def fund_filings(self, cik: str | None = None, limit: int = 20) -> List[Dict[str, Any]]:
+        with self.connect() as conn:
+            if cik:
+                rows = conn.execute(
+                    "SELECT * FROM fund_filings WHERE cik = ? ORDER BY filing_date DESC LIMIT ?",
+                    (cik, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM fund_filings ORDER BY filing_date DESC LIMIT ?", (limit,)
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def fund_holdings(self, fund_filing_id: int, limit: int = 500) -> List[Dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM fund_holdings WHERE fund_filing_id = ? ORDER BY value_thousands DESC LIMIT ?",
+                (fund_filing_id, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def latest_index_snapshots(self, market: str | None = None) -> List[Dict[str, Any]]:
+        with self.connect() as conn:
+            if market:
+                rows = conn.execute(
+                    """SELECT * FROM index_snapshots s
+                       WHERE s.market = ?
+                         AND s.fetched_at = (
+                             SELECT MAX(s2.fetched_at) FROM index_snapshots s2
+                             WHERE s2.market = s.market AND s2.symbol = s.symbol
+                         )""",
+                    (market,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT * FROM index_snapshots s
+                       WHERE s.fetched_at = (
+                           SELECT MAX(s2.fetched_at) FROM index_snapshots s2
+                           WHERE s2.market = s.market AND s2.symbol = s.symbol
+                       )"""
+                ).fetchall()
+            return [dict(r) for r in rows]
