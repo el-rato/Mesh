@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.venv/
+
+# Environment
+.env
+
+# Node / frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+
+# Database
+data/*.db
