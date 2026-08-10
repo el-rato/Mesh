@@ -1,11 +1,10 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { fetchJSON } from "./api.js";
+import LandingPage from "./components/LandingPage.jsx";
 import VerdictsTab from "./components/VerdictsTab.jsx";
 import WatchlistTab from "./components/WatchlistTab.jsx";
 import DiscoverTab from "./components/DiscoverTab.jsx";
-import RecommendationsTab from "./components/RecommendationsTab.jsx";
 import RiskTab from "./components/RiskTab.jsx";
-import RedditTab from "./components/RedditTab.jsx";
 import FundsTab from "./components/FundsTab.jsx";
 import IndexesTab from "./components/IndexesTab.jsx";
 import Drawer from "./components/Drawer.jsx";
@@ -14,23 +13,21 @@ export const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
 
 const TABS = [
-  { key: "verdicts", fn: "F1", label: "VERDICTS" },
-  { key: "watchlist", fn: "F2", label: "WATCHLIST" },
-  { key: "discover", fn: "F3", label: "DISCOVER" },
-  { key: "recommendations", fn: "F4", label: "AI RECS" },
+  { key: "home", fn: "F1", label: "HOME" },
+  { key: "verdicts", fn: "F2", label: "VERDICTS" },
+  { key: "watchlist", fn: "F3", label: "WATCHLIST" },
+  { key: "discover", fn: "F4", label: "DISCOVER" },
   { key: "risk", fn: "F5", label: "RISK" },
-  { key: "reddit", fn: "F6", label: "REDDIT" },
-  { key: "funds", fn: "F7", label: "HEDGE FUNDS" },
-  { key: "indexes", fn: "F8", label: "INDEXES" },
+  { key: "funds", fn: "F6", label: "HEDGE FUNDS" },
+  { key: "indexes", fn: "F7", label: "INDEXES" },
 ];
 
 const TAB_COMPONENTS = {
+  home: LandingPage,
   verdicts: VerdictsTab,
   watchlist: WatchlistTab,
   discover: DiscoverTab,
-  recommendations: RecommendationsTab,
   risk: RiskTab,
-  reddit: RedditTab,
   funds: FundsTab,
   indexes: IndexesTab,
 };
@@ -70,10 +67,9 @@ function TickerTape({ indexes }) {
 
 export default function App() {
   const [market, setMarket] = useState("");
-  const [provider, setProvider] = useState("gemini");
   const [markets, setMarkets] = useState([]);
   const [indexes, setIndexes] = useState([]);
-  const [tab, setTab] = useState("verdicts");
+  const [tab, setTab] = useState("home");
   const [drawer, setDrawer] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
@@ -101,8 +97,6 @@ export default function App() {
     () => ({
       market,
       setMarket,
-      provider,
-      setProvider,
       refreshAll: () => {
         setRefreshToken((t) => t + 1);
         setLastUpdated(new Date());
@@ -111,7 +105,7 @@ export default function App() {
       openDrawer: (d) => setDrawer(d),
       closeDrawer: () => setDrawer(null),
     }),
-    [market, provider, refreshToken]
+    [market, refreshToken]
   );
 
   const ActiveTab = TAB_COMPONENTS[tab];
@@ -152,13 +146,6 @@ export default function App() {
               ))}
             </select>
           </div>
-          <div className="field">
-            <label>LLM</label>
-            <select value={provider} onChange={(e) => setProvider(e.target.value)}>
-              <option value="gemini">Gemini</option>
-              <option value="ollama">Ollama (Local)</option>
-            </select>
-          </div>
           <button className="primary" onClick={() => ctx.refreshAll()}>
             ⟳ REFRESH
           </button>
@@ -166,7 +153,6 @@ export default function App() {
             INDEX TAPE
           </button>
         </div>
-
         <main className="content">
           <ActiveTab key={tab} />
         </main>
@@ -179,7 +165,6 @@ export default function App() {
             {lastUpdated ? lastUpdated.toLocaleTimeString() : "--:--:--"}
           </span>
           <span>MARKET: {market || "ALL"}</span>
-          <span>LLM: {provider.toUpperCase()}</span>
           <span style={{ marginLeft: "auto" }}>
             {now.toLocaleDateString()} {now.toLocaleTimeString()}
           </span>

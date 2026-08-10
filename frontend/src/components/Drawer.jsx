@@ -32,58 +32,64 @@ function StockDetail({ v, onClose }) {
       </div>
       <div className="a-summary">{(v.reason || []).join("")}</div>
 
-      <h3>Price Chart</h3>
-      <div className="chart-range-bar">
-        {CHART_RANGES.map((r) => (
-          <button key={r} className={range === r ? "active" : ""} onClick={() => setRange(r)}>
-            {rangeLabel(r)}
-          </button>
-        ))}
-      </div>
-      <div style={{ height: 260 }}>
-        <PriceChart
-          url={`/api/chart/${encodeURIComponent(v.market)}/${encodeURIComponent(v.ticker)}?range=${range}`}
-          height={260}
-          candles={range === "1d"}
-        />
-      </div>
-
-      <h3>Price History</h3>
-      {history.length ? (
-        history.slice(0, 8).map((h, i) => (
-          <div className="news-item" key={i}>
-            <div className="sender">{h.decided_at}</div>
-            <div className="src">{h.verdict}</div>
+      <div className="drawer-main">
+        <div>
+          <h3>Price Chart</h3>
+          <div className="chart-range-bar">
+            {CHART_RANGES.map((r) => (
+              <button key={r} className={range === r ? "active" : ""} onClick={() => setRange(r)}>
+                {rangeLabel(r)}
+              </button>
+            ))}
           </div>
-        ))
-      ) : (
-        <div className="news-item"><span className="src">NONE</span></div>
-      )}
-
-      <h3>Latest Headlines</h3>
-      {news.length ? (
-        news.slice(0, 10).map((n, i) => (
-          <div className="news-item" key={i}>
-            <div className="sender">{n.title}</div>
-            <div className="src">
-              {n.source} · {n.published_at}{" "}
-              <span
-                className={`sent ${
-                  n.sentiment_label === "positive"
-                    ? "up"
-                    : n.sentiment_label === "negative"
-                    ? "down"
-                    : "neutral"
-                }`}
-              >
-                {n.sentiment_label || "N/A"}
-              </span>
-            </div>
+          <div style={{ height: 240 }}>
+            <PriceChart
+              url={`/api/chart/${encodeURIComponent(v.market)}/${encodeURIComponent(v.ticker)}?range=${range}`}
+              height={240}
+              candles={range === "1d"}
+            />
           </div>
-        ))
-      ) : (
-        <div className="news-item"><span className="src">NO HEADLINES</span></div>
-      )}
+
+          <h3>Price History</h3>
+          {history.length ? (
+            history.slice(0, 8).map((h, i) => (
+              <div className="news-item" key={i}>
+                <div className="sender">{h.decided_at}</div>
+                <div className="src">{h.verdict}</div>
+              </div>
+            ))
+          ) : (
+            <div className="news-item"><span className="src">NONE</span></div>
+          )}
+        </div>
+
+        <div className="news-panel">
+          <h3>Latest Headlines</h3>
+          {news.length ? (
+            news.slice(0, 20).map((n, i) => (
+              <div className="news-item" key={i}>
+                <div className="sender">{n.title}</div>
+                <div className="src">
+                  {n.source} · {n.published_at}{" "}
+                  <span
+                    className={`sent ${
+                      n.sentiment_label === "positive"
+                        ? "up"
+                        : n.sentiment_label === "negative"
+                        ? "down"
+                        : "neutral"
+                    }`}
+                  >
+                    {n.sentiment_label || "N/A"}
+                  </span>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="news-item"><span className="src">NO HEADLINES</span></div>
+          )}
+        </div>
+      </div>
     </>
   );
 }

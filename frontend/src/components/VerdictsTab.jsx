@@ -63,13 +63,11 @@ export default function VerdictsTab() {
               <span style={{ width: confPct + "%", background: confColor }} />
             </div>
             <Row k="COMBINED" v={Number(v.combined_score || 0).toFixed(3)} />
-            <Row
-              k="NEWS / PRICE"
-              v={`${Number(v.news_score || 0).toFixed(2)} / ${Number(v.price_score || 0).toFixed(2)}`}
-            />
-            <div style={{ marginTop: 8, height: 110 }}>
+            <div style={{ marginTop: 8, height: 80 }}>
               <PriceChart
                 url={`/api/chart/${encodeURIComponent(v.market)}/${encodeURIComponent(v.ticker)}?range=1mo`}
+                height={80}
+                hideAxes
               />
             </div>
             <div className="reason">{(v.reason || []).join("")}</div>

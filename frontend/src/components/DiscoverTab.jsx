@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { fetchJSON } from "../api.js";
 import { useApp } from "../App.jsx";
 import { scoreBadge, Row } from "./ui.jsx";
@@ -8,28 +8,40 @@ export default function DiscoverTab() {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [minScore, setMinScore] = useState(0.2);
+  const [minScore, setMinScore] = useState(0.1);
   const [maxResults, setMaxResults] = useState(20);
-  const [minArticles, setMinArticles] = useState(5);
+  const [minArticles, setMinArticles] = useState(1);
 
-  const run = async () => {
-    setLoading(true);
+  const paramsRef = useRef({ market, minScore, maxResults, minArticles });
+  paramsRef.current = { market, minScore, maxResults, minArticles };
+
+  const run = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError("");
     setData(null);
     try {
-      const params = new URLSearchParams();
-      if (market) params.append("market", market);
-      params.append("min_score", minScore);
-      params.append("max_results", maxResults);
-      params.append("min_articles", minArticles);
-      const d = await fetchJSON(`/api/discover?${params.toString()}`);
+      const p = paramsRef.current;
+      const qs = new URLSearchParams();
+      if (p.market) qs.append("market", p.market);
+      qs.append("min_score", p.minScore);
+      qs.append("max_results", p.maxResults);
+      qs.append("min_articles", p.minArticles);
+      const d = await fetchJSON(`/api/discover?${qs.toString()}`);
       setData(d);
     } catch (e) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    run(false);
+  }, []);
+
+  useEffect(() => {
+    if (refreshToken) run(true);
+  }, [refreshToken]);
 
   const watch = async (d) => {
     try {
