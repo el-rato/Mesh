@@ -97,6 +97,7 @@ export default function App() {
     () => ({
       market,
       setMarket,
+      setTab,
       refreshAll: () => {
         setRefreshToken((t) => t + 1);
         setLastUpdated(new Date());
