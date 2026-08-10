@@ -8,13 +8,20 @@
   "rss_queries": [
     "Indian stock market",
     "BSE Sensex",
-    "India economy"
+    "Nifty 50",
+    "India economy",
+    "Indian earnings",
+    "RBI policy",
+    "Nifty Bank",
+    "Nifty IT",
+    "Nifty Pharma"
   ],
   "financial_feeds": [
     "https://economictimes.indiatimes.com/rssfeedsdefault.cms",
     "https://www.moneycontrol.com/rss/latestnews.xml",
     "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EBSESN&region=IN&lang=en-IN",
-    "https://www.ndtv.com/business/rss"
+    "https://www.ndtv.com/business/rss",
+    "https://www.livemint.com/rss/markets"
   ],
   "tickers": {
     "RELIANCE": {
@@ -40,6 +47,218 @@
     "SBIN": {
       "name": "State Bank of India",
       "keywords": ["SBIN", "State Bank", "SBI"]
+    },
+    "HINDUNILVR": {
+      "name": "Hindustan Unilever Limited",
+      "keywords": ["Hindustan Unilever", "HUL"]
+    },
+    "KOTAKBANK": {
+      "name": "Kotak Mahindra Bank Limited",
+      "keywords": ["Kotak Bank", "Kotak Mahindra"]
+    },
+    "LT": {
+      "name": "Larsen & Toubro Limited",
+      "keywords": ["Larsen Toubro", "L&T", "Larsen & Toubro"]
+    },
+    "ASIANPAINT": {
+      "name": "Asian Paints Limited",
+      "keywords": ["Asian Paints"]
+    },
+    "MARUTI": {
+      "name": "Maruti Suzuki India Limited",
+      "keywords": ["Maruti", "Maruti Suzuki"]
+    },
+    "SUNPHARMA": {
+      "name": "Sun Pharmaceutical Industries Limited",
+      "keywords": ["Sun Pharma", "Sun Pharmaceutical"]
+    },
+    "DRREDDY": {
+      "name": "Dr. Reddy's Laboratories Limited",
+      "keywords": ["Dr Reddy", "Dr Reddy's"]
+    },
+    "CIPLA": {
+      "name": "Cipla Limited",
+      "keywords": ["Cipla"]
+    },
+    "WIPRO": {
+      "name": "Wipro Limited",
+      "keywords": ["Wipro"]
+    },
+    "HCLTECH": {
+      "name": "HCL Technologies Limited",
+      "keywords": ["HCL Tech", "HCL Technologies"]
+    },
+    "ULTRACEMCO": {
+      "name": "UltraTech Cement Limited",
+      "keywords": ["UltraTech Cement", "UltraTech"]
+    },
+    "GRASIM": {
+      "name": "Grasim Industries Limited",
+      "keywords": ["Grasim", "Grasim Industries"]
+    },
+    "TATAMOTORS": {
+      "name": "Tata Motors Limited",
+      "keywords": ["Tata Motors"]
+    },
+    "TATASTEEL": {
+      "name": "Tata Steel Limited",
+      "keywords": ["Tata Steel"]
+    },
+    "JSWSTEEL": {
+      "name": "JSW Steel Limited",
+      "keywords": ["JSW Steel"]
+    },
+    "HINDALCO": {
+      "name": "Hindalco Industries Limited",
+      "keywords": ["Hindalco"]
+    },
+    "COALINDIA": {
+      "name": "Coal India Limited",
+      "keywords": ["Coal India"]
+    },
+    "ONGC": {
+      "name": "Oil and Natural Gas Corporation Limited",
+      "keywords": ["ONGC", "Oil Natural Gas"]
+    },
+    "IOC": {
+      "name": "Indian Oil Corporation Limited",
+      "keywords": ["Indian Oil", "IOC"]
+    },
+    "BPCL": {
+      "name": "Bharat Petroleum Corporation Limited",
+      "keywords": ["Bharat Petroleum", "BPCL"]
+    },
+    "GAIL": {
+      "name": "GAIL (India) Limited",
+      "keywords": ["GAIL", "GAIL India"]
+    },
+    "NTPC": {
+      "name": "NTPC Limited",
+      "keywords": ["NTPC"]
+    },
+    "POWERGRID": {
+      "name": "Power Grid Corporation of India Limited",
+      "keywords": ["Power Grid", "PowerGrid"]
+    },
+    "ADANIENT": {
+      "name": "Adani Enterprises Limited",
+      "keywords": ["Adani Enterprises", "Adani Ent"]
+    },
+    "ADANIPORTS": {
+      "name": "Adani Ports and Special Economic Zone Limited",
+      "keywords": ["Adani Ports"]
+    },
+    "ADANIGREEN": {
+      "name": "Adani Green Energy Limited",
+      "keywords": ["Adani Green"]
+    },
+    "BAJAJFINSV": {
+      "name": "Bajaj Finserv Limited",
+      "keywords": ["Bajaj Finserv"]
+    },
+    "BAJFINANCE": {
+      "name": "Bajaj Finance Limited",
+      "keywords": ["Bajaj Finance"]
+    },
+    "BAJAJ-AUTO": {
+      "name": "Bajaj Auto Limited",
+      "keywords": ["Bajaj Auto"]
+    },
+    "TITAN": {
+      "name": "Titan Company Limited",
+      "keywords": ["Titan"]
+    },
+    "NESTLEIND": {
+      "name": "Nestle India Limited",
+      "keywords": ["Nestle India", "Nestle"]
+    },
+    "BRITANNIA": {
+      "name": "Britannia Industries Limited",
+      "keywords": ["Britannia"]
+    },
+    "DIVISLAB": {
+      "name": "Divi's Laboratories Limited",
+      "keywords": ["Divi's Lab", "Divis Laboratories"]
+    },
+    "TECHM": {
+      "name": "Tech Mahindra Limited",
+      "keywords": ["Tech Mahindra"]
+    },
+    "M&M": {
+      "name": "Mahindra & Mahindra Limited",
+      "keywords": ["Mahindra", "M&M"]
+    },
+    "EICHERMOT": {
+      "name": "Eicher Motors Limited",
+      "keywords": ["Eicher Motors"]
+    },
+    "HEROMOTOCO": {
+      "name": "Hero MotoCorp Limited",
+      "keywords": ["Hero MotoCorp", "Hero Honda"]
+    },
+    "SHREECEM": {
+      "name": "Shree Cement Limited",
+      "keywords": ["Shree Cement"]
+    },
+    "VEDL": {
+      "name": "Vedanta Limited",
+      "keywords": ["Vedanta"]
+    },
+    "INDUSINDBK": {
+      "name": "IndusInd Bank Limited",
+      "keywords": ["IndusInd Bank", "IndusInd"]
+    },
+    "AXISBANK": {
+      "name": "Axis Bank Limited",
+      "keywords": ["Axis Bank"]
+    },
+    "BHARTIARTL": {
+      "name": "Bharti Airtel Limited",
+      "keywords": ["Bharti Airtel", "Airtel"]
+    },
+    "TATACONSUM": {
+      "name": "Tata Consumer Products Limited",
+      "keywords": ["Tata Consumer"]
+    },
+    "CIPLA": {
+      "name": "Cipla Limited",
+      "keywords": ["Cipla"]
+    },
+    "APOLLOHOSP": {
+      "name": "Apollo Hospitals Enterprise Limited",
+      "keywords": ["Apollo Hospitals"]
+    },
+    "DABUR": {
+      "name": "Dabur India Limited",
+      "keywords": ["Dabur"]
+    },
+    "GODREJCP": {
+      "name": "Godrej Consumer Products Limited",
+      "keywords": ["Godrej Consumer", "Godrej"]
+    },
+    "MARICO": {
+      "name": "Marico Limited",
+      "keywords": ["Marico"]
+    },
+    "BERGEPAINT": {
+      "name": "Berger Paints India Limited",
+      "keywords": ["Berger Paints"]
+    },
+    "PIDILITIND": {
+      "name": "Pidilite Industries Limited",
+      "keywords": ["Pidilite"]
+    },
+    "COLPAL": {
+      "name": "Colgate-Palmolive (India) Limited",
+      "keywords": ["Colgate", "Colgate Palmolive"]
+    },
+    "UBL": {
+      "name": "United Breweries Limited",
+      "keywords": ["United Breweries", "Kingfisher"]
+    },
+    "RADICO": {
+      "name": "Radico Khaitan Limited",
+      "keywords": ["Radico Khaitan"]
     }
   }
 }

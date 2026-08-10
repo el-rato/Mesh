@@ -66,6 +66,7 @@ export default function PriceChart({
       },
       handleScroll: hideAxes ? false : true,
       handleScale: hideAxes ? false : true,
+      logo: { show: false },
     });
 
     chartRef.current = chart;

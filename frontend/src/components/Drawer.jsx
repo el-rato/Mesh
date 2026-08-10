@@ -33,6 +33,33 @@ function StockDetail({ v, onClose }) {
       <div className="a-summary">{(v.reason || []).join("")}</div>
 
       <div className="drawer-main">
+        <div className="news-panel">
+          <h3>Latest Headlines</h3>
+          {news.length ? (
+            news.slice(0, 20).map((n, i) => (
+              <div className="news-item" key={i}>
+                <div className="sender">{n.title}</div>
+                <div className="src">
+                  {n.source} · {n.published_at}{" "}
+                  <span
+                    className={`sent ${
+                      n.sentiment_label === "positive"
+                        ? "up"
+                        : n.sentiment_label === "negative"
+                        ? "down"
+                        : "neutral"
+                    }`}
+                  >
+                    {n.sentiment_label || "N/A"}
+                  </span>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="news-item"><span className="src">NO HEADLINES</span></div>
+          )}
+        </div>
+
         <div>
           <h3>Price Chart</h3>
           <div className="chart-range-bar">
@@ -60,33 +87,6 @@ function StockDetail({ v, onClose }) {
             ))
           ) : (
             <div className="news-item"><span className="src">NONE</span></div>
-          )}
-        </div>
-
-        <div className="news-panel">
-          <h3>Latest Headlines</h3>
-          {news.length ? (
-            news.slice(0, 20).map((n, i) => (
-              <div className="news-item" key={i}>
-                <div className="sender">{n.title}</div>
-                <div className="src">
-                  {n.source} · {n.published_at}{" "}
-                  <span
-                    className={`sent ${
-                      n.sentiment_label === "positive"
-                        ? "up"
-                        : n.sentiment_label === "negative"
-                        ? "down"
-                        : "neutral"
-                    }`}
-                  >
-                    {n.sentiment_label || "N/A"}
-                  </span>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="news-item"><span className="src">NO HEADLINES</span></div>
           )}
         </div>
       </div>

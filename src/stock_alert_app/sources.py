@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from urllib.parse import quote
 
@@ -15,6 +16,10 @@ USER_AGENT = (
 )
 
 TIMEOUT = 20.0
+
+# Simple in-memory RSS cache: {url: (articles, expiry_ts)}
+_RSS_CACHE: dict[str, tuple[list[Article], float]] = {}
+_RSS_CACHE_TTL = 600  # 10 minutes
 
 
 @dataclass
@@ -77,6 +82,21 @@ def _parse_feed(text: str, query: str) -> list[Article]:
     return articles
 
 
+def _fetch_rss_cached(url: str, query: str) -> list[Article]:
+    now = time.time()
+    if url in _RSS_CACHE:
+        articles, expiry = _RSS_CACHE[url]
+        if now < expiry:
+            logger.debug("RSS cache hit for %s (%d articles)", url, len(articles))
+            # Update query on cached articles
+            for a in articles:
+                a.query = query
+            return articles
+    articles = fetch_rss(url, query)
+    _RSS_CACHE[url] = (articles, now + _RSS_CACHE_TTL)
+    return articles
+
+
 def fetch_rss(url: str, query: str) -> list[Article]:
     try:
         with httpx.Client(
@@ -95,18 +115,18 @@ def fetch_rss(url: str, query: str) -> list[Article]:
 
 
 def fetch_google_news(query: str, country_code: str = "US") -> list[Article]:
-    return fetch_rss(google_news_url(query, country_code), query)
+    return _fetch_rss_cached(google_news_url(query, country_code), query)
 
 
 def fetch_financial_feeds(feed_urls: list[str], fallback_query: str = "") -> list[Article]:
     articles: list[Article] = []
     for url in feed_urls:
-        articles.extend(fetch_rss(url, fallback_query or url))
+        articles.extend(_fetch_rss_cached(url, fallback_query or url))
     return articles
 
 
 def fetch_yahoo_finance(symbol: str, region: str = "US", query: str = "") -> list[Article]:
-    return fetch_rss(yahoo_finance_url(symbol, region), query or symbol)
+    return _fetch_rss_cached(yahoo_finance_url(symbol, region), query or symbol)
 
 
 def fetch_newsapi(query: str, api_key: str) -> list[Article]:
@@ -140,3 +160,9 @@ def fetch_newsapi(query: str, api_key: str) -> list[Article]:
             )
         )
     return articles
+
+
+def clear_rss_cache() -> None:
+    """Clear the RSS cache. Useful for testing or forced refresh."""
+    global _RSS_CACHE
+    _RSS_CACHE.clear()

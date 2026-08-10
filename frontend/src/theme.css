@@ -356,14 +356,14 @@ button.ghost {
   }
 }
 .news-panel {
-  border-left: 1px solid var(--border);
-  padding-left: 14px;
+  border-right: 1px solid var(--border);
+  padding-right: 14px;
 }
 @media (max-width: 900px) {
   .news-panel {
-    border-left: none;
+    border-right: none;
     border-top: 1px solid var(--border);
-    padding-left: 0;
+    padding-right: 0;
     padding-top: 8px;
   }
 }
