@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createChart, ColorType } from "lightweight-charts";
 import { fetchJSON } from "../api.js";
 
@@ -23,8 +23,28 @@ export default function PriceChart({
   const ref = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
+  const [visible, setVisible] = useState(false);
+  const createdRef = useRef(false);
 
   useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setVisible(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: "200px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!visible || createdRef.current) return;
+    createdRef.current = true;
     const chart = createChart(ref.current, {
       height,
       layout: {
@@ -72,12 +92,12 @@ export default function PriceChart({
     }
 
     return () => chart.remove();
-  }, []);
+  }, [visible]);
 
   useEffect(() => {
     const chart = chartRef.current;
     const series = seriesRef.current;
-    if (!chart || !series) return;
+    if (!chart || !series || !visible) return;
     let cancelled = false;
     fetchJSON(url)
       .then((d) => {
@@ -103,13 +123,13 @@ export default function PriceChart({
     return () => {
       cancelled = true;
     };
-  }, [url, candles]);
+  }, [url, candles, visible]);
 
   useEffect(() => {
     const series = seriesRef.current;
-    if (!series) return;
+    if (!series || !visible) return;
     if (!candles) series.applyOptions({ color: color || (up ? "#00e676" : "#ff5252") });
-  }, [color, up, candles]);
+  }, [color, up, candles, visible]);
 
   return <div ref={ref} style={{ width: "100%", height }} />;
 }
