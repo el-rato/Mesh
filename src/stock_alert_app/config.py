@@ -25,6 +25,14 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    try:
+        return int(value) if value else default
+    except ValueError:
+        return default
+
+
 @dataclass(frozen=True)
 class Settings:
     app_dir: Path = field(
@@ -102,6 +110,18 @@ class Settings:
     )
     bear_threshold: float = field(
         default_factory=lambda: _env_float("STOCK_ALERT_BEAR_THRESHOLD", -0.25)
+    )
+
+    # Background refresh cadence (seconds). Fast refresh updates prices and
+    # lightweight technicals; slow refresh re-runs LSTM/news/sentiment.
+    scanner_refresh_fast: int = field(
+        default_factory=lambda: _env_int("STOCK_ALERT_REFRESH_FAST", 300)
+    )
+    scanner_refresh_slow: int = field(
+        default_factory=lambda: _env_int("STOCK_ALERT_REFRESH_SLOW", 1800)
+    )
+    scanner_refresh_batch: int = field(
+        default_factory=lambda: _env_int("STOCK_ALERT_REFRESH_BATCH", 25)
     )
 
     def ensure_dirs(self) -> None:
