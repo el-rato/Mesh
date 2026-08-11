@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchJSON, CHART_RANGES, rangeLabel, dossier } from "../api.js";
 import { useApp } from "../App.jsx";
 import PriceChart from "./PriceChart.jsx";
-import { verdictBadge, reasonText } from "./ui.jsx";
+import { verdictBadge, reasonText, RefreshStatus } from "./ui.jsx";
 
 function sigCls(state) {
   const s = String(state || "").toLowerCase();
@@ -22,7 +22,8 @@ function num(v, def = 0) {
 
 /* ---------------- Analysis workspace ---------------- */
 
-function DossierHeader({ dossierData, v, onRefresh, refreshing }) {
+function DossierHeader({ dossierData, v }) {
+  const { refreshStatus } = useApp();
   const verdict = dossierData.verdict || {};
   const inst = dossierData.instrument || {};
   const conf = verdict.confidence == null ? "N/A" : `${(num(verdict.confidence) * 100).toFixed(0)}%`;
@@ -36,18 +37,15 @@ function DossierHeader({ dossierData, v, onRefresh, refreshing }) {
       <div className="dossier-header-right">
         <span className="dossier-mkt">{inst.market || v.market} · {inst.quote_type || "EQUITY"}</span>
         {verdictBadge(verdict)}
-        <button className="live" onClick={onRefresh} disabled={refreshing}>
-          {refreshing ? "⟳ ANALYZING…" : "⟳ LIVE VERDICT"}
-        </button>
+        <RefreshStatus status={refreshStatus} />
       </div>
       <div className="dossier-header-meta">
         CONFIDENCE <strong>{conf}</strong> · SCORE <strong>{score}</strong> · AGREEMENT <strong>{String(verdict.signal_agreement || "unknown").toUpperCase()}</strong>
       </div>
-      {!dossierData.fresh && dossierData.computed_at && (
-        <div className="dossier-stale">STORED SNAPSHOT · {String(dossierData.computed_at).slice(0, 19).replace("T", " ")}</div>
-      )}
-      {dossierData.fresh && dossierData.computed_at && (
-        <div className="dossier-stale fresh">LIVE · {String(dossierData.computed_at).slice(0, 19).replace("T", " ")}</div>
+      {dossierData.computed_at && (
+        <div className={`dossier-stale ${dossierData.fresh ? "fresh" : ""}`}>
+          {dossierData.fresh ? "LIVE" : "DATA"} · {String(dossierData.computed_at).slice(0, 19).replace("T", " ")}
+        </div>
       )}
     </div>
   );
@@ -343,11 +341,10 @@ const DOSSIER_TABS = [
 ];
 
 function StockDossier({ v, onClose }) {
-  const { markets } = useApp();
+  const { markets, refreshToken } = useApp();
   const [tab, setTab] = useState("overview");
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
-  const [refreshing, setRefreshing] = useState(false);
 
   const symbol = useMemo(() => {
     if (v.symbol) return v.symbol;
@@ -355,26 +352,22 @@ function StockDossier({ v, onClose }) {
     return v.ticker + (m?.yahoo_suffix || "");
   }, [v, markets]);
 
-  const load = (fresh) => {
+  const load = useCallback(() => {
     setError("");
-    if (fresh) setRefreshing(true);
-    dossier({ symbol, fresh })
-      .then((d) => {
-        setData(d);
-        setRefreshing(false);
-      })
-      .catch((e) => {
-        setError(e.message);
-        setRefreshing(false);
-      });
-  };
+    dossier({ symbol })
+      .then(setData)
+      .catch((e) => setError(e.message));
+  }, [symbol]);
 
   useEffect(() => {
     setData(null);
     setTab("overview");
-    load(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol]);
+    load();
+  }, [load]);
+
+  useEffect(() => {
+    if (refreshToken) load();
+  }, [refreshToken, load]);
 
   const inst = data?.instrument || {};
 
@@ -384,13 +377,13 @@ function StockDossier({ v, onClose }) {
       {error ? (
         <div className="error">
           <div style={{ marginBottom: 12 }}>ERROR: {error}</div>
-          <button className="primary" onClick={() => load(false)}>⟳ RETRY</button>
+          <button className="primary" onClick={load}>⟳ RETRY</button>
         </div>
       ) : !data ? (
         <div className="empty">LOADING DOSSIER…</div>
       ) : (
         <>
-          <DossierHeader dossierData={data} v={v} onRefresh={() => load(true)} refreshing={refreshing} />
+          <DossierHeader dossierData={data} v={v} />
           <div className="dossier-workspace">
             <ChartSection dossierData={data} />
             <section className="dossier-info-pane">

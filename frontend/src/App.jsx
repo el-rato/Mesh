@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { fetchJSON } from "./api.js";
 import Landing from "./components/Landing.jsx";
 import OverviewTab from "./components/OverviewTab.jsx";
@@ -71,7 +71,16 @@ export default function App() {
   const [drawer, setDrawer] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
+  const [refreshStatus, setRefreshStatus] = useState({
+    running: false,
+    last_fast_at: null,
+    last_slow_at: null,
+    next_fast_in: 0,
+    next_slow_in: 0,
+    error: "",
+  });
   const now = useClock();
+  const refreshInFlight = useRef(false);
 
   useEffect(() => {
     fetchJSON("/api/markets")
@@ -91,6 +100,32 @@ export default function App() {
     return () => clearInterval(t);
   }, []);
 
+  const runBackgroundRefresh = useCallback(() => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
+    setRefreshStatus((prev) => ({ ...prev, running: true, error: "" }));
+    fetch("/api/refresh", { method: "POST" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((payload) => {
+        setRefreshStatus(payload);
+        setRefreshToken((t) => t + 1);
+        setLastUpdated(new Date());
+      })
+      .catch(() => {
+        setRefreshStatus((prev) => ({ ...prev, running: false, error: "update failed" }));
+      })
+      .finally(() => {
+        refreshInFlight.current = false;
+      });
+  }, []);
+
+  useEffect(() => {
+    if (view !== "terminal") return undefined;
+    runBackgroundRefresh();
+    const t = setInterval(runBackgroundRefresh, 15000);
+    return () => clearInterval(t);
+  }, [view, runBackgroundRefresh]);
+
   const ctx = useMemo(
     () => ({
       market,
@@ -103,9 +138,10 @@ export default function App() {
         setLastUpdated(new Date());
       },
       refreshToken,
+      refreshStatus,
       openDrawer: (d) => setDrawer(d),
     }),
-    [market, markets, indexes, refreshToken]
+    [market, markets, indexes, refreshToken, refreshStatus]
   );
 
   const enterTerminal = () => {

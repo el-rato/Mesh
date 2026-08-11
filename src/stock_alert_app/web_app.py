@@ -147,6 +147,38 @@ def _snapshot_to_price_dict(snap: dict[str, object] | None) -> dict[str, object]
     }
 
 
+def _technical_from_snapshot(
+    snap: dict[str, object] | None,
+) -> tuple[float, list[str]]:
+    """Recompute the technical signal score from a stored price snapshot.
+
+    Reuses the exact same normalization as the live verdict engine so the
+    scanner/dossier technical signal tracks the latest price data without
+    running an expensive LSTM/news cycle.
+    """
+    from .price import PriceState
+    from .verdict import _normalize_price
+
+    if not snap:
+        return 0.0, ["no price snapshot available"]
+    close = float(snap.get("close") or 0.0)
+    sma = float(snap.get("sma_50") or 0.0)
+    state = PriceState(
+        market=snap.get("market") or "",
+        ticker=snap.get("ticker") or "",
+        close=close,
+        open=float(snap.get("open") or 0.0),
+        high=float(snap.get("high") or 0.0),
+        low=float(snap.get("low") or 0.0),
+        volume=int(snap.get("volume") or 0),
+        momentum_20=float(snap.get("momentum_20") or 0.0),
+        rsi_14=float(snap.get("rsi_14") or 50.0),
+        sma_50=sma,
+    )
+    score, reasons = _normalize_price(state)
+    return round(score, 4), reasons
+
+
 @app.get("/api/dossier")
 def stock_dossier(
     symbol: str = "",
@@ -219,6 +251,11 @@ def stock_dossier(
         price = _snapshot_to_price_dict(snap)
         if price is not None:
             verdict_dict["price"] = price
+            technical_score, technical_reasons = _technical_from_snapshot(snap)
+            verdict_dict["technical"] = {
+                "score": technical_score,
+                "reasons": technical_reasons,
+            }
 
     institutional_data = institutional.ticker_institutional(tkr, db)
 
@@ -278,8 +315,6 @@ def scanner(
         lstm_signal = _lstm_signal_from_row(r)
         if signal_lstm and lstm_signal != signal_lstm.upper():
             continue
-        if min_technical > -1 and float(r["technical_score"] or 0.0) < min_technical:
-            continue
         if min_news > -1 and float(r["news_score"] or 0.0) < min_news:
             continue
         snap = snaps.get(f"{r['market']}:{r['ticker'].upper()}")
@@ -291,6 +326,13 @@ def scanner(
         price = _snapshot_to_price_dict(snap)
         if price is not None:
             committee_input["price"] = price
+        technical_score, technical_reasons = _technical_from_snapshot(snap)
+        committee_input["technical"] = {
+            "score": technical_score,
+            "reasons": technical_reasons,
+        }
+        if min_technical > -1 and technical_score < min_technical:
+            continue
         committee = dossier.committee_signals(committee_input, None)
         if verdict and committee["verdict"] != verdict.upper():
             continue
@@ -306,6 +348,8 @@ def scanner(
             except KeyError:
                 company = ""
 
+        decided_at = r.get("decided_at") or ""
+        price_fetched_at = (snap or {}).get("fetched_at") or ""
         out.append(
             {
                 "market": r["market"],
@@ -316,12 +360,18 @@ def scanner(
                 "confidence": committee["confidence"],
                 "combined_score": committee["score"],
                 "committee": committee,
+                "decided_at": decided_at,
+                "price_fetched_at": price_fetched_at,
+                "updated_at": max(decided_at, price_fetched_at) or "",
                 "lstm": {
                     "score": lstm_score,
                     "probability_up": p_up,
                     "signal": lstm_signal,
                 },
-                "technical": {"score": r["technical_score"]},
+                "technical": {
+                    "score": technical_score,
+                    "reasons": technical_reasons,
+                },
                 "news": {"score": r["news_score"]},
                 "momentum_20": mom,
                 "rsi_14": float((snap or {}).get("rsi_14") or 50.0),
@@ -338,6 +388,24 @@ def scanner(
     key_fn = sort_keys.get(sort, sort_keys["combined"])
     out.sort(key=key_fn, reverse=True)
     return out[:limit]
+
+
+@app.post("/api/refresh")
+def refresh_data() -> dict[str, object]:
+    """Run the background refresh cycle (fast price refresh + slow LSTM/news)."""
+    from . import refresh
+
+    db = _db()
+    db.init_schema()
+    return refresh.run_refresh(db)
+
+
+@app.get("/api/refresh/status")
+def refresh_status() -> dict[str, object]:
+    """Return the current background refresh status/timings."""
+    from . import refresh
+
+    return refresh.refresh_status()
 
 
 @app.get("/api/markets")

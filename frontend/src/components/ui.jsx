@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 export function verdictBadge(v) {
   const b = (v.verdict || v.label || "").toLowerCase();
   const cls = b === "bull" || b === "bullish" ? "bull" : b === "bear" || b === "bearish" ? "bear" : "neutral";
@@ -31,5 +33,32 @@ export function Row({ k, v, cls }) {
       <span className="label">{k}</span>
       <span className={`value ${cls || ""}`}>{v}</span>
     </div>
+  );
+}
+
+export function RefreshStatus({ status }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const s = status || {};
+  if (s.running) {
+    return <span className="refresh-status running">↻ UPDATING…</span>;
+  }
+  if (s.error) {
+    return (
+      <span className="refresh-status error" title={s.error}>
+        ⚠ UPDATE FAILED · SHOWING LAST KNOWN DATA
+      </span>
+    );
+  }
+  const last = s.last_fast_at ? new Date(s.last_fast_at).getTime() : null;
+  const ago = last ? Math.max(0, Math.floor((now - last) / 1000)) : null;
+  const nextMin = Math.max(0, Math.round((s.next_fast_in || 0) / 60));
+  return (
+    <span className="refresh-status live">
+      ● LIVE{ago != null ? ` · UPDATED ${ago}s AGO` : ""} · NEXT UPDATE {nextMin}M
+    </span>
   );
 }

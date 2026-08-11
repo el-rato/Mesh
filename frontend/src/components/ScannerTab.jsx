@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { scanner } from "../api.js";
 import { useApp } from "../App.jsx";
-import { verdictBadge, verdictClass } from "./ui.jsx";
+import { verdictBadge, verdictClass, RefreshStatus } from "./ui.jsx";
 
 function lstmBadge(s) {
   if (!s || s.signal === "N/A") return null;
@@ -19,7 +19,7 @@ function num(v, d = 0) {
 }
 
 export default function ScannerTab() {
-  const { market, markets, refreshToken, openDrawer } = useApp();
+  const { market, markets, refreshToken, refreshStatus, openDrawer } = useApp();
   const [rows, setRows] = useState(null);
   const [error, setError] = useState("");
   const [filters, setFilters] = useState({
@@ -35,14 +35,16 @@ export default function ScannerTab() {
   const set = (k, v) => setFilters((f) => ({ ...f, [k]: v }));
 
   const load = useCallback(() => {
-    setError("");
     const params = { market: market || "", limit: 150, ...filters };
     if (!filters.min_momentum) delete params.min_momentum;
     if (!filters.min_technical) delete params.min_technical;
     if (!filters.min_news) delete params.min_news;
     if (!filters.min_confidence) delete params.min_confidence;
     scanner(params)
-      .then(setRows)
+      .then((next) => {
+        setRows(next);
+        setError("");
+      })
       .catch((e) => setError(e.message));
   }, [market, filters]);
 
@@ -56,7 +58,7 @@ export default function ScannerTab() {
     if (refreshToken) load();
   }, [refreshToken]);
 
-  if (error)
+  if (!rows && error)
     return (
       <div className="error">
         <div style={{ marginBottom: 12 }}>ERROR: {error}</div>
@@ -68,6 +70,7 @@ export default function ScannerTab() {
   return (
     <>
       <div className="controls">
+        <RefreshStatus status={refreshStatus} />
         <div className="field">
           <label>Market</label>
           <select value={market} onChange={(e) => {}} disabled>
@@ -132,6 +135,10 @@ export default function ScannerTab() {
         </div>
         <button className="primary" onClick={load}>⟳ SCAN</button>
       </div>
+
+      {error && rows && (
+        <div className="scan-warning">⚠ SCAN FAILED · SHOWING LAST KNOWN DATA — {error}</div>
+      )}
 
       {!rows.length ? (
         <div className="empty">NO MATCHES — ADJUST FILTERS OR RUN A PRICE FETCH / SEARCH TO EXPAND THE UNIVERSE.</div>

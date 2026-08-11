@@ -402,6 +402,32 @@ body,
 .statusbar .stale {
   color: var(--bear);
 }
+.refresh-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.refresh-status.live {
+  color: var(--bull);
+}
+.refresh-status.running {
+  color: var(--amber);
+}
+.refresh-status.error {
+  color: var(--bear);
+}
+.scan-warning {
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--bear);
+  background: rgba(255, 82, 82, 0.06);
+  color: var(--bear);
+  font-size: 11px;
+}
 
 /* ---------- Controls row ---------- */
 .controls {
