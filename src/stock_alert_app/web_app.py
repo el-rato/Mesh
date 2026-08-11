@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import settings
-from .db import Database
+from .db import Database, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +206,7 @@ def stock_dossier(
                 detail=f"No price or news data could be gathered for {full}",
             )
         verdict_dict = v.as_dict()
-        computed_at = ""
+        computed_at = utc_now()
         fresh = True
     else:
         verdict_dict = _verdict_row_to_dict(stored)

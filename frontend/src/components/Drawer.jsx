@@ -20,72 +20,62 @@ function num(v, def = 0) {
   return Number.isFinite(n) ? n : def;
 }
 
-/* ---------------- Overview ---------------- */
+/* ---------------- Analysis workspace ---------------- */
 
-function OverviewSection({ dossierData, v, onRefresh, refreshing }) {
+function DossierHeader({ dossierData, v, onRefresh, refreshing }) {
   const verdict = dossierData.verdict || {};
-  const price = verdict.price || {};
   const inst = dossierData.instrument || {};
-  const rangeHost = vRange(inst);
-  const [range, setRange] = useState("1mo");
-  const conf = num(verdict.confidence) * 100;
-
-  const rows = [
-    ["CLOSE", <span key="c" className={String(verdict.verdict).toLowerCase() === "bear" ? "down" : "up"}>{num(price.close).toFixed(2)}</span>],
-    ["OPEN", num(price.open).toFixed(2)],
-    ["HIGH", num(price.high).toFixed(2)],
-    ["LOW", num(price.low).toFixed(2)],
-    ["VOLUME", num(price.volume, 0).toLocaleString()],
-    ["MOMENTUM 20D", <span key="m" className={num(price.momentum_20) >= 0 ? "up" : "down"}>{num(price.momentum_20).toFixed(2)}</span>],
-    ["RSI 14", num(price.rsi_14).toFixed(0)],
-    ["SMA 50", num(price.sma_50).toFixed(2)],
-  ];
-
+  const conf = verdict.confidence == null ? "N/A" : `${(num(verdict.confidence) * 100).toFixed(0)}%`;
+  const score = verdict.combined_score == null ? "N/A" : `${num(verdict.combined_score) > 0 ? "+" : ""}${num(verdict.combined_score).toFixed(3)}`;
   return (
-    <>
-      <div className="dossier-bar">
-        <div>
-          <span className="symbol-lg">{inst.ticker || v.ticker}</span>
-          <span className="dossier-company">{inst.company || ""}</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span className="dossier-mkt">{inst.market || v.market} · {inst.exchange || ""}</span>
-          {verdictBadge(verdict)}
-        </div>
+    <div className="dossier-header">
+      <div>
+        <div className="symbol-lg">{inst.ticker || v.ticker}</div>
+        <div className="dossier-company">{inst.company || ""} · {inst.exchange || inst.market || v.market}</div>
       </div>
-
-      <div className="a-sub" style={{ marginTop: 6 }}>
-        CONFIDENCE <span style={{ color: votebarColor(verdict.verdict) }}>{conf.toFixed(0)}%</span> · COMBINED {num(verdict.combined_score).toFixed(3)} · AGREEMENT {String(verdict.signal_agreement || "unknown").toUpperCase()}
+      <div className="dossier-header-right">
+        <span className="dossier-mkt">{inst.market || v.market} · {inst.quote_type || "EQUITY"}</span>
+        {verdictBadge(verdict)}
+        <button className="live" onClick={onRefresh} disabled={refreshing}>
+          {refreshing ? "⟳ ANALYZING…" : "⟳ LIVE VERDICT"}
+        </button>
       </div>
-      <div className="conf-bar">
-        <span style={{ width: Math.round(conf) + "%", background: votebarColor(verdict.verdict) }} />
+      <div className="dossier-header-meta">
+        CONFIDENCE <strong>{conf}</strong> · SCORE <strong>{score}</strong> · AGREEMENT <strong>{String(verdict.signal_agreement || "unknown").toUpperCase()}</strong>
       </div>
-
       {!dossierData.fresh && dossierData.computed_at && (
-        <div className="dossier-stale">
-          STORED SNAPSHOT · {String(dossierData.computed_at).slice(0, 19).replace("T", " ")} ·{" "}
-          <button className="link" onClick={onRefresh} disabled={refreshing}>⟳ LIVE VERDICT</button>
-        </div>
+        <div className="dossier-stale">STORED SNAPSHOT · {String(dossierData.computed_at).slice(0, 19).replace("T", " ")}</div>
       )}
       {dossierData.fresh && dossierData.computed_at && (
         <div className="dossier-stale fresh">LIVE · {String(dossierData.computed_at).slice(0, 19).replace("T", " ")}</div>
       )}
+    </div>
+  );
+}
 
-      <div className="dossier-grid2">
+function ChartSection({ dossierData }) {
+  const inst = dossierData.instrument || {};
+  const price = dossierData.verdict?.price || {};
+  const [range, setRange] = useState("1mo");
+  const [chartType, setChartType] = useState("candlestick");
+  const [showVolume, setShowVolume] = useState(true);
+  const [showSma50, setShowSma50] = useState(true);
+  const [showSma200, setShowSma200] = useState(false);
+  const rangeHost = vRange(inst);
+  return (
+    <section className="dossier-chart-pane">
+      <div className="chart-pane-head">
         <div>
-          <h3>Quote</h3>
-          <div className="dossier-rows">
-            {rows.map(([k, val]) => (
-              <div className="row" key={k}>
-                <span className="label">{k}</span>
-                <span className="value">{val}</span>
-              </div>
-            ))}
-          </div>
-          <div className="dossier-summary">{reasonText(verdict.reason)}</div>
+          <span>PRICE / OHLCV</span>
+          <strong className="chart-current">{price.close == null ? "N/A" : num(price.close).toFixed(2)}</strong>
         </div>
-        <div>
-          <h3>Price Chart</h3>
+        <div className="chart-controls">
+          <select className="chart-type-select" value={chartType} onChange={(event) => setChartType(event.target.value)} aria-label="Chart type">
+            <option value="candlestick">CANDLES</option>
+            <option value="ohlc">OHLC</option>
+            <option value="line">LINE</option>
+            <option value="area">AREA</option>
+          </select>
           <div className="chart-range-bar">
             {CHART_RANGES.map((r) => (
               <button key={r} className={range === r ? "active" : ""} onClick={() => setRange(r)}>
@@ -93,12 +83,40 @@ function OverviewSection({ dossierData, v, onRefresh, refreshing }) {
               </button>
             ))}
           </div>
-          <div style={{ height: 220 }}>
-            <PriceChart url={rangeHost(range)} candles showVolume showSma />
+          <div className="indicator-bar">
+            <button className={showVolume ? "active" : ""} onClick={() => setShowVolume((v) => !v)}>VOL</button>
+            <button className={showSma50 ? "active" : ""} onClick={() => setShowSma50((v) => !v)}>SMA 50</button>
+            <button className={showSma200 ? "active" : ""} onClick={() => setShowSma200((v) => !v)}>SMA 200</button>
           </div>
         </div>
       </div>
-    </>
+      <div className="chart-workspace">
+        <PriceChart url={rangeHost(range)} height={560} chartType={chartType} showVolume={showVolume} showSma50={showSma50} showSma200={showSma200} showMomentum refreshKey={dossierData.computed_at} />
+      </div>
+      <div className="chart-legend"><span className="legend-price">PRICE</span>{showSma50 && <span className="legend-sma50">SMA 50</span>}{showSma200 && <span className="legend-sma200">SMA 200</span>}{showVolume && <span className="legend-volume">VOLUME</span>}</div>
+    </section>
+  );
+}
+
+function QuoteSection({ dossierData }) {
+  const verdict = dossierData.verdict || {};
+  const price = verdict.price || {};
+  const rows = [
+    ["CLOSE", num(price.close).toFixed(2)], ["OPEN", num(price.open).toFixed(2)],
+    ["HIGH", num(price.high).toFixed(2)], ["LOW", num(price.low).toFixed(2)],
+    ["VOLUME", num(price.volume, 0).toLocaleString()], ["MOMENTUM 20D", num(price.momentum_20).toFixed(2)],
+    ["RSI 14", num(price.rsi_14).toFixed(0)], ["SMA 50", num(price.sma_50).toFixed(2)],
+    ["SMA 200", num(price.sma_200).toFixed(2)],
+  ];
+  return (
+    <div className="quote-section">
+      <h3>STOCK INFORMATION</h3>
+      <div className="quote-grid">
+        {rows.map(([key, value]) => <div className="quote-cell" key={key}><span>{key}</span><strong>{value}</strong></div>)}
+      </div>
+      <h3>VERDICT</h3>
+      <div className="dossier-summary">{reasonText(verdict.reason) || "No additional explanation available."}</div>
+    </div>
   );
 }
 
@@ -109,10 +127,6 @@ function vRange(inst) {
     }
     return `/api/chart/${encodeURIComponent(inst.market)}/${encodeURIComponent(inst.ticker)}?range=${range}`;
   };
-}
-
-function votebarColor(v) {
-  return v === "BULL" ? "var(--bull)" : v === "BEAR" ? "var(--bear)" : "var(--neutral)";
 }
 
 /* ---------------- Investment Committee ---------------- */
@@ -376,30 +390,29 @@ function StockDossier({ v, onClose }) {
         <div className="empty">LOADING DOSSIER…</div>
       ) : (
         <>
-          <div className="dossier-tabs">
-            {DOSSIER_TABS.map((t) => (
-              <button key={t.key} className={tab === t.key ? "active" : ""} onClick={() => setTab(t.key)}>
-                {t.label}
-              </button>
-            ))}
-            <button
-              className="live"
-              onClick={() => load(true)}
-              disabled={refreshing}
-              title="Re-run the full live pipeline (price + news + LSTM)"
-            >
-              {refreshing ? "⟳ ANALYZING…" : "⟳ LIVE VERDICT"}
-            </button>
+          <DossierHeader dossierData={data} v={v} onRefresh={() => load(true)} refreshing={refreshing} />
+          <div className="dossier-workspace">
+            <ChartSection dossierData={data} />
+            <section className="dossier-info-pane">
+              <div className="dossier-tabs">
+                {DOSSIER_TABS.map((t) => (
+                  <button key={t.key} className={tab === t.key ? "active" : ""} onClick={() => setTab(t.key)}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              <div className="dossier-info-scroll">
+                {tab === "overview" && <QuoteSection dossierData={data} />}
+                {tab === "committee" && <CommitteeSection committee={data.committee} />}
+                {tab === "bullbear" && <FactorList factors={data.factors} />}
+                {tab === "model" && <ModelSection verdict={data.verdict} />}
+                {tab === "news" && <NewsSection news={data.news} />}
+                {tab === "risk" && (
+                  <RiskSection verdict={data.verdict} symbol={inst.symbol} market={inst.market || v.market} ticker={inst.ticker || v.ticker} />
+                )}
+              </div>
+            </section>
           </div>
-
-          {tab === "overview" && <OverviewSection dossierData={data} v={v} onRefresh={() => load(true)} refreshing={refreshing} />}
-          {tab === "committee" && <CommitteeSection committee={data.committee} />}
-          {tab === "bullbear" && <FactorList factors={data.factors} />}
-          {tab === "model" && <ModelSection verdict={data.verdict} />}
-          {tab === "news" && <NewsSection news={data.news} />}
-          {tab === "risk" && (
-            <RiskSection verdict={data.verdict} symbol={inst.symbol} market={inst.market || v.market} ticker={inst.ticker || v.ticker} />
-          )}
         </>
       )}
     </>

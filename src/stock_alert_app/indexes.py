@@ -63,7 +63,7 @@ MARKET_INDEXES: dict[str, list[dict[str, str]]] = {
 CHART_RANGES: dict[str, dict[str, str]] = {
     "1d": {"period": "1d", "interval": "5m"},
     "1w": {"period": "5d", "interval": "30m"},
-    "1mo": {"period": "1mo", "interval": "1h"},
+    "1mo": {"period": "1mo", "interval": "1d"},
     "3mo": {"period": "3mo", "interval": "1d"},
     "6mo": {"period": "6mo", "interval": "1d"},
     "1y": {"period": "1y", "interval": "1d"},
