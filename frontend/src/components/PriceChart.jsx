@@ -1,282 +1,242 @@
 import { useEffect, useRef, useState } from "react";
+import { Chart, registerables } from "chart.js";
+import {
+  CandlestickController,
+  CandlestickElement,
+  OhlcController,
+  OhlcElement,
+} from "chartjs-chart-financial";
+import "chartjs-adapter-date-fns";
 import { fetchJSON } from "../api.js";
 
-let createChart = null;
-let ColorType = null;
-let chartsImported = false;
+Chart.register(
+  ...registerables,
+  CandlestickController,
+  CandlestickElement,
+  OhlcController,
+  OhlcElement,
+);
 
-async function importCharts() {
-  if (!chartsImported) {
-    const mod = await import("lightweight-charts");
-    createChart = mod.createChart;
-    ColorType = mod.ColorType;
-    chartsImported = true;
-  }
+function finite(value) {
+  return Number.isFinite(Number(value));
 }
 
-// Convert "YYYY-MM-DD HH:MM" (UTC) -> epoch seconds for lightweight-charts.
-function toTime(s) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(s || "");
-  if (m) {
-    return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) / 1000;
-  }
-  const d = Date.parse(s);
-  return isNaN(d) ? null : Math.floor(d / 1000);
+function color(name, fallback) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
+function parseRows(raw) {
+  const seen = new Set();
+  return (raw || [])
+    .filter((r) => r.date && finite(r.close))
+    .map((r) => ({
+      ...r,
+      time: new Date(r.date),
+      close: Number(r.close),
+      open: Number(r.open),
+      high: Number(r.high),
+      low: Number(r.low),
+      volume: Number(r.volume || 0),
+      sma50: Number(r.sma_50),
+      sma200: Number(r.sma_200),
+    }))
+    .filter((r) => {
+      if (Number.isNaN(r.time.getTime()) || seen.has(r.time.getTime())) return false;
+      if (!finite(r.open) || !finite(r.high) || !finite(r.low)) return false;
+      seen.add(r.time.getTime());
+      return true;
+    })
+    .sort((a, b) => a.time - b.time);
 }
 
 export default function PriceChart({
   url,
   height = 120,
-  color,
+  color: lineColor,
   up,
   hideAxes = false,
   candles = false,
   showVolume = false,
   showSma = false,
 }) {
-  const ref = useRef(null);
+  const canvasRef = useRef(null);
   const chartRef = useRef(null);
-  const seriesRef = useRef(null);
-  const volumeRef = useRef(null);
-  const sma50Ref = useRef(null);
-  const sma200Ref = useRef(null);
   const [visible, setVisible] = useState(false);
-  const [initError, setInitError] = useState(false);
-  const [dataError, setDataError] = useState(false);
-  const [chartReady, setChartReady] = useState(false);
+  const [rows, setRows] = useState(null);
   const [loading, setLoading] = useState(true);
-  const createdRef = useRef(false);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting) {
-          setVisible(true);
-          io.disconnect();
-        }
-      },
-      { rootMargin: "200px" }
-    );
-    io.observe(el);
-    return () => io.disconnect();
+    const element = canvasRef.current;
+    if (!element || typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setVisible(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: "200px" });
+    observer.observe(element);
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
-    if (!visible || createdRef.current || initError) return;
-    let mounted = true;
-
-    async function initChart() {
-      try {
-        await importCharts();
-        if (!mounted || !ref.current) return;
-        const chart = createChart(ref.current, {
-          height,
-          layout: {
-            background: { type: ColorType.Solid, color: "transparent" },
-            textColor: "#8ba0ab",
-            fontSize: 10,
-            fontFamily: "'IBM Plex Mono', monospace",
-          },
-          grid: {
-            vertLines: { color: "rgba(35,43,48,0.4)" },
-            horzLines: { color: "rgba(35,43,48,0.4)" },
-          },
-          rightPriceScale: { borderVisible: false },
-          timeScale: { borderVisible: false },
-          crosshair: {
-            mode: 1,
-            vertLine: { color: "#f5a623", width: 1, style: 3, labelBackgroundColor: "#f5a623" },
-            horzLine: { color: "#f5a623", width: 1, style: 3, labelBackgroundColor: "#f5a623" },
-          },
-          handleScroll: hideAxes ? false : true,
-          handleScale: hideAxes ? false : true,
-          logo: { show: false },
-        });
-
-        if (!mounted) {
-          chart.remove();
-          return;
-        }
-
-        chartRef.current = chart;
-        seriesRef.current = candles
-          ? chart.addCandlestickSeries({
-              upColor: "#00e676",
-              downColor: "#ff5252",
-              borderVisible: false,
-              wickUpColor: "#00e676",
-              wickDownColor: "#ff5252",
-            })
-          : chart.addLineSeries({
-              color: color || "#f5a623",
-              lineWidth: 2,
-              priceLineVisible: false,
-              crosshairMarkerRadius: 3,
-            });
-
-        if (showVolume) {
-          volumeRef.current = chart.addHistogramSeries({
-            color: "rgba(79, 156, 249, 0.35)",
-            priceFormat: { type: "volume" },
-            priceScaleId: "volume",
-          });
-          chart.priceScale("volume").applyOptions({
-            scaleMargins: { top: 0.78, bottom: 0 },
-          });
-        }
-        if (showSma) {
-          sma50Ref.current = chart.addLineSeries({
-            color: "#4f9cf9",
-            lineWidth: 1,
-            priceLineVisible: false,
-            lastValueVisible: false,
-          });
-          sma200Ref.current = chart.addLineSeries({
-            color: "#b06bff",
-            lineWidth: 1,
-            priceLineVisible: false,
-            lastValueVisible: false,
-          });
-        }
-        if (hideAxes) {
-          chart.applyOptions({
-            rightPriceScale: { visible: false },
-            timeScale: { visible: false },
-          });
-        }
-
-        createdRef.current = true;
-        setChartReady(true);
-      } catch (e) {
-        console.error("Chart init failed:", e);
-        setInitError(true);
-      }
-    }
-
-    initChart();
-    return () => {
-      mounted = false;
-      if (chartRef.current) {
-        try { chartRef.current.remove(); } catch {}
-        chartRef.current = null;
-      }
-      seriesRef.current = null;
-      volumeRef.current = null;
-      sma50Ref.current = null;
-      sma200Ref.current = null;
-      createdRef.current = false;
-      setChartReady(false);
-    };
-  }, [visible, height, hideAxes, candles, showVolume, showSma, initError]);
-
-  useEffect(() => {
-    const chart = chartRef.current;
-    const element = ref.current;
-    if (!chart || !element || !chartReady || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(([entry]) => {
-      chart.applyOptions({ width: Math.floor(entry.contentRect.width) });
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [chartReady]);
-
-  useEffect(() => {
-    const chart = chartRef.current;
-    const series = seriesRef.current;
-    if (!chart || !series || !visible || !chartReady || initError) return;
+    if (!visible) return undefined;
     let cancelled = false;
-    setDataError(false);
     setLoading(true);
+    setError(false);
+    setRows(null);
     fetchJSON(url)
-      .then((d) => {
+      .then((payload) => {
         if (cancelled) return;
-        const raw = d.data || [];
-        const mapped = raw
-          .filter((r) => r.close != null)
-          .map((r) => {
-            const point = candles
-              ? {
-                  time: toTime(r.date),
-                  open: Number(r.open),
-                  high: Number(r.high),
-                  low: Number(r.low),
-                  close: Number(r.close),
-                }
-              : { time: toTime(r.date), value: Number(r.close) };
-            return {
-              point,
-              open: Number(r.open),
-              close: Number(r.close),
-              volume: Number(r.volume || 0),
-              sma50: Number(r.sma_50),
-              sma200: Number(r.sma_200),
-            };
-          })
-          .filter((r) => {
-            const point = r.point;
-            const values = candles
-              ? [point.open, point.high, point.low, point.close]
-              : [point.value];
-            return point.time != null && values.every(Number.isFinite);
-          })
-          .sort((a, b) => a.point.time - b.point.time);
-        const seen = new Set();
-        const rows = mapped.filter((r) => {
-          if (seen.has(r.point.time)) return false;
-          seen.add(r.point.time);
-          return true;
-        });
-        if (!rows.length) {
+        const parsed = parseRows(payload.data);
+        if (!parsed.length) {
+          setError(true);
           setLoading(false);
-          setDataError(true);
           return;
         }
-        series.setData(rows.map((r) => r.point));
-        if (volumeRef.current) {
-          volumeRef.current.setData(rows.map((r) => ({
-              time: r.point.time,
-              value: r.volume,
-              color: r.close >= r.open
-                ? "rgba(0, 230, 118, 0.28)"
-                : "rgba(255, 82, 82, 0.28)",
-            })).filter((r) => Number.isFinite(r.value)));
-        }
-        if (sma50Ref.current) {
-          sma50Ref.current.setData(rows.map((r) => ({ time: r.point.time, value: r.sma50 }))
-            .filter((r) => Number.isFinite(r.value)));
-        }
-        if (sma200Ref.current) {
-          sma200Ref.current.setData(rows.map((r) => ({ time: r.point.time, value: r.sma200 }))
-            .filter((r) => Number.isFinite(r.value)));
-        }
-        chart.timeScale().fitContent();
+        setRows(parsed);
         setLoading(false);
       })
       .catch(() => {
-        setLoading(false);
-        setDataError(true);
+        if (!cancelled) {
+          setError(true);
+          setLoading(false);
+        }
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [url, candles, visible, chartReady, initError]);
+    return () => { cancelled = true; };
+  }, [url, visible]);
 
   useEffect(() => {
-    const series = seriesRef.current;
-    if (!series || !visible || initError) return;
-    if (!candles) series.applyOptions({ color: color || (up ? "#00e676" : "#ff5252") });
-  }, [color, up, candles, visible, initError]);
+    if (!canvasRef.current || !rows || error) return undefined;
+    if (chartRef.current) chartRef.current.destroy();
 
-  if (initError || dataError) {
-    return <div style={{ width: "100%", height, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 10 }}>CHART UNAVAILABLE</div>;
-  }
+    const bull = color("--bull", "#00e676");
+    const bear = color("--bear", "#ff5252");
+    const amber = color("--amber", "#f5a623");
+    const blue = color("--blue", "#4f9cf9");
+    const purple = color("--purple", "#b06bff");
+    const muted = color("--text-muted", "#5a6b73");
+    const border = color("--border", "#232b30");
+    const line = lineColor || (up ? bull : bear);
+
+    const datasets = candles
+      ? [{
+          type: "candlestick",
+          label: "PRICE",
+          data: rows.map((r) => ({ x: r.time, o: r.open, h: r.high, l: r.low, c: r.close })),
+          color: { up: bull, down: bear, unchanged: amber },
+          borderColor: { up: bull, down: bear, unchanged: amber },
+        }]
+      : [{
+          type: "line",
+          label: "PRICE",
+          data: rows.map((r) => ({ x: r.time, y: r.close })),
+          borderColor: line,
+          backgroundColor: line,
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.12,
+        }];
+
+    if (showSma) {
+      datasets.push(
+        {
+          type: "line",
+          label: "SMA 50",
+          data: rows.filter((r) => finite(r.sma50)).map((r) => ({ x: r.time, y: r.sma50 })),
+          borderColor: blue,
+          borderWidth: 1,
+          pointRadius: 0,
+          tension: 0,
+        },
+        {
+          type: "line",
+          label: "SMA 200",
+          data: rows.filter((r) => finite(r.sma200)).map((r) => ({ x: r.time, y: r.sma200 })),
+          borderColor: purple,
+          borderWidth: 1,
+          pointRadius: 0,
+          tension: 0,
+        },
+      );
+    }
+    if (showVolume) {
+      datasets.push({
+        type: "bar",
+        label: "VOLUME",
+        yAxisID: "volume",
+        data: rows.map((r) => ({ x: r.time, y: r.volume })),
+        backgroundColor: rows.map((r) => r.close >= r.open ? `${bull}66` : `${bear}66`),
+        borderWidth: 0,
+        barPercentage: 1,
+        categoryPercentage: 1,
+      });
+    }
+
+    chartRef.current = new Chart(canvasRef.current, {
+      type: candles ? "candlestick" : "line",
+      data: { datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        parsing: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { display: !hideAxes && (showSma || showVolume), labels: { color: muted, boxWidth: 12, font: { size: 10, family: "IBM Plex Mono" } } },
+          tooltip: {
+            enabled: !hideAxes,
+            callbacks: {
+              label(context) {
+                const value = context.raw;
+                if (context.dataset.label === "PRICE" && value.o != null) {
+                  return ` O ${value.o.toFixed(2)} H ${value.h.toFixed(2)} L ${value.l.toFixed(2)} C ${value.c.toFixed(2)}`;
+                }
+                return ` ${context.dataset.label}: ${Number(value.y).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            type: "time",
+            display: !hideAxes,
+            grid: { color: `${border}66` },
+            ticks: { color: muted, maxTicksLimit: 7, font: { size: 9, family: "IBM Plex Mono" } },
+          },
+          y: {
+            display: !hideAxes,
+            position: "right",
+            grid: { color: `${border}66` },
+            ticks: { color: muted, font: { size: 9, family: "IBM Plex Mono" } },
+          },
+          volume: {
+            display: showVolume && !hideAxes,
+            position: "left",
+            grid: { drawOnChartArea: false },
+            ticks: { color: muted, font: { size: 8, family: "IBM Plex Mono" }, maxTicksLimit: 3 },
+            suggestedMax: Math.max(...rows.map((r) => r.volume || 0), 1) * 4,
+          },
+        },
+      },
+    });
+
+    return () => {
+      if (chartRef.current) {
+        chartRef.current.destroy();
+        chartRef.current = null;
+      }
+    };
+  }, [rows, error, candles, showVolume, showSma, hideAxes, lineColor, up]);
 
   return (
     <div className="chart-shell" style={{ width: "100%", height }}>
-      <div ref={ref} style={{ width: "100%", height }} />
+      <canvas ref={canvasRef} />
       {loading && <div className="chart-loading">LOADING CHART…</div>}
+      {error && <div className="chart-loading">CHART UNAVAILABLE</div>}
     </div>
   );
 }
