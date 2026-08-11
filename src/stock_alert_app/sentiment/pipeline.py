@@ -6,7 +6,14 @@ from dataclasses import dataclass, field
 from ..config import settings
 from ..db import Database
 from .aggregate import SourceSentiment, aggregate_sentiment
-from .scorers import FinBERTScorer, LexiconScorer, LLMScorer, Scorer, SentimentResult
+from .scorers import (
+    FinBERTScorer,
+    LexiconScorer,
+    LLMScorer,
+    LSTMSentimentScorer,
+    Scorer,
+    SentimentResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +31,26 @@ class SentimentPipeline:
         scorer: Scorer | None = None,
         *,
         prefer_finbert: bool = True,
+        prefer_lstm: bool = True,
     ) -> None:
         self.db = db
         if scorer is not None:
             self.scorer = scorer
+        elif prefer_lstm:
+            try:
+                self.scorer = LSTMSentimentScorer()
+            except RuntimeError:
+                logger.info("LSTM sentiment unavailable, falling back to FinBERT")
+                if prefer_finbert:
+                    try:
+                        self.scorer = FinBERTScorer()
+                    except RuntimeError:
+                        logger.info(
+                            "FinBERT unavailable, falling back to lexicon scorer"
+                        )
+                        self.scorer = LexiconScorer()
+                else:
+                    self.scorer = LexiconScorer()
         elif prefer_finbert:
             try:
                 self.scorer = FinBERTScorer()
@@ -115,10 +138,14 @@ def make_llm_scorer() -> LLMScorer | None:
     return None
 
 
-def run_sentiment(db_path: str | None = None, prefer_finbert: bool = True) -> ScoreResult:
+def run_sentiment(
+    db_path: str | None = None, prefer_finbert: bool = True, prefer_lstm: bool = True
+) -> ScoreResult:
     db = Database(db_path or settings.db_path)
     db.init_schema()
-    pipeline = SentimentPipeline(db, prefer_finbert=prefer_finbert)
+    pipeline = SentimentPipeline(
+        db, prefer_finbert=prefer_finbert, prefer_lstm=prefer_lstm
+    )
     result = pipeline.run()
     logger.info("Scored %d headlines with %s", result.scored, pipeline.model_name())
     return result

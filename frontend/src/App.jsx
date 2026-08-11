@@ -1,35 +1,35 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { fetchJSON } from "./api.js";
-import LandingPage from "./components/LandingPage.jsx";
-import VerdictsTab from "./components/VerdictsTab.jsx";
+import Landing from "./components/Landing.jsx";
+import OverviewTab from "./components/OverviewTab.jsx";
 import WatchlistTab from "./components/WatchlistTab.jsx";
-import DiscoverTab from "./components/DiscoverTab.jsx";
-import RiskTab from "./components/RiskTab.jsx";
 import FundsTab from "./components/FundsTab.jsx";
 import IndexesTab from "./components/IndexesTab.jsx";
+import LSTMTab from "./components/LSTMTab.jsx";
+import ScannerTab from "./components/ScannerTab.jsx";
 import Drawer from "./components/Drawer.jsx";
+import ErrorBoundary from "./components/ErrorBoundary.jsx";
+import SearchBox from "./components/SearchBox.jsx";
 
 export const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
 
 const TABS = [
-  { key: "home", fn: "F1", label: "HOME" },
-  { key: "verdicts", fn: "F2", label: "VERDICTS" },
-  { key: "watchlist", fn: "F3", label: "WATCHLIST" },
-  { key: "discover", fn: "F4", label: "DISCOVER" },
-  { key: "risk", fn: "F5", label: "RISK" },
-  { key: "funds", fn: "F6", label: "HEDGE FUNDS" },
-  { key: "indexes", fn: "F7", label: "INDEXES" },
+  { key: "overview", fn: "F1", label: "OVERVIEW" },
+  { key: "watchlist", fn: "F2", label: "WATCHLIST" },
+  { key: "funds", fn: "F3", label: "HEDGE FUNDS" },
+  { key: "indexes", fn: "F4", label: "INDEXES" },
+  { key: "lstm", fn: "F5", label: "LSTM" },
+  { key: "scanner", fn: "F6", label: "SCANNER" },
 ];
 
 const TAB_COMPONENTS = {
-  home: LandingPage,
-  verdicts: VerdictsTab,
+  overview: OverviewTab,
   watchlist: WatchlistTab,
-  discover: DiscoverTab,
-  risk: RiskTab,
   funds: FundsTab,
   indexes: IndexesTab,
+  lstm: LSTMTab,
+  scanner: ScannerTab,
 };
 
 function useClock() {
@@ -44,15 +44,15 @@ function useClock() {
 function TickerTape({ indexes }) {
   const items = (indexes || []).slice(0, 40);
   if (!items.length) return <div className="ticker-tape" />;
-  const up = items[0].change_pct >= 0;
   return (
     <div className="ticker-tape">
       <div className="tape-inner">
         {[...items, ...items].map((s, i) => (
           <span className="tape-item" key={i}>
-            <span className="t">{s.symbol.replace("^", "")}</span> {fmt(s.close)}{" "}
-            <span className={s.change_pct >= 0 ? "up" : "down"}>
-              {s.change_pct >= 0 ? "+" : ""}
+            <span className="t">{s.symbol.replace("^", "")}</span>{" "}
+            {Number(s.close || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}{" "}
+            <span className={(s.change_pct || 0) >= 0 ? "up" : "down"}>
+              {(s.change_pct || 0) >= 0 ? "+" : ""}
               {(s.change_pct * 100).toFixed(2)}%
             </span>
           </span>
@@ -60,16 +60,14 @@ function TickerTape({ indexes }) {
       </div>
     </div>
   );
-  function fmt(n) {
-    return Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
-  }
 }
 
 export default function App() {
+  const [view, setView] = useState("landing");
   const [market, setMarket] = useState("");
   const [markets, setMarkets] = useState([]);
   const [indexes, setIndexes] = useState([]);
-  const [tab, setTab] = useState("home");
+  const [tab, setTab] = useState("overview");
   const [drawer, setDrawer] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
@@ -96,82 +94,97 @@ export default function App() {
   const ctx = useMemo(
     () => ({
       market,
+      markets,
+      indexes,
       setMarket,
       setTab,
       refreshAll: () => {
         setRefreshToken((t) => t + 1);
         setLastUpdated(new Date());
       },
-      refreshToken: refreshToken.current,
+      refreshToken,
       openDrawer: (d) => setDrawer(d),
-      closeDrawer: () => setDrawer(null),
     }),
-    [market, refreshToken]
+    [market, markets, indexes, refreshToken]
   );
+
+  const enterTerminal = () => {
+    setTab("overview");
+    setView("terminal");
+  };
 
   const ActiveTab = TAB_COMPONENTS[tab];
 
   return (
     <AppContext.Provider value={ctx}>
-      <div className="terminal">
-        <header className="topbar">
-          <div className="logo">
-            SV<span className="dim"> | STOCK VERDICT</span>
-          </div>
-          <TickerTape indexes={indexes} />
-          <span className="clock">{now.toLocaleTimeString()}</span>
-        </header>
-
-        <nav className="tabs">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              className={`fn-tab ${tab === t.key ? "active" : ""}`}
-              onClick={() => setTab(t.key)}
-            >
-              <span className="fn">{t.fn}</span>
-              {t.label}
+      {view === "landing" ? (
+        <Landing onEnter={enterTerminal} />
+      ) : (
+        <div className="terminal">
+          <header className="topbar">
+            <button className="logo" style={{ border: "none", background: "transparent", cursor: "pointer" }} onClick={() => setView("landing")}>
+              SV<span className="dim"> | STOCK VERDICT</span>
             </button>
-          ))}
-        </nav>
+            <TickerTape indexes={indexes} />
+            <SearchBox />
+            <span className="clock">{now.toLocaleTimeString()}</span>
+          </header>
 
-        <div className="controls" style={{ padding: "10px 16px 0" }}>
-          <div className="field">
-            <label>Market</label>
-            <select value={market} onChange={(e) => setMarket(e.target.value)}>
-              <option value="">ALL</option>
-              {markets.map((m) => (
-                <option key={m.code} value={m.code}>
-                  {m.code} — {m.name}
-                </option>
-              ))}
-            </select>
+          <nav className="tabs">
+            {TABS.map((t) => (
+              <button
+                key={t.key}
+                className={`fn-tab ${tab === t.key ? "active" : ""}`}
+                onClick={() => setTab(t.key)}
+              >
+                <span className="fn">{t.fn}</span>
+                {t.label}
+              </button>
+            ))}
+          </nav>
+
+          <div className="controls" style={{ padding: "10px 16px 0" }}>
+            <div className="field">
+              <label>Market</label>
+              <select value={market} onChange={(e) => setMarket(e.target.value)}>
+                <option value="">ALL</option>
+                {markets.map((m) => (
+                  <option key={m.code} value={m.code}>
+                    {m.code} — {m.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button className="primary" onClick={() => ctx.refreshAll()}>
+              ⟳ REFRESH
+            </button>
+            <button className="ghost" onClick={() => setTab("indexes")}>
+              INDEX TAPE
+            </button>
           </div>
-          <button className="primary" onClick={() => ctx.refreshAll()}>
-            ⟳ REFRESH
-          </button>
-          <button className="ghost" onClick={() => setTab("indexes")}>
-            INDEX TAPE
-          </button>
-        </div>
-        <main className="content">
-          <ActiveTab key={tab} />
-        </main>
+          <main className="content">
+            <ErrorBoundary key={tab}>
+              <ActiveTab />
+            </ErrorBoundary>
+          </main>
 
-        <footer className="statusbar">
-          <span>SV 0.1.0</span>
-          <span className={now.getSeconds() % 2 ? "pulse" : ""}>● LIVE</span>
-          <span>
-            LAST UPDATED{" "}
-            {lastUpdated ? lastUpdated.toLocaleTimeString() : "--:--:--"}
-          </span>
-          <span>MARKET: {market || "ALL"}</span>
-          <span style={{ marginLeft: "auto" }}>
-            {now.toLocaleDateString()} {now.toLocaleTimeString()}
-          </span>
-        </footer>
-      </div>
-      <Drawer item={drawer} onClose={() => setDrawer(null)} />
+          <footer className="statusbar">
+            <span>SV 0.1.0</span>
+            <span className={now.getSeconds() % 2 ? "pulse" : ""}>● LIVE</span>
+            <span>
+              LAST UPDATED{" "}
+              {lastUpdated ? lastUpdated.toLocaleTimeString() : "--:--:--"}
+            </span>
+            <span>MARKET: {market || "ALL"}</span>
+            <span style={{ marginLeft: "auto" }}>
+              {now.toLocaleDateString()} {now.toLocaleTimeString()}
+            </span>
+          </footer>
+        </div>
+      )}
+      <ErrorBoundary key={drawer ? `${drawer.type}:${drawer.v?.ticker || drawer.s?.cik || "?"}` : "closed"}>
+        <Drawer item={drawer} onClose={() => setDrawer(null)} />
+      </ErrorBoundary>
     </AppContext.Provider>
   );
 }

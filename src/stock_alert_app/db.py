@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -140,7 +140,7 @@ CREATE INDEX IF NOT EXISTS idx_verdicts_ticker ON verdicts(market, ticker);
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 class Database:
@@ -157,6 +157,22 @@ class Database:
     def init_schema(self) -> None:
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            self._migrate_verdicts(conn)
+
+    @staticmethod
+    def _migrate_verdicts(conn: sqlite3.Connection) -> None:
+        """Backward-compatible migration: add new signal columns if missing."""
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(verdicts)")}
+        additions: dict[str, str] = {
+            "lstm_score": "REAL NOT NULL DEFAULT 0",
+            "lstm_probability_up": "REAL",
+            "lstm_predicted_return": "REAL",
+            "lstm_confidence": "REAL",
+            "technical_score": "REAL NOT NULL DEFAULT 0",
+        }
+        for name, ddl in additions.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE verdicts ADD COLUMN {name} {ddl}")
 
     def insert_news_item(
         self,
@@ -167,13 +183,22 @@ class Database:
         source: str = "",
         summary: str = "",
         published_at: str = "",
-    ) -> Optional[int]:
+    ) -> int | None:
         with self.connect() as conn:
             cur = conn.execute(
                 """INSERT OR IGNORE INTO news_items
                    (market, ticker, source, title, url, summary, published_at, fetched_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (market, ticker.upper(), source, title, url, summary, published_at, utc_now()),
+                (
+                    market,
+                    ticker.upper(),
+                    source,
+                    title,
+                    url,
+                    summary,
+                    published_at,
+                    utc_now(),
+                ),
             )
             if cur.rowcount == 0:
                 return None
@@ -194,7 +219,16 @@ class Database:
                 """INSERT OR REPLACE INTO sentiment_scores
                    (news_item_id, model, score, label, positive, negative, neutral, scored_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (news_item_id, model, score, label, positive, negative, neutral, utc_now()),
+                (
+                    news_item_id,
+                    model,
+                    score,
+                    label,
+                    positive,
+                    negative,
+                    neutral,
+                    utc_now(),
+                ),
             )
 
     def insert_price_snapshot(
@@ -215,7 +249,19 @@ class Database:
                 """INSERT OR REPLACE INTO price_snapshots
                    (market, ticker, fetched_at, close, open, high, low, volume, momentum_20, rsi_14, sma_50)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (market, ticker.upper(), utc_now(), close, open, high, low, volume, momentum_20, rsi_14, sma_50),
+                (
+                    market,
+                    ticker.upper(),
+                    utc_now(),
+                    close,
+                    open,
+                    high,
+                    low,
+                    volume,
+                    momentum_20,
+                    rsi_14,
+                    sma_50,
+                ),
             )
 
     def insert_verdict(
@@ -228,16 +274,41 @@ class Database:
         price_score: float,
         combined_score: float,
         reason: str,
+        lstm_score: float = 0.0,
+        lstm_probability_up: float | None = None,
+        lstm_predicted_return: float | None = None,
+        lstm_confidence: float | None = None,
+        technical_score: float | None = None,
     ) -> None:
+        technical = price_score if technical_score is None else technical_score
         with self.connect() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO verdicts
-                   (market, ticker, verdict, confidence, news_score, price_score, combined_score, reason, decided_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (market, ticker.upper(), verdict, confidence, news_score, price_score, combined_score, reason, utc_now()),
+                   (market, ticker, verdict, confidence, news_score, price_score,
+                    combined_score, reason, decided_at, lstm_score, lstm_probability_up,
+                    lstm_predicted_return, lstm_confidence, technical_score)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    market,
+                    ticker.upper(),
+                    verdict,
+                    confidence,
+                    news_score,
+                    price_score,
+                    combined_score,
+                    reason,
+                    utc_now(),
+                    lstm_score,
+                    lstm_probability_up,
+                    lstm_predicted_return,
+                    lstm_confidence,
+                    technical,
+                ),
             )
 
-    def recent_news(self, market: str, ticker: str, limit: int = 50) -> List[Dict[str, Any]]:
+    def recent_news(
+        self, market: str, ticker: str, limit: int = 50
+    ) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
                 """SELECT n.*, s.score AS sentiment_score, s.label AS sentiment_label
@@ -250,18 +321,7 @@ class Database:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def recent_verdicts(self, market: str, ticker: str, limit: int = 10) -> List[Dict[str, Any]]:
-        with self.connect() as conn:
-            rows = conn.execute(
-                """SELECT * FROM verdicts
-                   WHERE market = ? AND ticker = ?
-                   ORDER BY decided_at DESC
-                   LIMIT ?""",
-                (market, ticker.upper(), limit),
-            ).fetchall()
-            return [dict(r) for r in rows]
-
-    def latest_verdicts(self, market: str | None = None) -> List[Dict[str, Any]]:
+    def latest_verdicts(self, market: str | None = None) -> list[dict[str, Any]]:
         with self.connect() as conn:
             if market:
                 rows = conn.execute(
@@ -302,19 +362,14 @@ class Database:
             )
             return cur.rowcount > 0
 
-    def watchlist(self) -> List[Dict[str, Any]]:
+    def watchlist(self) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM watchlist ORDER BY added_at DESC"
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def watchlist_keys(self) -> set[tuple[str, str]]:
-        with self.connect() as conn:
-            rows = conn.execute("SELECT market, ticker FROM watchlist").fetchall()
-            return {(r["market"], r["ticker"].upper()) for r in rows}
-
-    def insert_recommendations(self, recommendations: List[Dict[str, Any]]) -> None:
+    def insert_recommendations(self, recommendations: list[dict[str, Any]]) -> None:
         if not recommendations:
             return
         generated = utc_now()
@@ -337,7 +392,7 @@ class Database:
                 ],
             )
 
-    def latest_recommendations(self, market: str | None = None) -> List[Dict[str, Any]]:
+    def latest_recommendations(self, market: str | None = None) -> list[dict[str, Any]]:
         with self.connect() as conn:
             if market:
                 rows = conn.execute(
@@ -361,8 +416,8 @@ class Database:
             return [dict(r) for r in rows]
 
     def get_recently_discovered(self, cooldown_days: int = 7) -> set[str]:
-        cutoff = datetime.now(timezone.utc).timestamp() - cooldown_days * 86400
-        cutoff_iso = datetime.fromtimestamp(cutoff, timezone.utc).isoformat()
+        cutoff = datetime.now(UTC).timestamp() - cooldown_days * 86400
+        cutoff_iso = datetime.fromtimestamp(cutoff, UTC).isoformat()
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT ticker FROM discovered_tickers WHERE discovered_at > ?",
@@ -393,16 +448,29 @@ class Database:
                    ON CONFLICT(cik, accession) DO UPDATE SET
                      fund_name=excluded.fund_name, filing_date=excluded.filing_date,
                      period_of_report=excluded.period_of_report, fetched_at=excluded.fetched_at""",
-                (cik, fund_name, form, accession, filing_date, period_of_report, utc_now()),
+                (
+                    cik,
+                    fund_name,
+                    form,
+                    accession,
+                    filing_date,
+                    period_of_report,
+                    utc_now(),
+                ),
             )
             row = conn.execute(
-                "SELECT id FROM fund_filings WHERE cik = ? AND accession = ?", (cik, accession)
+                "SELECT id FROM fund_filings WHERE cik = ? AND accession = ?",
+                (cik, accession),
             ).fetchone()
             return int(row["id"])
 
-    def replace_fund_holdings(self, fund_filing_id: int, holdings: List[Dict[str, Any]]) -> None:
+    def replace_fund_holdings(
+        self, fund_filing_id: int, holdings: list[dict[str, Any]]
+    ) -> None:
         with self.connect() as conn:
-            conn.execute("DELETE FROM fund_holdings WHERE fund_filing_id = ?", (fund_filing_id,))
+            conn.execute(
+                "DELETE FROM fund_holdings WHERE fund_filing_id = ?", (fund_filing_id,)
+            )
             conn.executemany(
                 """INSERT INTO fund_holdings
                    (fund_filing_id, cusip, issuer, ticker, value_thousands, shares, shares_type, put_call, pct_portfolio)
@@ -423,7 +491,9 @@ class Database:
                 ],
             )
 
-    def fund_filings(self, cik: str | None = None, limit: int = 20) -> List[Dict[str, Any]]:
+    def fund_filings(
+        self, cik: str | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
         with self.connect() as conn:
             if cik:
                 rows = conn.execute(
@@ -432,11 +502,14 @@ class Database:
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM fund_filings ORDER BY filing_date DESC LIMIT ?", (limit,)
+                    "SELECT * FROM fund_filings ORDER BY filing_date DESC LIMIT ?",
+                    (limit,),
                 ).fetchall()
             return [dict(r) for r in rows]
 
-    def fund_holdings(self, fund_filing_id: int, limit: int = 500) -> List[Dict[str, Any]]:
+    def fund_holdings(
+        self, fund_filing_id: int, limit: int = 500
+    ) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM fund_holdings WHERE fund_filing_id = ? ORDER BY value_thousands DESC LIMIT ?",
@@ -444,7 +517,39 @@ class Database:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def latest_index_snapshots(self, market: str | None = None) -> List[Dict[str, Any]]:
+    def latest_price_snapshot(self, market: str, ticker: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """SELECT * FROM price_snapshots
+                   WHERE market = ? AND ticker = ?
+                   ORDER BY fetched_at DESC LIMIT 1""",
+                (market, ticker.upper()),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def latest_price_snapshots(self, market: str | None = None) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            if market:
+                rows = conn.execute(
+                    """SELECT * FROM price_snapshots p
+                       WHERE p.market = ?
+                         AND p.fetched_at = (
+                             SELECT MAX(p2.fetched_at) FROM price_snapshots p2
+                             WHERE p2.market = p.market AND p2.ticker = p.ticker
+                         )""",
+                    (market,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT * FROM price_snapshots p
+                       WHERE p.fetched_at = (
+                           SELECT MAX(p2.fetched_at) FROM price_snapshots p2
+                           WHERE p2.market = p.market AND p2.ticker = p.ticker
+                       )"""
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def latest_index_snapshots(self, market: str | None = None) -> list[dict[str, Any]]:
         with self.connect() as conn:
             if market:
                 rows = conn.execute(

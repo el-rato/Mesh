@@ -10,7 +10,7 @@ from typing import Dict, List
 class Ticker:
     symbol: str
     name: str
-    keywords: List[str] = field(default_factory=list)
+    keywords: list[str] = field(default_factory=list)
     yahoo_suffix: str = ""
 
     @property
@@ -26,9 +26,9 @@ class Market:
     currency: str
     timezone: str
     yahoo_suffix: str
-    tickers: Dict[str, Ticker]
-    rss_queries: List[str] = field(default_factory=list)
-    financial_feeds: List[str] = field(default_factory=list)
+    tickers: dict[str, Ticker]
+    rss_queries: list[str] = field(default_factory=list)
+    financial_feeds: list[str] = field(default_factory=list)
 
     def get_ticker(self, symbol: str) -> Ticker:
         return self.tickers[symbol.upper()]
@@ -58,8 +58,8 @@ def load_market(path: Path) -> Market:
     )
 
 
-def load_markets(markets_dir: Path) -> Dict[str, Market]:
-    markets: Dict[str, Market] = {}
+def load_markets(markets_dir: Path) -> dict[str, Market]:
+    markets: dict[str, Market] = {}
     for path in sorted(markets_dir.glob("*.json")):
         market = load_market(path)
         markets[market.code] = market

@@ -6,7 +6,7 @@ import re
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -147,7 +147,9 @@ def _latest_13f_metadata(cik: str, fund_name: str = "") -> dict[str, str] | None
                 "form": form,
                 "accession": recent["accessionNumber"][i],
                 "filing_date": recent["filingDate"][i],
-                "report_date": recent["reportDate"][i] if i < len(recent.get("reportDate", [])) else "",
+                "report_date": recent["reportDate"][i]
+                if i < len(recent.get("reportDate", []))
+                else "",
             }
     return None
 
@@ -162,11 +164,13 @@ def _search_latest_13f(fund_name: str) -> dict[str, str] | None:
             "forms": "13F-HR",
             "dateRange": "custom",
             "startdt": "2020-01-01",
-            "enddt": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            "enddt": datetime.now(UTC).strftime("%Y-%m-%d"),
         }
     )
     try:
-        payload = json.loads(_http_get(f"https://efts.sec.gov/LATEST/search-index?{query}"))
+        payload = json.loads(
+            _http_get(f"https://efts.sec.gov/LATEST/search-index?{query}")
+        )
     except Exception as exc:
         logger.warning("13F search failed for %s: %s", fund_name, exc)
         return None
@@ -195,7 +199,9 @@ def _search_latest_13f(fund_name: str) -> dict[str, str] | None:
     return best
 
 
-def _parse_13f_holdings(cik: str, accession: str, holdings_file: str | None = None) -> list[FundHolding]:
+def _parse_13f_holdings(
+    cik: str, accession: str, holdings_file: str | None = None
+) -> list[FundHolding]:
     """Fetch and parse the 13F information table XML for a filing."""
     acc_no_dashes = accession.replace("-", "")
     base = f"https://www.sec.gov/Archives/edgar/data/{int(cik.lstrip('0'))}/{acc_no_dashes}"
@@ -216,6 +222,7 @@ def _parse_13f_holdings(cik: str, accession: str, holdings_file: str | None = No
 
     holdings: list[FundHolding] = []
     for it in root.findall(f".//{{{INFO_TABLE_NS}}}infoTable"):
+
         def g(tag: str) -> str:
             el = it.find(f".//{{{INFO_TABLE_NS}}}{tag}")
             return el.text.strip() if el is not None and el.text else ""
@@ -254,7 +261,9 @@ def _parse_13f_holdings(cik: str, accession: str, holdings_file: str | None = No
 
     for h in holdings:
         if not h.ticker:
-            h.ticker = CUSIP_TICKER_OVERRIDES.get(h.cusip, "") or _resolve_ticker(h.issuer, h.cusip)
+            h.ticker = CUSIP_TICKER_OVERRIDES.get(h.cusip, "") or _resolve_ticker(
+                h.issuer, h.cusip
+            )
 
     total_value = sum(h.value_thousands for h in holdings)
     if total_value > 0:
@@ -305,7 +314,9 @@ def _resolve_ticker(issuer: str, cusip: str) -> str:
     ticker = ""
     for sym, names in _COMPANY_TICKERS.items():
         for n in names:
-            if re.sub(r"[^A-Z0-9]", "", n.upper()) == norm or norm in re.sub(r"[^A-Z0-9]", "", n.upper()):
+            if re.sub(r"[^A-Z0-9]", "", n.upper()) == norm or norm in re.sub(
+                r"[^A-Z0-9]", "", n.upper()
+            ):
                 ticker = sym
                 break
         if ticker:
@@ -338,7 +349,9 @@ def _find_holdings_filename(cik: str, accession: str) -> str | None:
     return None
 
 
-def fetch_latest_filings(funds: list[dict[str, str]] | None = None, max_holdings: int = 500) -> list[FundFiling]:
+def fetch_latest_filings(
+    funds: list[dict[str, str]] | None = None, max_holdings: int = 500
+) -> list[FundFiling]:
     """Fetch the latest 13F filing for each fund."""
     funds = funds or MAJOR_FUNDS
     out: list[FundFiling] = []
@@ -358,8 +371,8 @@ def fetch_latest_filings(funds: list[dict[str, str]] | None = None, max_holdings
         holdings_file = None
         try:
             holdings_file = _find_holdings_filename(cik, meta["accession"])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("No holdings filename found for CIK %s: %s", cik, exc)
         try:
             holdings = _parse_13f_holdings(cik, meta["accession"], holdings_file)
         except Exception as exc:
@@ -376,7 +389,12 @@ def fetch_latest_filings(funds: list[dict[str, str]] | None = None, max_holdings
                 holdings=holdings[:max_holdings],
             )
         )
-        logger.info("Fetched %s: %d holdings (filed %s)", fund["name"], len(holdings), meta["filing_date"])
+        logger.info(
+            "Fetched %s: %d holdings (filed %s)",
+            fund["name"],
+            len(holdings),
+            meta["filing_date"],
+        )
     return out
 
 
@@ -399,7 +417,11 @@ def compute_quarterly_changes(cik: str, db: Database) -> list[HoldingChange]:
             action = "EXITED"
         elif prev_shares > 0:
             change_pct = (curr_shares - prev_shares) / abs(prev_shares)
-            action = "BUY" if change_pct >= 0.02 else ("SELL" if change_pct <= -0.02 else "HOLD")
+            action = (
+                "BUY"
+                if change_pct >= 0.02
+                else ("SELL" if change_pct <= -0.02 else "HOLD")
+            )
         else:
             action = "HOLD"
         changes.append(
@@ -410,7 +432,9 @@ def compute_quarterly_changes(cik: str, db: Database) -> list[HoldingChange]:
                 prev_shares=prev_shares,
                 curr_shares=curr_shares,
                 change_shares=curr_shares - prev_shares,
-                change_pct=((curr_shares - prev_shares) / abs(prev_shares)) if prev_shares else 0.0,
+                change_pct=((curr_shares - prev_shares) / abs(prev_shares))
+                if prev_shares
+                else 0.0,
                 action=action,
                 value_thousands=h["value_thousands"],
             )
@@ -460,7 +484,9 @@ def _previous_filing(current: FundFiling, max_holdings: int = 500) -> FundFiling
     """
     padded = current.cik.lstrip("0").zfill(10)
     try:
-        payload = json.loads(_http_get(f"https://data.sec.gov/submissions/CIK{padded}.json"))
+        payload = json.loads(
+            _http_get(f"https://data.sec.gov/submissions/CIK{padded}.json")
+        )
     except Exception:
         return None
     recent = payload.get("filings", {}).get("recent", {})
@@ -476,7 +502,9 @@ def _previous_filing(current: FundFiling, max_holdings: int = 500) -> FundFiling
                     "form": form,
                     "accession": acc,
                     "filing_date": recent["filingDate"][i],
-                    "report_date": recent["reportDate"][i] if i < len(recent.get("reportDate", [])) else "",
+                    "report_date": recent["reportDate"][i]
+                    if i < len(recent.get("reportDate", []))
+                    else "",
                 }
     if not prev:
         return None
@@ -484,7 +512,9 @@ def _previous_filing(current: FundFiling, max_holdings: int = 500) -> FundFiling
     try:
         holdings = _parse_13f_holdings(current.cik, prev["accession"], holdings_file)
     except Exception as exc:
-        logger.warning("Failed to parse previous holdings for %s: %s", current.fund_name, exc)
+        logger.warning(
+            "Failed to parse previous holdings for %s: %s", current.fund_name, exc
+        )
         holdings = []
     return FundFiling(
         cik=current.cik,
@@ -497,10 +527,56 @@ def _previous_filing(current: FundFiling, max_holdings: int = 500) -> FundFiling
     )
 
 
+def ticker_institutional(ticker: str, db: Database) -> dict[str, Any] | None:
+    """Aggregate real 13F activity for one ticker across tracked funds.
+
+    Returns holding/buy/sell counts derived only from stored SEC filings, or
+    ``None`` when no tracked fund reports the ticker (so the UI can show N/A).
+    """
+    t = (ticker or "").strip().upper()
+    if not t:
+        return None
+    filings = sorted(
+        db.fund_filings(limit=500), key=lambda f: f["filing_date"], reverse=True
+    )
+    latest_by_name: dict[str, dict[str, Any]] = {}
+    for filing in filings:
+        latest_by_name.setdefault(filing["fund_name"], filing)
+
+    holding_funds = 0
+    buys = sells = new = exited = 0
+    last_filing = ""
+    for name, filing in latest_by_name.items():
+        holdings = db.fund_holdings(filing["id"], limit=500)
+        if any((h["ticker"] or "").upper() == t for h in holdings):
+            holding_funds += 1
+        for c in compute_quarterly_changes(filing["cik"], db):
+            if (c.ticker or "").upper() != t:
+                continue
+            if c.action in ("BUY", "NEW"):
+                buys += 1
+            elif c.action in ("SELL", "EXITED"):
+                sells += 1
+        if filing["filing_date"] > last_filing:
+            last_filing = filing["filing_date"]
+
+    if holding_funds == 0 and buys + sells == 0:
+        return None
+    return {
+        "holding_funds": holding_funds,
+        "buy_count": buys,
+        "sell_count": sells,
+        "net": buys - sells,
+        "filing_date": last_filing or None,
+    }
+
+
 def fund_summaries(db: Database) -> list[dict[str, Any]]:
     """Latest per-fund summary: filing date, top holdings, buy/sell actions."""
     # Keep the most recent filing per fund name (funds can drift across CIKs).
-    filings = sorted(db.fund_filings(limit=500), key=lambda f: f["filing_date"], reverse=True)
+    filings = sorted(
+        db.fund_filings(limit=500), key=lambda f: f["filing_date"], reverse=True
+    )
     latest_by_name: dict[str, dict[str, Any]] = {}
     for filing in filings:
         name = filing["fund_name"]
@@ -511,7 +587,9 @@ def fund_summaries(db: Database) -> list[dict[str, Any]]:
     for name, filing in latest_by_name.items():
         holdings = db.fund_holdings(filing["id"], limit=15)
         changes = compute_quarterly_changes(filing["cik"], db)
-        top_actions = [c for c in changes if c.action in ("BUY", "SELL", "NEW", "EXITED")][:12]
+        top_actions = [
+            c for c in changes if c.action in ("BUY", "SELL", "NEW", "EXITED")
+        ][:12]
         summaries.append(
             {
                 "cik": filing["cik"],

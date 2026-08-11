@@ -24,7 +24,13 @@ export default function WatchlistTab() {
     if (refreshToken) load();
   }, [refreshToken]);
 
-  if (error) return <div className="error">ERROR: {error}</div>;
+  if (error)
+    return (
+      <div className="error">
+        <div style={{ marginBottom: 12 }}>ERROR: {error}</div>
+        <button className="primary" onClick={load}>⟳ RETRY</button>
+      </div>
+    );
   if (!data) return <div className="empty">LOADING…</div>;
   if (!data.length)
     return (

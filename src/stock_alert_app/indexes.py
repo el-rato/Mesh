@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+import math
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import yfinance as yf
@@ -63,8 +64,9 @@ CHART_RANGES: dict[str, dict[str, str]] = {
     "1d": {"period": "1d", "interval": "5m"},
     "1w": {"period": "5d", "interval": "30m"},
     "1mo": {"period": "1mo", "interval": "1h"},
+    "3mo": {"period": "3mo", "interval": "1d"},
+    "6mo": {"period": "6mo", "interval": "1d"},
     "1y": {"period": "1y", "interval": "1d"},
-    "all": {"period": "max", "interval": "1wk"},
 }
 
 
@@ -99,19 +101,50 @@ class IndexSnapshot:
 def index_history(symbol: str, range_key: str = "1mo") -> list[dict[str, Any]]:
     """Return OHLC + volume series for an index/stock at a given range."""
     cfg = CHART_RANGES.get(range_key, CHART_RANGES["1mo"])
-    df = yf.Ticker(symbol).history(period=cfg["period"], interval=cfg["interval"], auto_adjust=True)
+    try:
+        df = yf.Ticker(symbol).history(
+            period=cfg["period"], interval=cfg["interval"], auto_adjust=True
+        )
+    except Exception as exc:
+        logger.warning("Failed to load chart history for %s: %s", symbol, exc)
+        return []
     if df is None or df.empty:
         return []
     rows: list[dict[str, Any]] = []
-    for idx, row in df.iterrows():
+    closes: list[float | None] = []
+    for _, row in df.iterrows():
+        close = row.get("Close")
+        try:
+            closes.append(float(close) if close is not None else None)
+        except (TypeError, ValueError):
+            closes.append(None)
+    for position, (idx, row) in enumerate(df.iterrows()):
+        close = closes[position]
+        if close is None:
+            continue
+        try:
+            open_ = float(row.get("Open", 0.0))
+            high = float(row.get("High", 0.0))
+            low = float(row.get("Low", 0.0))
+            volume = int(row.get("Volume", 0) or 0)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not all(math.isfinite(value) for value in (open_, high, low, close)):
+            continue
+        def moving_average(window: int) -> float | None:
+            values = [v for v in closes[max(0, position - window + 1):position + 1] if v is not None]
+            return round(sum(values) / window, 4) if len(values) == window else None
+
         rows.append(
             {
                 "date": idx.strftime("%Y-%m-%d %H:%M"),
-                "open": round(float(row.get("Open", 0.0)), 4),
-                "high": round(float(row.get("High", 0.0)), 4),
-                "low": round(float(row.get("Low", 0.0)), 4),
-                "close": round(float(row.get("Close", 0.0)), 4),
-                "volume": int(row.get("Volume", 0) or 0),
+                "open": round(open_, 4),
+                "high": round(high, 4),
+                "low": round(low, 4),
+                "close": round(close, 4),
+                "volume": volume,
+                "sma_50": moving_average(50),
+                "sma_200": moving_average(200),
             }
         )
     return rows
@@ -125,7 +158,9 @@ def fetch_index_snapshots(market_codes: list[str] | None = None) -> list[IndexSn
         indexes = MARKET_INDEXES.get(code, [])
         for idx in indexes:
             try:
-                df = yf.Ticker(idx["symbol"]).history(period="1mo", interval="1d", auto_adjust=True)
+                df = yf.Ticker(idx["symbol"]).history(
+                    period="1mo", interval="1d", auto_adjust=True
+                )
                 if df is None or df.empty:
                     logger.warning("No data for index %s", idx["symbol"])
                     continue
@@ -145,7 +180,7 @@ def fetch_index_snapshots(market_codes: list[str] | None = None) -> list[IndexSn
                         low=float(last.get("Low", close)),
                         volume=int(float(last.get("Volume", 0) or 0)),
                         change_pct=change_pct,
-                        fetched_at=datetime.now(timezone.utc).isoformat(),
+                        fetched_at=datetime.now(UTC).isoformat(),
                     )
                 )
             except Exception as exc:
@@ -153,7 +188,9 @@ def fetch_index_snapshots(market_codes: list[str] | None = None) -> list[IndexSn
     return snapshots
 
 
-def run_index_fetch(market_codes: list[str] | None = None, db_path: str | None = None) -> list[IndexSnapshot]:
+def run_index_fetch(
+    market_codes: list[str] | None = None, db_path: str | None = None
+) -> list[IndexSnapshot]:
     db = Database(db_path or settings.db_path)
     db.init_schema()
     snapshots = fetch_index_snapshots(market_codes)

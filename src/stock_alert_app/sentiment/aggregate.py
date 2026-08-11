@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .scorers import SentimentResult
 
@@ -41,7 +41,6 @@ RELIABLE_SOURCES = {
 }
 
 
-
 @dataclass
 class SourceSentiment:
     score: float
@@ -72,7 +71,7 @@ def _parse_time(value: str | None) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(value)
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
+            parsed = parsed.replace(tzinfo=UTC)
         return parsed
     except ValueError:
         pass
@@ -80,7 +79,7 @@ def _parse_time(value: str | None) -> datetime | None:
         try:
             parsed = datetime.strptime(value, fmt)
             if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
+                parsed = parsed.replace(tzinfo=UTC)
             return parsed
         except ValueError:
             continue
@@ -88,7 +87,7 @@ def _parse_time(value: str | None) -> datetime | None:
         from email.utils import parsedate_to_datetime
 
         return parsedate_to_datetime(value)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
 
 
@@ -102,7 +101,9 @@ def _source_weight(source: str) -> float:
     return 1.0
 
 
-def _recency_weight(published_at: datetime | None, now: datetime, half_life_hours: float = 72.0) -> float:
+def _recency_weight(
+    published_at: datetime | None, now: datetime, half_life_hours: float = 72.0
+) -> float:
     if published_at is None:
         return 0.5
     elapsed_hours = max((now - published_at).total_seconds() / 3600.0, 0.0)
@@ -122,7 +123,7 @@ def aggregate_sentiment(
     Returns:
         A SourceSentiment combining recency- and source-reliability weighting.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     total_weight = 0.0
     weighted_sum = 0.0
     pos = neg = neu = 0
@@ -155,7 +156,9 @@ def aggregate_sentiment(
     else:
         label = "neutral"
 
-    freshness = sum(_recency_weight(p, now, half_life_hours) for p in parsed_times) / count
+    freshness = (
+        sum(_recency_weight(p, now, half_life_hours) for p in parsed_times) / count
+    )
     return SourceSentiment(
         score=round(score, 4),
         label=label,

@@ -40,8 +40,7 @@ def google_news_url(query: str, country_code: str = "US") -> str:
     q = quote(query)
     ceid = f"{country_code}:en"
     return (
-        f"https://news.google.com/rss/search?q={q}"
-        f"&hl=en&gl={country_code}&ceid={ceid}"
+        f"https://news.google.com/rss/search?q={q}&hl=en&gl={country_code}&ceid={ceid}"
     )
 
 
@@ -54,7 +53,9 @@ def yahoo_finance_url(symbol: str, region: str = "US") -> str:
 
 def newsapi_url(query: str, api_key: str, language: str = "en") -> str:
     q = quote(query)
-    return f"https://newsapi.org/v2/everything?q={q}&language={language}&apiKey={api_key}"
+    return (
+        f"https://newsapi.org/v2/everything?q={q}&language={language}&apiKey={api_key}"
+    )
 
 
 def _parse_feed(text: str, query: str) -> list[Article]:
@@ -75,7 +76,9 @@ def _parse_feed(text: str, query: str) -> list[Article]:
                 url=link.strip(),
                 summary=(entry.get("summary", "") or "").strip(),
                 source=source,
-                published_at=(entry.get("published", "") or entry.get("updated", "") or ""),
+                published_at=(
+                    entry.get("published", "") or entry.get("updated", "") or ""
+                ),
                 query=query,
             )
         )
@@ -118,14 +121,18 @@ def fetch_google_news(query: str, country_code: str = "US") -> list[Article]:
     return _fetch_rss_cached(google_news_url(query, country_code), query)
 
 
-def fetch_financial_feeds(feed_urls: list[str], fallback_query: str = "") -> list[Article]:
+def fetch_financial_feeds(
+    feed_urls: list[str], fallback_query: str = ""
+) -> list[Article]:
     articles: list[Article] = []
     for url in feed_urls:
         articles.extend(_fetch_rss_cached(url, fallback_query or url))
     return articles
 
 
-def fetch_yahoo_finance(symbol: str, region: str = "US", query: str = "") -> list[Article]:
+def fetch_yahoo_finance(
+    symbol: str, region: str = "US", query: str = ""
+) -> list[Article]:
     return _fetch_rss_cached(yahoo_finance_url(symbol, region), query or symbol)
 
 
@@ -154,7 +161,9 @@ def fetch_newsapi(query: str, api_key: str) -> list[Article]:
                 title=(item.get("title") or "").strip(),
                 url=url.strip(),
                 summary=(item.get("description") or "").strip(),
-                source=(item.get("source") or {}).get("name", "") if isinstance(item.get("source"), dict) else "",
+                source=(item.get("source") or {}).get("name", "")
+                if isinstance(item.get("source"), dict)
+                else "",
                 published_at=item.get("publishedAt") or "",
                 query=query,
             )

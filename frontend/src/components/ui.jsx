@@ -4,17 +4,6 @@ export function verdictBadge(v) {
   return <span className={`badge ${cls}`}>{(v.verdict || "NEUTRAL").toUpperCase()}</span>;
 }
 
-export function actionBadge(action) {
-  const a = (action || "").toLowerCase();
-  const cls = a === "buy" ? "buy" : a === "sell" ? "sell" : a === "hold" ? "hold" : "avoid";
-  return <span className={`badge ${cls}`}>{(action || "AVOID").toUpperCase()}</span>;
-}
-
-export function scoreBadge(score) {
-  const cls = score >= 0.3 ? "bull" : score >= 0.1 ? "neutral" : "bear";
-  return <span className={`badge ${cls}`}>{(score * 100).toFixed(0)}%</span>;
-}
-
 export function verdictClass(v) {
   const b = (v || "").toLowerCase();
   if (b === "bull" || b === "bullish") return "bull";
@@ -29,20 +18,18 @@ export function fmtNum(n, digits = 2) {
   });
 }
 
+export function reasonText(r) {
+  if (!r) return "";
+  if (Array.isArray(r)) return r.join(" ");
+  if (typeof r === "string") return r;
+  return String(r);
+}
+
 export function Row({ k, v, cls }) {
   return (
     <div className="row">
       <span className="label">{k}</span>
       <span className={`value ${cls || ""}`}>{v}</span>
-    </div>
-  );
-}
-
-export function MiniStat({ k, v }) {
-  return (
-    <div className="mini-stat">
-      <span className="k">{k}</span>
-      <span className="v">{v}</span>
     </div>
   );
 }

@@ -1,53 +1,293 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Protocol
 
+from ..models.sentiment_lstm import load_sentiment_lstm, predict_sentiment
+
+logger = logging.getLogger(__name__)
+
 POSITIVE_WORDS = {
-    "beat", "beats", "surge", "surges", "surged", "rally", "rallies", "rallied",
-    "soar", "soars", "soared", "jump", "jumps", "jumped", "gain", "gains", "gained",
-    "rise", "rises", "rose", "record", "strong", "stronger", "outperform", "outperforms",
-    "upgrade", "upgrades", "upgraded", "buy", "overweight", "growth", "grew", "profit",
-    "profits", "profitable", "earnings beat", "exceed", "exceeds", "exceeded",
-    "bullish", "positive", "recover", "recovers", "recovered", "recovery",
-    "opportunity", "opportunities", "expansion", "expands", "expanded", "boost",
-    "boosts", "boosted", "milestone", "breakthrough", "win", "wins", "dividend",
-    "dividends", "raised", "raise", "raises", "improve", "improves", "improved",
-    "best", "highest", "success", "successful", "momentum", "climb", "climbs",
-    "climbed", "accelerate", "accelerates", "accelerated", "top", "up", "higher",
-    "new high", "all-time high", "optimistic", "award", "awards",
-    "partnership", "partners", "launches", "launch", "launched", "unveils", "unveiled",
-    "debut", "approval", "approved", "approves", "winning", "demand", "strong demand",
-    "return", "returns", "positive outlook", "cheap", "undervalued", "sold out",
-    "good", "great", "excellent", "superior", "dominant", "market leader",
+    "beat",
+    "beats",
+    "surge",
+    "surges",
+    "surged",
+    "rally",
+    "rallies",
+    "rallied",
+    "soar",
+    "soars",
+    "soared",
+    "jump",
+    "jumps",
+    "jumped",
+    "gain",
+    "gains",
+    "gained",
+    "rise",
+    "rises",
+    "rose",
+    "record",
+    "strong",
+    "stronger",
+    "outperform",
+    "outperforms",
+    "upgrade",
+    "upgrades",
+    "upgraded",
+    "buy",
+    "overweight",
+    "growth",
+    "grew",
+    "profit",
+    "profits",
+    "profitable",
+    "earnings beat",
+    "exceed",
+    "exceeds",
+    "exceeded",
+    "bullish",
+    "positive",
+    "recover",
+    "recovers",
+    "recovered",
+    "recovery",
+    "opportunity",
+    "opportunities",
+    "expansion",
+    "expands",
+    "expanded",
+    "boost",
+    "boosts",
+    "boosted",
+    "milestone",
+    "breakthrough",
+    "win",
+    "wins",
+    "dividend",
+    "dividends",
+    "raised",
+    "raise",
+    "raises",
+    "improve",
+    "improves",
+    "improved",
+    "best",
+    "highest",
+    "success",
+    "successful",
+    "momentum",
+    "climb",
+    "climbs",
+    "climbed",
+    "accelerate",
+    "accelerates",
+    "accelerated",
+    "top",
+    "up",
+    "higher",
+    "new high",
+    "all-time high",
+    "optimistic",
+    "award",
+    "awards",
+    "partnership",
+    "partners",
+    "launches",
+    "launch",
+    "launched",
+    "unveils",
+    "unveiled",
+    "debut",
+    "approval",
+    "approved",
+    "approves",
+    "winning",
+    "demand",
+    "strong demand",
+    "return",
+    "returns",
+    "positive outlook",
+    "cheap",
+    "undervalued",
+    "sold out",
+    "good",
+    "great",
+    "excellent",
+    "superior",
+    "dominant",
+    "market leader",
 }
 
 NEGATIVE_WORDS = {
-    "plunge", "plunges", "plunged", "crash", "crashes", "crashed", "slump", "slumps",
-    "slumped", "drop", "drops", "dropped", "fall", "falls", "fell", "decline",
-    "declines", "declined", "loss", "losses", "lost", "miss", "misses", "missed",
-    "misses estimates", "downgrade", "downgrades", "downgraded", "sell", "underweight",
-    "weak", "weaker", "weakness", "bearish", "negative", "lawsuit", "lawsuits", "sued",
-    "probe", "probes", "investigation", "investigations", "fined", "fine", "fraud",
-    "scandal", "scandals", "recall", "recalls", "recalled", "layoff", "layoffs",
-    "fired", "resign", "resigns", "resigned", "exits", "exit", "shut", "shutdown",
-    "shuts", "bankrupt", "bankruptcy", "insolvent", "default", "defaults", "defaulted",
-    "debt", "restructuring", "worst", "lowest", "bear", "bears", "underperform",
-    "underperforms", "risk", "risks", "threat", "threats", "uncertainty", "concern",
-    "concerns", "worry", "worries", "caution", "cautions", "cautious", "warning",
-    "warns", "warned", "trouble", "troubled", "struggle", "struggles", "struggled",
-    "headwind", "headwinds", "drag", "drags", "dragged", "pressure", "pressures",
-    "cuts", "cut", "cutting", "reduces", "reduce", "reduced", "slashes", "slash",
-    "halt", "halts", "halted", "suspension", "suspended", "delisted",
-    "delisting", "fraudulent", "misconduct", "penalty", "penalties", "sanctions",
-    "sanctioned", "tariff", "tariffs", "trade war", "recession", "slowdown", "shrinks",
-    "shrink", "shrank", "low", "down", "lower", "worst-ever", "selloff", "sell-off",
-    "dip", "dips", "dipped", "wiped", "tumble", "tumbles", "tumbled", "nosedive",
-    "nosedives", "freefall", "collapse", "collapses", "collapsed", "bankruptcy risk",
+    "plunge",
+    "plunges",
+    "plunged",
+    "crash",
+    "crashes",
+    "crashed",
+    "slump",
+    "slumps",
+    "slumped",
+    "drop",
+    "drops",
+    "dropped",
+    "fall",
+    "falls",
+    "fell",
+    "decline",
+    "declines",
+    "declined",
+    "loss",
+    "losses",
+    "lost",
+    "miss",
+    "misses",
+    "missed",
+    "misses estimates",
+    "downgrade",
+    "downgrades",
+    "downgraded",
+    "sell",
+    "underweight",
+    "weak",
+    "weaker",
+    "weakness",
+    "bearish",
+    "negative",
+    "lawsuit",
+    "lawsuits",
+    "sued",
+    "probe",
+    "probes",
+    "investigation",
+    "investigations",
+    "fined",
+    "fine",
+    "fraud",
+    "scandal",
+    "scandals",
+    "recall",
+    "recalls",
+    "recalled",
+    "layoff",
+    "layoffs",
+    "fired",
+    "resign",
+    "resigns",
+    "resigned",
+    "exits",
+    "exit",
+    "shut",
+    "shutdown",
+    "shuts",
+    "bankrupt",
+    "bankruptcy",
+    "insolvent",
+    "default",
+    "defaults",
+    "defaulted",
+    "debt",
+    "restructuring",
+    "worst",
+    "lowest",
+    "bear",
+    "bears",
+    "underperform",
+    "underperforms",
+    "risk",
+    "risks",
+    "threat",
+    "threats",
+    "uncertainty",
+    "concern",
+    "concerns",
+    "worry",
+    "worries",
+    "caution",
+    "cautions",
+    "cautious",
+    "warning",
+    "warns",
+    "warned",
+    "trouble",
+    "troubled",
+    "struggle",
+    "struggles",
+    "struggled",
+    "headwind",
+    "headwinds",
+    "drag",
+    "drags",
+    "dragged",
+    "pressure",
+    "pressures",
+    "cuts",
+    "cut",
+    "cutting",
+    "reduces",
+    "reduce",
+    "reduced",
+    "slashes",
+    "slash",
+    "halt",
+    "halts",
+    "halted",
+    "suspension",
+    "suspended",
+    "delisted",
+    "delisting",
+    "fraudulent",
+    "misconduct",
+    "penalty",
+    "penalties",
+    "sanctions",
+    "sanctioned",
+    "tariff",
+    "tariffs",
+    "trade war",
+    "recession",
+    "slowdown",
+    "shrinks",
+    "shrink",
+    "shrank",
+    "low",
+    "down",
+    "lower",
+    "worst-ever",
+    "selloff",
+    "sell-off",
+    "dip",
+    "dips",
+    "dipped",
+    "wiped",
+    "tumble",
+    "tumbles",
+    "tumbled",
+    "nosedive",
+    "nosedives",
+    "freefall",
+    "collapse",
+    "collapses",
+    "collapsed",
+    "bankruptcy risk",
 }
 
-NEGATORS = {"not", "no", "never", "without", "despite", "misses", "missed", "against", "below", "under"}
+NEGATORS = {
+    "not",
+    "no",
+    "never",
+    "without",
+    "despite",
+    "misses",
+    "missed",
+    "against",
+    "below",
+    "under",
+}
 
 AMP = {"and", "but", "or", "while", "as", "however", "despite", "although"}
 
@@ -130,6 +370,42 @@ class LexiconScorer:
         )
 
 
+class LSTMSentimentScorer:
+    """LSTM-based financial sentiment scorer trained on in-DB labeled data.
+
+    Falls back to the lexicon scorer when no trained checkpoint exists.
+    """
+
+    name = "lstm"
+
+    def __init__(self) -> None:
+        self._model, self._tokenizer, self._config = load_sentiment_lstm()
+        if self._model is None:
+            logger.info(
+                "No trained sentiment LSTM found; will fall back to lexicon scoring"
+            )
+
+    def score(self, text: str) -> SentimentResult:
+        if not text:
+            return SentimentResult(0.0, "neutral", 0.0, 0.0, 1.0)
+        if self._model is None:
+            return LexiconScorer().score(text)
+        try:
+            probs, label, _ = predict_sentiment(text)
+            positive, negative, neutral = probs[2], probs[0], probs[1]
+            score = _clamp(positive - negative)
+            return SentimentResult(
+                score=round(score, 4),
+                label=label,
+                positive=round(positive, 4),
+                negative=round(negative, 4),
+                neutral=round(neutral, 4),
+            )
+        except Exception as exc:
+            logger.warning("LSTM scoring failed (%s); using lexicon fallback", exc)
+            return LexiconScorer().score(text)
+
+
 class FinBERTScorer:
     """Transformer-based financial sentiment. Requires torch + transformers installed."""
 
@@ -137,7 +413,10 @@ class FinBERTScorer:
 
     def __init__(self) -> None:
         try:
-            from transformers import AutoModelForSequenceClassification, AutoTokenizer  # type: ignore
+            from transformers import (  # type: ignore
+                AutoModelForSequenceClassification,
+                AutoTokenizer,
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "FinBERTScorer requires 'torch' and 'transformers'. "
@@ -146,7 +425,9 @@ class FinBERTScorer:
 
         self._model_name = "ProsusAI/finbert"
         self._tokenizer = AutoTokenizer.from_pretrained(self._model_name)
-        self._model = AutoModelForSequenceClassification.from_pretrained(self._model_name)
+        self._model = AutoModelForSequenceClassification.from_pretrained(
+            self._model_name
+        )
 
     def score(self, text: str) -> SentimentResult:
         if not text:
@@ -199,7 +480,7 @@ class LLMScorer:
         prompt = (
             "You are a financial sentiment analyst. Score the sentiment of this "
             "financial news headline/summary from -1 (very bearish) to +1 (very bullish). "
-            "Return ONLY JSON: {\"score\": float, \"label\": \"positive|negative|neutral\"}\n\n"
+            'Return ONLY JSON: {"score": float, "label": "positive|negative|neutral"}\n\n'
             f"Text: {text[:2000]}"
         )
         resp = client.chat.completions.create(
@@ -231,7 +512,9 @@ class OllamaScorer:
 
     name = "ollama"
 
-    def __init__(self, base_url: str = "http://localhost:11434", model: str = "gemma4:latest") -> None:
+    def __init__(
+        self, base_url: str = "http://localhost:11434", model: str = "gemma4:latest"
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
 
@@ -242,7 +525,7 @@ class OllamaScorer:
         prompt = (
             "You are a financial sentiment analyst. Score the sentiment of this "
             "financial news headline/summary from -1 (very bearish) to +1 (very bullish). "
-            "Return ONLY JSON: {\"score\": float, \"label\": \"positive|negative|neutral\"}\n\n"
+            'Return ONLY JSON: {"score": float, "label": "positive|negative|neutral"}\n\n'
             f"Text: {text[:2000]}"
         )
 
@@ -272,7 +555,7 @@ class OllamaScorer:
             start = response_text.find("{")
             end = response_text.rfind("}")
             if start != -1 and end != -1:
-                result = json.loads(response_text[start:end + 1])
+                result = json.loads(response_text[start : end + 1])
             else:
                 raise RuntimeError(f"Ollama returned non-JSON: {response_text[:200]}")
 

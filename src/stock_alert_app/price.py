@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 import pandas as pd
 import yfinance as yf
@@ -52,7 +52,9 @@ def full_symbol(market_code: str, symbol: str, suffix: str = "") -> str:
     return symbol + suffix
 
 
-def fetch_history(symbol: str, period: str = "6mo", interval: str = "1d") -> pd.DataFrame:
+def fetch_history(
+    symbol: str, period: str = "6mo", interval: str = "1d"
+) -> pd.DataFrame:
     ticker = yf.Ticker(symbol)
     df = ticker.history(period=period, interval=interval, auto_adjust=True)
     if df is None or df.empty or "Close" not in df.columns:

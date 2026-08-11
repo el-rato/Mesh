@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
+from . import sources
 from .config import settings
 from .db import Database
 from .markets import Market, Ticker, load_markets
-from . import sources
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,9 @@ class MarketIngestor:
             for ticker in self.market.tickers.values():
                 symbol = ticker.symbol + self.market.yahoo_suffix
                 region = "US" if self.market.country == "US" else ""
-                for art in sources.fetch_yahoo_finance(symbol, region=region, query=ticker.symbol):
+                for art in sources.fetch_yahoo_finance(
+                    symbol, region=region, query=ticker.symbol
+                ):
                     grouped.append((ticker.symbol, art))
 
         if settings.news_api_key:
@@ -126,7 +128,9 @@ class MarketIngestor:
         return result
 
 
-def run_ingest(market_codes: Iterable[str] | None = None, db_path: str | None = None) -> dict[str, IngestResult]:
+def run_ingest(
+    market_codes: Iterable[str] | None = None, db_path: str | None = None
+) -> dict[str, IngestResult]:
     markets = _load_markets()
     db = Database(db_path or settings.db_path)
     db.init_schema()

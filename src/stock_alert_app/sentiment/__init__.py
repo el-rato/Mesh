@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from .scorers import LexiconScorer, FinBERTScorer, LLMScorer
 from .aggregate import aggregate_sentiment
+from .scorers import FinBERTScorer, LexiconScorer, LLMScorer
 
 __all__ = [
-    "LexiconScorer",
     "FinBERTScorer",
     "LLMScorer",
+    "LexiconScorer",
     "aggregate_sentiment",
 ]

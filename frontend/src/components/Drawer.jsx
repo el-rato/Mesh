@@ -1,65 +1,89 @@
-import { useEffect, useState } from "react";
-import { fetchJSON, CHART_RANGES, rangeLabel } from "../api.js";
+import { useEffect, useMemo, useState } from "react";
+import { fetchJSON, CHART_RANGES, rangeLabel, dossier } from "../api.js";
+import { useApp } from "../App.jsx";
 import PriceChart from "./PriceChart.jsx";
-import { verdictBadge } from "./ui.jsx";
+import { verdictBadge, reasonText } from "./ui.jsx";
 
-function StockDetail({ v, onClose }) {
+function sigCls(state) {
+  const s = String(state || "").toLowerCase();
+  if (s === "bull" || s === "bullish") return "bull";
+  if (s === "bear" || s === "bearish") return "bear";
+  return "neutral";
+}
+
+function StateBadge({ state }) {
+  return <span className={`badge ${sigCls(state)}`}>{String(state || "N/A").toUpperCase()}</span>;
+}
+
+function num(v, def = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : def;
+}
+
+/* ---------------- Overview ---------------- */
+
+function OverviewSection({ dossierData, v, onRefresh, refreshing }) {
+  const verdict = dossierData.verdict || {};
+  const price = verdict.price || {};
+  const inst = dossierData.instrument || {};
+  const rangeHost = vRange(inst);
   const [range, setRange] = useState("1mo");
-  const [news, setNews] = useState([]);
-  const [history, setHistory] = useState([]);
+  const conf = num(verdict.confidence) * 100;
 
-  useEffect(() => {
-    fetchJSON(`/api/news?market=${encodeURIComponent(v.market)}&ticker=${encodeURIComponent(v.ticker)}`)
-      .then(setNews)
-      .catch(() => {});
-    fetchJSON(`/api/history/${encodeURIComponent(v.market)}/${encodeURIComponent(v.ticker)}`)
-      .then(setHistory)
-      .catch(() => {});
-  }, [v.market, v.ticker]);
+  const rows = [
+    ["CLOSE", <span key="c" className={String(verdict.verdict).toLowerCase() === "bear" ? "down" : "up"}>{num(price.close).toFixed(2)}</span>],
+    ["OPEN", num(price.open).toFixed(2)],
+    ["HIGH", num(price.high).toFixed(2)],
+    ["LOW", num(price.low).toFixed(2)],
+    ["VOLUME", num(price.volume, 0).toLocaleString()],
+    ["MOMENTUM 20D", <span key="m" className={num(price.momentum_20) >= 0 ? "up" : "down"}>{num(price.momentum_20).toFixed(2)}</span>],
+    ["RSI 14", num(price.rsi_14).toFixed(0)],
+    ["SMA 50", num(price.sma_50).toFixed(2)],
+  ];
 
   return (
     <>
-      <button className="close" onClick={onClose}>✕</button>
-      <h2>
-        {v.ticker}{" "}
-        <span style={{ color: "var(--text-muted)", fontSize: 13, fontWeight: 400 }}>
-          ({v.market})
-        </span>{" "}
-        {verdictBadge(v)}
-      </h2>
-      <div className="a-sub">
-        CONFIDENCE {(v.confidence * 100).toFixed(0)}% · COMBINED {Number(v.combined_score || 0).toFixed(3)}
-      </div>
-      <div className="a-summary">{(v.reason || []).join("")}</div>
-
-      <div className="drawer-main">
-        <div className="news-panel">
-          <h3>Latest Headlines</h3>
-          {news.length ? (
-            news.slice(0, 20).map((n, i) => (
-              <div className="news-item" key={i}>
-                <div className="sender">{n.title}</div>
-                <div className="src">
-                  {n.source} · {n.published_at}{" "}
-                  <span
-                    className={`sent ${
-                      n.sentiment_label === "positive"
-                        ? "up"
-                        : n.sentiment_label === "negative"
-                        ? "down"
-                        : "neutral"
-                    }`}
-                  >
-                    {n.sentiment_label || "N/A"}
-                  </span>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="news-item"><span className="src">NO HEADLINES</span></div>
-          )}
+      <div className="dossier-bar">
+        <div>
+          <span className="symbol-lg">{inst.ticker || v.ticker}</span>
+          <span className="dossier-company">{inst.company || ""}</span>
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="dossier-mkt">{inst.market || v.market} · {inst.exchange || ""}</span>
+          {verdictBadge(verdict)}
+        </div>
+      </div>
 
+      <div className="a-sub" style={{ marginTop: 6 }}>
+        CONFIDENCE <span style={{ color: votebarColor(verdict.verdict) }}>{conf.toFixed(0)}%</span> · COMBINED {num(verdict.combined_score).toFixed(3)} · AGREEMENT {String(verdict.signal_agreement || "unknown").toUpperCase()}
+      </div>
+      <div className="conf-bar">
+        <span style={{ width: Math.round(conf) + "%", background: votebarColor(verdict.verdict) }} />
+      </div>
+
+      {!dossierData.fresh && dossierData.computed_at && (
+        <div className="dossier-stale">
+          STORED SNAPSHOT · {String(dossierData.computed_at).slice(0, 19).replace("T", " ")} ·{" "}
+          <button className="link" onClick={onRefresh} disabled={refreshing}>⟳ LIVE VERDICT</button>
+        </div>
+      )}
+      {dossierData.fresh && dossierData.computed_at && (
+        <div className="dossier-stale fresh">LIVE · {String(dossierData.computed_at).slice(0, 19).replace("T", " ")}</div>
+      )}
+
+      <div className="dossier-grid2">
+        <div>
+          <h3>Quote</h3>
+          <div className="dossier-rows">
+            {rows.map(([k, val]) => (
+              <div className="row" key={k}>
+                <span className="label">{k}</span>
+                <span className="value">{val}</span>
+              </div>
+            ))}
+          </div>
+          <div className="dossier-summary">{reasonText(verdict.reason)}</div>
+        </div>
         <div>
           <h3>Price Chart</h3>
           <div className="chart-range-bar">
@@ -69,36 +93,320 @@ function StockDetail({ v, onClose }) {
               </button>
             ))}
           </div>
-          <div style={{ height: 240 }}>
-            <PriceChart
-              url={`/api/chart/${encodeURIComponent(v.market)}/${encodeURIComponent(v.ticker)}?range=${range}`}
-              height={240}
-              candles={range === "1d"}
-            />
+          <div style={{ height: 220 }}>
+            <PriceChart url={rangeHost(range)} candles showVolume showSma />
           </div>
-
-          <h3>Price History</h3>
-          {history.length ? (
-            history.slice(0, 8).map((h, i) => (
-              <div className="news-item" key={i}>
-                <div className="sender">{h.decided_at}</div>
-                <div className="src">{h.verdict}</div>
-              </div>
-            ))
-          ) : (
-            <div className="news-item"><span className="src">NONE</span></div>
-          )}
         </div>
       </div>
     </>
   );
 }
 
-function changeClass(action) {
-  if (action === "BUY" || action === "NEW") return "up";
-  if (action === "SELL" || action === "EXITED") return "down";
-  return "";
+function vRange(inst) {
+  return function makeUrl(range) {
+    if (inst.symbol) {
+      return `/api/chart/${encodeURIComponent(inst.market)}/${encodeURIComponent(inst.ticker)}?range=${range}&symbol=${encodeURIComponent(inst.symbol)}`;
+    }
+    return `/api/chart/${encodeURIComponent(inst.market)}/${encodeURIComponent(inst.ticker)}?range=${range}`;
+  };
 }
+
+function votebarColor(v) {
+  return v === "BULL" ? "var(--bull)" : v === "BEAR" ? "var(--bear)" : "var(--neutral)";
+}
+
+/* ---------------- Investment Committee ---------------- */
+
+function CommitteeSection({ committee }) {
+  const confidence = committee.confidence == null ? "N/A" : `${(Number(committee.confidence) * 100).toFixed(0)}%`;
+  const score = committee.score == null ? "N/A" : `${committee.score > 0 ? "+" : ""}${Number(committee.score).toFixed(2)}`;
+  return (
+    <div className="team">
+      <div className="team-head">
+        <span>SIGNAL</span><span>DIRECTION</span><span>SCORE</span><span>CONF.</span><span>WEIGHT</span><span>CONTRIB.</span>
+      </div>
+      {(committee.signals || []).map((s) => (
+        <div className={`team-row ${s.available ? "" : "na"}`} key={s.key}>
+          <span className="team-label">{s.label}</span>
+          <StateBadge state={s.state} />
+          <span className="team-value">{s.score == null ? "N/A" : `${s.score > 0 ? "+" : ""}${s.score.toFixed(2)}`}</span>
+          <span className="team-value">{s.confidence == null ? "N/A" : `${(s.confidence * 100).toFixed(0)}%`}</span>
+          <span className="team-value">{(s.weight * 100).toFixed(0)}%</span>
+          <span className="team-value">{s.contribution == null ? "N/A" : `${s.contribution > 0 ? "+" : ""}${s.contribution.toFixed(2)}`}</span>
+        </div>
+      ))}
+      <div className="team-row final">
+        <span className="team-label">FINAL</span>
+        <StateBadge state={committee.verdict} />
+        <span className="team-value">{score}</span>
+        <span className="team-score">{confidence} CONFIDENCE</span>
+      </div>
+      <div className="team-why">
+        <strong>WHY</strong>
+        {(committee.why || []).map((reason, i) => <div key={i}>• {reason}</div>)}
+      </div>
+      <div className="team-note">
+        MISSING SIGNALS ARE EXCLUDED · INSTITUTIONAL = AGGREGATED 13F ACTIVITY WHEN AVAILABLE
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Bull / Bear ---------------- */
+
+function FactorList({ factors }) {
+  return (
+    <div className="bullbear">
+      <div className="bb-col">
+        <h3 className="bb-h bull">BULL CASE</h3>
+        {(factors.bull || []).length ? (
+          factors.bull.map((f, i) => (
+            <div className="factor bull" key={i}>
+              <span className="plus">+</span> {f}
+            </div>
+          ))
+        ) : (
+          <div className="factor none">NO SUPPORTING FACTORS</div>
+        )}
+      </div>
+      <div className="bb-col">
+        <h3 className="bb-h bear">BEAR CASE</h3>
+        {(factors.bear || []).length ? (
+          factors.bear.map((f, i) => (
+            <div className="factor bear" key={i}>
+              <span className="minus">−</span> {f}
+            </div>
+          ))
+        ) : (
+          <div className="factor none">NO CONTRARY FACTORS</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Model ---------------- */
+
+function ModelSection({ verdict }) {
+  const lstm = verdict.lstm || {};
+  const prob = lstm.probability_up;
+  const isUp = num(prob, 0.5) >= 0.5;
+  const metrics = lstm.metrics || {};
+  const rows = [
+    ["P(UP)", prob != null ? <span key="p" style={{ color: isUp ? "var(--bull)" : "var(--bear)" }}>{(num(prob) * 100).toFixed(1)}%</span> : "N/A"],
+    ["PREDICTED RETURN", lstm.predicted_return != null ? <span key="r" className={isUp ? "up" : "down"}>{num(lstm.predicted_return) > 0 ? "+" : ""}{(num(lstm.predicted_return) * 100).toFixed(2)}%</span> : "N/A"],
+    ["MODEL CONFIDENCE", lstm.model_confidence != null ? num(lstm.model_confidence).toFixed(3) : "N/A"],
+    ["LSTM SCORE", num(lstm.score).toFixed(3)],
+    ["FORECAST HORIZON", verdict.forecast_horizon || "1 trading day"],
+    ["MODEL VERSION", lstm.model_version || "N/A"],
+    ...Object.entries(metrics).map(([k, v2]) => [k.toUpperCase().replace(/_/g, " "), v2]),
+  ];
+  return (
+    <div className="model">
+      <h3>LSTM PRICE MODEL — OUTPUT</h3>
+      <div className="dossier-rows">
+        {rows.map(([k, val]) => (
+          <div className="row" key={k}>
+            <span className="label">{k}</span>
+            <span className="value">{val}</span>
+          </div>
+        ))}
+      </div>
+      <div className="conf-bar" style={{ margin: "8px 0" }}>
+        <span style={{ width: Math.round(num(prob, 0) * 100) + "%", background: isUp ? "var(--bull)" : "var(--bear)" }} />
+      </div>
+      <div className="model-disclaimer">
+        PROBABILISTIC MODEL — NOT FINANCIAL ADVICE. MODEL CONFIDENCE ≠ PROBABILITY OF PROFIT.
+        PREDICTIONS ARE ESTIMATES BASED ON HISTORICAL PRICE PATTERNS AND CAN BE WRONG.
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- News ---------------- */
+
+function NewsSection({ news }) {
+  if (!news || !news.length) return <div className="empty">NO HEADLINES FOR THIS TICKER.</div>;
+  return (
+    <div className="news-list">
+      {news.slice(0, 40).map((n, i) => (
+        <div className="news-item" key={i}>
+          <div className="sender">{n.title}</div>
+          <div className="src">
+            {n.source} · {n.published_at}{" "}
+            <span className={`sent ${n.sentiment_label === "positive" ? "up" : n.sentiment_label === "negative" ? "down" : "neutral"}`}>
+              {n.sentiment_label || "N/A"}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ---------------- Risk ---------------- */
+
+function annVol(closes) {
+  const rets = [];
+  for (let i = 1; i < closes.length; i++) {
+    const prev = closes[i - 1];
+    if (prev) rets.push(closes[i] / prev - 1);
+  }
+  if (rets.length < 3) return null;
+  const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+  const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / rets.length;
+  return Math.sqrt(variance) * Math.sqrt(252);
+}
+
+function RiskSection({ verdict, symbol, market, ticker }) {
+  const price = verdict.price || {};
+  const [vol, setVol] = useState(null);
+  const [volErr, setVolErr] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const q = symbol ? `&symbol=${encodeURIComponent(symbol)}` : "";
+    fetchJSON(`/api/chart/${encodeURIComponent(market)}/${encodeURIComponent(ticker)}?range=1y${q}`)
+      .then((d) => {
+        if (cancelled) return;
+        const closes = (d.data || []).map((r) => r.close).filter((c) => c != null);
+        setVol(annVol(closes));
+      })
+      .catch(() => setVolErr(true));
+    return () => {
+      cancelled = true;
+    };
+  }, [symbol, market, ticker]);
+
+  const metrics = [
+    ["ANNUALIZED VOL (1Y)", vol != null ? (vol * 100).toFixed(1) + "%" : volErr ? "N/A" : "…"],
+    ["20D MOMENTUM", num(price.momentum_20).toFixed(2)],
+    ["RSI 14", num(price.rsi_14).toFixed(0)],
+    ["SMA 50", num(price.sma_50).toFixed(2)],
+    ["TREND 50/200", num(price.trend_50_200).toFixed(3)],
+    ["LAST CLOSE", num(price.close).toFixed(2)],
+  ];
+
+  return (
+    <div className="risk-wrap">
+      <h3>PRICE RISK</h3>
+      <div className="risk-metrics">
+        {metrics.map(([k, vval]) => (
+          <div className="risk-metric" key={k}>
+            <div className="k">{k}</div>
+            <div className="v">{vval}</div>
+          </div>
+        ))}
+      </div>
+      <h3>MODEL RISK</h3>
+      <div className="dossier-rows">
+        <div className="row">
+          <span className="label">FORECAST HORIZON</span>
+          <span className="value">{verdict.forecast_horizon || "1 trading day"}</span>
+        </div>
+        <div className="row">
+          <span className="label">SIGNAL AGREEMENT</span>
+          <span className="value">{String(verdict.signal_agreement || "unknown").toUpperCase()}</span>
+        </div>
+      </div>
+      <div className="model-disclaimer">
+        RISK METRICS DERIVED FROM PRICE HISTORY AND MODEL OUTPUT. NOT A COMPLETE RISK ASSESSMENT —
+        NO DRAWDOWN, BETA, OR FUNDAMENTAL DATA AVAILABLE.
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Stock Dossier ---------------- */
+
+const DOSSIER_TABS = [
+  { key: "overview", label: "OVERVIEW" },
+  { key: "committee", label: "COMMITTEE" },
+  { key: "bullbear", label: "BULL / BEAR" },
+  { key: "model", label: "MODEL" },
+  { key: "news", label: "NEWS" },
+  { key: "risk", label: "RISK" },
+];
+
+function StockDossier({ v, onClose }) {
+  const { markets } = useApp();
+  const [tab, setTab] = useState("overview");
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+
+  const symbol = useMemo(() => {
+    if (v.symbol) return v.symbol;
+    const m = (markets || []).find((mm) => mm.code === v.market);
+    return v.ticker + (m?.yahoo_suffix || "");
+  }, [v, markets]);
+
+  const load = (fresh) => {
+    setError("");
+    if (fresh) setRefreshing(true);
+    dossier({ symbol, fresh })
+      .then((d) => {
+        setData(d);
+        setRefreshing(false);
+      })
+      .catch((e) => {
+        setError(e.message);
+        setRefreshing(false);
+      });
+  };
+
+  useEffect(() => {
+    setData(null);
+    setTab("overview");
+    load(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol]);
+
+  const inst = data?.instrument || {};
+
+  return (
+    <>
+      <button className="close" onClick={onClose}>✕</button>
+      {error ? (
+        <div className="error">
+          <div style={{ marginBottom: 12 }}>ERROR: {error}</div>
+          <button className="primary" onClick={() => load(false)}>⟳ RETRY</button>
+        </div>
+      ) : !data ? (
+        <div className="empty">LOADING DOSSIER…</div>
+      ) : (
+        <>
+          <div className="dossier-tabs">
+            {DOSSIER_TABS.map((t) => (
+              <button key={t.key} className={tab === t.key ? "active" : ""} onClick={() => setTab(t.key)}>
+                {t.label}
+              </button>
+            ))}
+            <button
+              className="live"
+              onClick={() => load(true)}
+              disabled={refreshing}
+              title="Re-run the full live pipeline (price + news + LSTM)"
+            >
+              {refreshing ? "⟳ ANALYZING…" : "⟳ LIVE VERDICT"}
+            </button>
+          </div>
+
+          {tab === "overview" && <OverviewSection dossierData={data} v={v} onRefresh={() => load(true)} refreshing={refreshing} />}
+          {tab === "committee" && <CommitteeSection committee={data.committee} />}
+          {tab === "bullbear" && <FactorList factors={data.factors} />}
+          {tab === "model" && <ModelSection verdict={data.verdict} />}
+          {tab === "news" && <NewsSection news={data.news} />}
+          {tab === "risk" && (
+            <RiskSection verdict={data.verdict} symbol={inst.symbol} market={inst.market || v.market} ticker={inst.ticker || v.ticker} />
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+/* ---------------- Fund detail (unchanged) ---------------- */
 
 function FundDetail({ s, onClose }) {
   const [detail, setDetail] = useState(null);
@@ -143,7 +451,7 @@ function FundDetail({ s, onClose }) {
           {(detail.changes || []).slice(0, 15).map((c, i) => (
             <div className="news-item" key={i}>
               <div className="sender">
-                {c.ticker || c.issuer} <span className={`badge ${c.action === "BUY" || c.action === "NEW" ? "bull" : c.action === "SELL" || c.action === "EXITED" ? "bear" : "neutral"}`}>{c.action}</span>
+                {c.ticker || c.issuer} <span className={`badge ${sigCls(c.action)}`}>{c.action}</span>
               </div>
               <div className="src">
                 Δ {c.change_shares.toLocaleString()} SH ({(c.change_pct * 100).toFixed(1)}%) · $
@@ -172,7 +480,7 @@ export default function Drawer({ item, onClose }) {
     <>
       <div className={`overlay ${open ? "open" : ""}`} onClick={onClose} />
       <aside className={`drawer ${open ? "open" : ""}`}>
-        {item?.type === "stock" && <StockDetail v={item.v} onClose={onClose} />}
+        {item?.type === "stock" && <StockDossier v={item.v} onClose={onClose} />}
         {item?.type === "fund" && <FundDetail s={item.s} onClose={onClose} />}
       </aside>
     </>

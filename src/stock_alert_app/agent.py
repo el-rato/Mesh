@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable
 
 from .config import settings
 from .db import Database
@@ -72,6 +72,7 @@ class AgentContext:
         Rough heuristic: ~4 chars per token, so max_characters keeps the data well
         under the model's context limit (e.g. 1M tokens for Gemini 3.x).
         """
+
         def _trunc(s: str, limit: int) -> str:
             return s if len(s) <= limit else s[:limit].rstrip() + "…"
 
@@ -115,12 +116,18 @@ class AgentContext:
         }
 
 
-def _latest_news_map(db: Database, verdicts: dict[str, Verdict], limit: int = 3) -> dict[str, list[dict]]:
+def _latest_news_map(
+    db: Database, verdicts: dict[str, Verdict], limit: int = 3
+) -> dict[str, list[dict]]:
     news_map: dict[str, list[dict]] = {}
     for key, v in verdicts.items():
         items = db.recent_news(v.market, v.ticker, limit=limit)
         news_map[key] = [
-            {"title": n["title"], "source": n["source"], "sentiment": n.get("sentiment_label", "")}
+            {
+                "title": n["title"],
+                "source": n["source"],
+                "sentiment": n.get("sentiment_label", ""),
+            }
             for n in items
         ]
     return news_map
@@ -158,8 +165,11 @@ class TradingAgent:
             self.api_key = api_key or settings.gemini_api_key
             self.model = model or settings.gemini_model
             if not self.api_key:
-                raise RuntimeError("TradingAgent requires GEMINI_API_KEY for Gemini provider.")
+                raise RuntimeError(
+                    "TradingAgent requires GEMINI_API_KEY for Gemini provider."
+                )
             from google import genai  # type: ignore
+
             self._client = genai.Client(api_key=self.api_key)
         elif self.provider == "ollama":
             self.ollama_base_url = ollama_base_url or settings.ollama_base_url
@@ -189,15 +199,21 @@ class TradingAgent:
         )
         # ~4 chars per token; cap the data payload so the whole prompt stays under max_tokens.
         budget_chars = max_tokens * 4 - len(prompt_head)
-        payload = json.dumps(context.to_compact_dict(max_characters=budget_chars), default=str)
+        payload = json.dumps(
+            context.to_compact_dict(max_characters=budget_chars), default=str
+        )
         return prompt_head + payload
 
     def decide_context(self, context: AgentContext) -> list[Recommendation]:
         prompt = self._build_prompt(context)
-        logger.info("Asking %s (%s) for trading recommendations…", self.provider, self.model)
+        logger.info(
+            "Asking %s (%s) for trading recommendations…", self.provider, self.model
+        )
 
         if self.provider == "gemini":
-            response = self._client.models.generate_content(model=self.model, contents=prompt)
+            response = self._client.models.generate_content(
+                model=self.model, contents=prompt
+            )
             text = (response.text or "").strip()
         elif self.provider == "ollama":
             text = self._call_ollama(prompt)
@@ -206,8 +222,12 @@ class TradingAgent:
 
         return self._parse(text)
 
-    def decide(self, market_codes: Iterable[str] | None = None, db_path: str | None = None) -> list[Recommendation]:
-        context = _load_agent_context(market_codes=market_codes, db_path=db_path, include_news=True)
+    def decide(
+        self, market_codes: Iterable[str] | None = None, db_path: str | None = None
+    ) -> list[Recommendation]:
+        context = _load_agent_context(
+            market_codes=market_codes, db_path=db_path, include_news=True
+        )
         return self.decide_context(context)
 
     def _call_ollama(self, prompt: str) -> str:
@@ -243,7 +263,9 @@ class TradingAgent:
             try:
                 data = json.loads(text[start : end + 1])
             except json.JSONDecodeError as exc:
-                raise RuntimeError(f"Could not parse {self.provider} response: {exc}\n{text[:500]}") from exc
+                raise RuntimeError(
+                    f"Could not parse {self.provider} response: {exc}\n{text[:500]}"
+                ) from exc
 
         recs: list[Recommendation] = []
         for item in data.get("recommendations", []):
@@ -280,7 +302,11 @@ class TradingAgent:
         ticker = v.ticker
 
         headlines = [
-            {"title": n["title"], "source": n["source"], "sentiment": n.get("sentiment_label", "")}
+            {
+                "title": n["title"],
+                "source": n["source"],
+                "sentiment": n.get("sentiment_label", ""),
+            }
             for n in db.recent_news(v.market, ticker, limit=10)
         ]
 
@@ -313,9 +339,17 @@ class TradingAgent:
             "DATA:\n" + json.dumps(data_payload, default=str)
         )
 
-        logger.info("Asking %s (%s) to analyze %s:%s…", self.provider, self.model, market_code, ticker)
+        logger.info(
+            "Asking %s (%s) to analyze %s:%s…",
+            self.provider,
+            self.model,
+            market_code,
+            ticker,
+        )
         if self.provider == "gemini":
-            response = self._client.models.generate_content(model=self.model, contents=prompt)
+            response = self._client.models.generate_content(
+                model=self.model, contents=prompt
+            )
             text = (response.text or "").strip()
         elif self.provider == "ollama":
             text = self._call_ollama(prompt)
@@ -323,7 +357,9 @@ class TradingAgent:
             raise RuntimeError(f"Unknown provider: {self.provider}")
         return self._parse_analysis(text, market_code, ticker, company)
 
-    def _parse_analysis(self, text: str, market: str, ticker: str, company: str) -> StockAnalysis:
+    def _parse_analysis(
+        self, text: str, market: str, ticker: str, company: str
+    ) -> StockAnalysis:
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
@@ -334,7 +370,9 @@ class TradingAgent:
             try:
                 data = json.loads(text[start : end + 1])
             except json.JSONDecodeError as exc:
-                raise RuntimeError(f"Could not parse Gemini response: {exc}\n{text[:500]}") from exc
+                raise RuntimeError(
+                    f"Could not parse Gemini response: {exc}\n{text[:500]}"
+                ) from exc
 
         action = str(data.get("action", "HOLD")).upper()
         if action not in ACTIONS:
@@ -361,7 +399,9 @@ def run_agent(
     model: str | None = None,
     ollama_base_url: str | None = None,
 ) -> list[Recommendation]:
-    agent = TradingAgent(provider=provider, model=model, ollama_base_url=ollama_base_url)
+    agent = TradingAgent(
+        provider=provider, model=model, ollama_base_url=ollama_base_url
+    )
     recs = agent.decide(market_codes=market_codes, db_path=db_path)
     if persist:
         db = Database(db_path or settings.db_path)
@@ -380,5 +420,7 @@ def run_agent_analysis(
     model: str | None = None,
     ollama_base_url: str | None = None,
 ) -> StockAnalysis:
-    agent = TradingAgent(provider=provider, model=model, ollama_base_url=ollama_base_url)
+    agent = TradingAgent(
+        provider=provider, model=model, ollama_base_url=ollama_base_url
+    )
     return agent.analyze_ticker(market_code, ticker, company, db_path=db_path)
