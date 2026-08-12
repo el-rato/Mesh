@@ -99,3 +99,11 @@ export async function paperEquity() {
 export async function paperEndSession() {
   return fetchJSON("/api/paper/end-session", { method: "POST" });
 }
+
+export async function simulate(params) {
+  return fetchJSON("/api/simulate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+}

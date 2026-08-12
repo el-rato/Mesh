@@ -33,6 +33,11 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_csv(name: str, default: str) -> list[str]:
+    value = os.getenv(name) or default
+    return [p.strip() for p in value.split(",") if p.strip()]
+
+
 @dataclass(frozen=True)
 class Settings:
     app_dir: Path = field(
@@ -156,6 +161,13 @@ class Settings:
     # Demo competitors are clearly labelled simulated accounts.
     paper_demo_players: bool = field(
         default_factory=lambda: os.getenv("STOCK_ALERT_PAPER_DEMO", "1") != "0"
+    )
+
+    # Historical data provider chain for backtesting, tried in order.
+    historical_providers: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            _env_csv("STOCK_ALERT_HIST_PROVIDERS", "primary,secondary,tertiary")
+        )
     )
     regime_weight: float = field(
         default_factory=lambda: _env_float("STOCK_ALERT_REGIME_WEIGHT", 0.05)

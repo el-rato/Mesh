@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -38,6 +39,17 @@ class PaperOrder(BaseModel):
     quantity: float
     decision_id: str = ""
     reason: str = ""
+
+
+class SimRequest(BaseModel):
+    mode: str = "sim"  # "sim" | "backtest"
+    market: str
+    ticker: str
+    period: str = "quick"  # quick | day | week | custom
+    capital: float = 100000.0
+    bull_threshold: float = 70.0
+    bear_threshold: float = 70.0
+    size_ratio: float = 0.25
 
 
 _initialized_dbs: set[str] = set()
@@ -557,6 +569,49 @@ def paper_evaluate(force: bool = False) -> dict[str, object]:
     db = _db()
     db.init_schema()
     return paper.refresh_evaluations(db, force=force)
+
+
+@app.post("/api/simulate")
+def simulate(body: SimRequest) -> dict[str, object]:
+    """Backtest / fast simulation (isolated; never touches the paper portfolio)."""
+    import json as _json
+
+    from . import simulation
+
+    if body.mode not in ("sim", "backtest"):
+        raise HTTPException(status_code=422, detail="mode must be 'sim' or 'backtest'")
+    db = _db()
+    db.init_schema()
+    result = simulation.run(
+        db,
+        body.market,
+        body.ticker,
+        period=body.period,
+        capital=body.capital,
+        mode=body.mode,
+        bull_threshold=body.bull_threshold,
+        bear_threshold=body.bear_threshold,
+        size_ratio=body.size_ratio,
+    )
+    if body.mode == "backtest" and result.get("status") == "ok":
+        run_id = f"BT-{int(time.time() * 1000)}"
+        db.insert_backtest_run(run_id, "backtest", body.market, body.ticker, body.period, body.capital)
+        for idx, s in enumerate(result.get("snapshots", [])):
+            db.insert_backtest_snapshot(
+                run_id,
+                f"{run_id}-{idx}",
+                body.market,
+                body.ticker,
+                s["ts"],
+                s["verdict"] or "NEUTRAL",
+                s["conviction"],
+                s["reference_price"],
+                _json.dumps(s["signals"]),
+                _json.dumps(s["forward"]),
+                s["correct"],
+            )
+        result["run_id"] = run_id
+    return result
 
 
 @app.get("/api/markets")

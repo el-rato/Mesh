@@ -7,6 +7,7 @@ import ScannerTab from "./components/ScannerTab.jsx";
 import FundsTab from "./components/FundsTab.jsx";
 import IndexesTab from "./components/IndexesTab.jsx";
 import LSTMTab from "./components/LSTMTab.jsx";
+import SimulationTab from "./components/SimulationTab.jsx";
 import PaperTab from "./components/PaperTab.jsx";
 import PaperOrderTicket from "./components/PaperOrderTicket.jsx";
 import Drawer from "./components/Drawer.jsx";
@@ -25,8 +26,9 @@ const PRIMARY_TABS = [
 
 const SECONDARY_TABS = [
   { key: "lstm", fn: "F5", label: "LSTM" },
-  { key: "indexes", fn: "F6", label: "INDEXES" },
-  { key: "funds", fn: "F7", label: "HEDGE FUNDS" },
+  { key: "sim", fn: "F6", label: "SIM / BACKTEST" },
+  { key: "indexes", fn: "F7", label: "INDEXES" },
+  { key: "funds", fn: "F8", label: "HEDGE FUNDS" },
 ];
 
 const TAB_COMPONENTS = {
@@ -35,6 +37,7 @@ const TAB_COMPONENTS = {
   scanner: ScannerTab,
   paper: PaperTab,
   lstm: LSTMTab,
+  sim: SimulationTab,
   indexes: IndexesTab,
   funds: FundsTab,
 };

@@ -161,6 +161,33 @@ CREATE TABLE IF NOT EXISTS paper_equity_points (
 );
 CREATE INDEX IF NOT EXISTS idx_equity_session ON paper_equity_points(session_id, recorded_at);
 
+-- Backtest runs + immutable historical decision snapshots (rigorous mode only).
+CREATE TABLE IF NOT EXISTS backtest_runs (
+    run_id TEXT PRIMARY KEY,
+    mode TEXT NOT NULL,
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    period TEXT NOT NULL,
+    capital REAL NOT NULL,
+    started_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS backtest_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    decision_id TEXT NOT NULL,
+    security_id TEXT NOT NULL,
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    conviction REAL,
+    reference_price REAL,
+    signals_json TEXT NOT NULL DEFAULT '',
+    forward_json TEXT NOT NULL DEFAULT '',
+    correct INTEGER,
+    UNIQUE(run_id, decision_id)
+);
+
 CREATE TABLE IF NOT EXISTS fund_filings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     cik TEXT NOT NULL,
@@ -798,6 +825,41 @@ class Database:
                 (session_id,),
             ).fetchone()
             return row["recorded_at"] if row else None
+
+    # ---- Backtest runs / snapshots ----
+
+    def insert_backtest_run(
+        self, run_id: str, mode: str, market: str, ticker: str, period: str, capital: float
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO backtest_runs (run_id, mode, market, ticker, period, capital, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (run_id, mode, market, ticker.upper(), period, capital, utc_now()),
+            )
+
+    def insert_backtest_snapshot(
+        self,
+        run_id: str,
+        decision_id: str,
+        market: str,
+        ticker: str,
+        ts: str,
+        verdict: str,
+        conviction: float | None,
+        reference_price: float | None,
+        signals_json: str,
+        forward_json: str,
+        correct: int | None,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO backtest_snapshots
+                   (run_id, decision_id, security_id, market, ticker, ts, verdict,
+                    conviction, reference_price, signals_json, forward_json, correct)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (run_id, decision_id, f"{market}:{ticker.upper()}", market, ticker.upper(), ts, verdict,
+                 conviction, reference_price, signals_json, forward_json, correct),
+            )
 
     def upsert_fund_filing(
         self,

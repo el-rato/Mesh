@@ -149,7 +149,7 @@ body,
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-  overflow-x: auto;
+  overflow: visible;
 }
 .fn-tab {
   font-family: var(--mono);
@@ -266,6 +266,18 @@ body,
   font-size: 9px;
   letter-spacing: 0.6px;
   text-transform: uppercase;
+}
+.sim-row {
+  cursor: pointer;
+}
+.sim-row:hover {
+  background: var(--bg-hover);
+}
+.paper-trade-detail {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel2);
+  padding: 10px 12px;
 }
 
 /* ---------- Main content ---------- */

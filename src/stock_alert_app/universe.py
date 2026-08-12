@@ -81,3 +81,14 @@ def universe(db: Database, market: str | None = None) -> list[dict[str, Any]]:
     """The canonical universe (seeded once, then the full securities registry)."""
     ensure_seeded(db)
     return db.all_securities(market=market)
+
+
+def symbol_for(db: Database, market: str, ticker: str) -> str:
+    """Provider symbol for a security (canonical symbol-resolution layer)."""
+    sec = db.securities_map().get((market, ticker.upper()))
+    if sec and sec.get("symbol"):
+        return sec["symbol"]
+    from .markets import load_markets
+
+    m = load_markets(settings.markets_dir).get(market)
+    return f"{ticker}{m.yahoo_suffix if m else ''}"
