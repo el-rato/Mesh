@@ -169,6 +169,27 @@ def technical_from_snapshot(snap: dict[str, Any] | None) -> tuple[float, list[st
     return round(score, 4), reasons
 
 
+def apply_canonical(
+    vdict: dict[str, Any],
+    institutional: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Overwrite a verdict dict with the single canonical committee result.
+
+    The Investment Committee is the ONE verdict authority: the final verdict,
+    confidence, and combined score are taken from ``committee_signals`` (which
+    re-normalizes across whatever signals are available and re-weights them),
+    and the same committee/factors dicts are attached for every surface.
+    """
+    committee = committee_signals(vdict, institutional)
+    factors = bull_bear_factors(vdict, institutional)
+    vdict["verdict"] = committee["verdict"]
+    vdict["confidence"] = committee["confidence"]
+    vdict["combined_score"] = committee["score"]
+    vdict["committee"] = committee
+    vdict["factors"] = factors
+    return vdict
+
+
 def stock_analysis(
     row: dict[str, Any],
     snap: dict[str, Any] | None = None,
@@ -187,11 +208,11 @@ def stock_analysis(
         technical_score, technical_reasons = technical_from_snapshot(snap)
         v["technical"] = {"score": technical_score, "reasons": technical_reasons}
 
-    committee = committee_signals(v, institutional)
-    factors = bull_bear_factors(v, institutional)
+    apply_canonical(v, institutional)
 
     decided_at = row.get("decided_at") or ""
     price_fetched_at = (snap or {}).get("fetched_at") or ""
+    analyzed_at = max(decided_at, price_fetched_at) or ""
     symbol = str(row["ticker"])
     company = ""
     if markets:
@@ -208,20 +229,24 @@ def stock_analysis(
     rsi = _num(price.get("rsi_14"), 50.0) if price else 50.0
     close = _num(price.get("close")) if price else 0.0
 
+    committee = v.get("committee") or {}
+    factors = v.get("factors") or {}
+
     return {
         "market": row["market"],
         "ticker": row["ticker"],
         "symbol": symbol,
         "company": company,
-        "verdict": committee["verdict"],
-        "confidence": committee["confidence"],
-        "combined_score": committee["score"],
+        "verdict": committee.get("verdict"),
+        "confidence": committee.get("confidence"),
+        "combined_score": committee.get("score"),
         "committee": committee,
         "factors": factors,
         "reason": v["reason"],
         "decided_at": decided_at,
         "price_fetched_at": price_fetched_at,
-        "updated_at": max(decided_at, price_fetched_at) or "",
+        "updated_at": analyzed_at,
+        "analyzed_at": analyzed_at,
         "news_score": float(row.get("news_score") or 0.0),
         "price_score": float(row.get("price_score") or 0.0),
         "news_available": bool(v.get("news_available")),

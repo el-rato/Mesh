@@ -19,6 +19,26 @@
   --radius: 3px;
 }
 
+/* Light theme — same tokens, terminal-grade contrast on light background. */
+[data-theme="light"] {
+  --bg: #eef1f5;
+  --bg-panel: #ffffff;
+  --bg-panel2: #f4f6f9;
+  --bg-hover: #e6ebf0;
+  --border: #c6cfd8;
+  --border-bright: #9fb0bf;
+  --text: #1b2530;
+  --text-dim: #41505f;
+  --text-muted: #6b7a88;
+  --amber: #b45309;
+  --amber-dim: #b4732a;
+  --bull: #0a7d3f;
+  --bear: #c03333;
+  --neutral: #b45309;
+  --blue: #1d5fa8;
+  --purple: #7c3aed;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -73,6 +93,12 @@ body,
   color: var(--amber);
   white-space: nowrap;
   font-weight: 500;
+}
+.theme-toggle {
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  padding: 3px 6px;
 }
 
 .ticker-tape {
@@ -985,6 +1011,14 @@ button.ghost {
 }
 .dossier-header-meta strong {
   color: var(--text);
+}
+.stale-flag {
+  margin-left: 8px;
+  color: var(--amber);
+  border: 1px solid var(--amber-dim);
+  padding: 1px 6px;
+  font-size: 9px;
+  letter-spacing: 0.8px;
 }
 .dossier-workspace {
   display: grid;

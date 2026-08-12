@@ -79,8 +79,24 @@ export default function App() {
     next_slow_in: 0,
     error: "",
   });
+  const [theme, setTheme] = useState(() => localStorage.getItem("sv-theme") || "system");
+  const [resolvedTheme, setResolvedTheme] = useState("dark");
   const now = useClock();
   const refreshInFlight = useRef(false);
+
+  // Resolve dark/light/system and apply to <html data-theme>.
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: light)");
+    const apply = () => {
+      const resolved = theme === "system" ? (media.matches ? "light" : "dark") : theme;
+      document.documentElement.setAttribute("data-theme", resolved);
+      setResolvedTheme(resolved);
+    };
+    apply();
+    localStorage.setItem("sv-theme", theme);
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [theme]);
 
   useEffect(() => {
     fetchJSON("/api/markets")
@@ -131,6 +147,8 @@ export default function App() {
       market,
       markets,
       indexes,
+      theme,
+      setTheme,
       setMarket,
       setTab,
       refreshAll: () => {
@@ -141,7 +159,7 @@ export default function App() {
       refreshStatus,
       openDrawer: (d) => setDrawer(d),
     }),
-    [market, markets, indexes, refreshToken, refreshStatus]
+    [market, markets, indexes, refreshToken, refreshStatus, theme]
   );
 
   const enterTerminal = () => {
@@ -163,6 +181,11 @@ export default function App() {
             </button>
             <TickerTape indexes={indexes} />
             <SearchBox />
+            <select className="theme-toggle" value={theme} onChange={(e) => setTheme(e.target.value)} title="Theme">
+              <option value="dark">DARK</option>
+              <option value="light">LIGHT</option>
+              <option value="system">SYSTEM</option>
+            </select>
             <span className="clock">{now.toLocaleTimeString()}</span>
           </header>
 

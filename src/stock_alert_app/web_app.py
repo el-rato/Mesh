@@ -162,7 +162,7 @@ def stock_dossier(
     ``fresh=false`` (default) reuses a stored verdict when one exists (fast, no
     network); ``fresh=true`` runs the complete live pipeline via ``live_verdict``.
     """
-    from . import dossier, institutional
+    from . import institutional
 
     item, full = _dossier_target(symbol, market, ticker)
     if not item.get("supported"):
@@ -185,6 +185,7 @@ def stock_dossier(
     verdict_dict: dict[str, object]
     computed_at = ""
     if fresh or stored is None:
+        from .analysis import apply_canonical
         from .verdict import live_verdict
 
         try:
@@ -219,13 +220,18 @@ def stock_dossier(
                 detail=f"Data unavailable for {full}",
             )
         verdict_dict = v.as_dict()
+        apply_canonical(verdict_dict)  # canonical committee verdict, consistent with scanner
         computed_at = utc_now()
         fresh = True
     else:
-        from .analysis import snapshot_price, technical_from_snapshot, verdict_row_to_dict
+        from .analysis import (
+            apply_canonical,
+            snapshot_price,
+            technical_from_snapshot,
+            verdict_row_to_dict,
+        )
 
         verdict_dict = verdict_row_to_dict(stored)
-        computed_at = stored.get("decided_at") or ""
         snap = None
         try:
             snap = db.latest_price_snapshot(mkt, tkr)
@@ -239,17 +245,37 @@ def stock_dossier(
                 "score": technical_score,
                 "reasons": technical_reasons,
             }
+        apply_canonical(verdict_dict)  # canonical committee verdict, consistent with scanner
+        decided_at = stored.get("decided_at") or ""
+        price_fetched_at = (snap or {}).get("fetched_at") or ""
+        computed_at = max(decided_at, price_fetched_at) or decided_at
 
     institutional_data = institutional.ticker_institutional(tkr, db)
+
+    # A result older than the slow (LSTM/news) refresh interval is considered
+    # stale: the UI prioritizes re-analysis of the currently viewed stock and
+    # shows STALE rather than presenting it as fresh.
+    try:
+        from datetime import UTC, datetime
+
+        now = datetime.now(UTC).isoformat()
+        stale = computed_at < now and (now[:19] > computed_at[:19]) and (
+            (datetime.now(UTC) - datetime.fromisoformat(computed_at)).total_seconds()
+            > settings.scanner_refresh_slow
+        )
+    except Exception:
+        stale = False
 
     return {
         "instrument": item,
         "verdict": verdict_dict,
-        "committee": dossier.committee_signals(verdict_dict, institutional_data),
-        "factors": dossier.bull_bear_factors(verdict_dict, institutional_data),
+        "committee": verdict_dict["committee"],
+        "factors": verdict_dict["factors"],
         "institutional": institutional_data,
         "news": db.recent_news(mkt, tkr, limit=50),
         "computed_at": computed_at,
+        "analyzed_at": computed_at,
+        "stale": stale,
         "fresh": fresh,
     }
 

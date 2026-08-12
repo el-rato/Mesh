@@ -123,6 +123,7 @@ export default function PriceChart({
   showSma200 = false,
   showMomentum = false,
   refreshKey = "",
+  theme = "dark",
 }) {
   const mainCanvas = useRef(null);
   const subCanvas = useRef(null);
@@ -419,7 +420,7 @@ export default function PriceChart({
       mainChart.current = null;
       subChart.current = null;
     };
-  }, [rows, error, mode, showVolume, showSma50, showSma200, showMomentum, hideAxes, lineColor, up]);
+  }, [rows, error, mode, showVolume, showSma50, showSma200, showMomentum, hideAxes, lineColor, up, theme]);
 
   useEffect(() => {
     const chart = mainChart.current;

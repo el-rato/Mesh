@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchJSON, CHART_RANGES, rangeLabel, dossier } from "../api.js";
 import { useApp } from "../App.jsx";
 import PriceChart from "./PriceChart.jsx";
@@ -41,10 +41,11 @@ function DossierHeader({ dossierData, v }) {
       </div>
       <div className="dossier-header-meta">
         CONFIDENCE <strong>{conf}</strong> · SCORE <strong>{score}</strong> · AGREEMENT <strong>{String(verdict.signal_agreement || "unknown").toUpperCase()}</strong>
+        {dossierData.stale && <span className="stale-flag">STALE</span>}
       </div>
       {dossierData.computed_at && (
         <div className={`dossier-stale ${dossierData.fresh ? "fresh" : ""}`}>
-          {dossierData.fresh ? "LIVE" : "DATA"} · {String(dossierData.computed_at).slice(0, 19).replace("T", " ")}
+          {dossierData.stale ? "STALE · " : ""}ANALYZED {String(dossierData.computed_at).slice(0, 19).replace("T", " ")}
         </div>
       )}
     </div>
@@ -52,6 +53,7 @@ function DossierHeader({ dossierData, v }) {
 }
 
 function ChartSection({ dossierData }) {
+  const { theme } = useApp();
   const inst = dossierData.instrument || {};
   const price = dossierData.verdict?.price || {};
   const [range, setRange] = useState("1mo");
@@ -89,7 +91,7 @@ function ChartSection({ dossierData }) {
         </div>
       </div>
       <div className="chart-workspace">
-        <PriceChart url={rangeHost(range)} height={560} chartType={chartType} showVolume={showVolume} showSma50={showSma50} showSma200={showSma200} showMomentum refreshKey={dossierData.computed_at} />
+        <PriceChart url={rangeHost(range)} height={560} chartType={chartType} showVolume={showVolume} showSma50={showSma50} showSma200={showSma200} showMomentum theme={theme} refreshKey={dossierData.computed_at} />
       </div>
       <div className="chart-legend"><span className="legend-price">PRICE</span>{showSma50 && <span className="legend-sma50">SMA 50</span>}{showSma200 && <span className="legend-sma200">SMA 200</span>}{showVolume && <span className="legend-volume">VOLUME</span>}</div>
     </section>
@@ -379,9 +381,9 @@ function StockDossier({ v, onClose }) {
     return v.ticker + (m?.yahoo_suffix || "");
   }, [v, markets]);
 
-  const load = useCallback(() => {
+  const load = useCallback((fresh = false) => {
     setError("");
-    dossier({ symbol })
+    dossier({ symbol, fresh })
       .then(setData)
       .catch((e) => setError(e.message));
   }, [symbol]);
@@ -395,6 +397,18 @@ function StockDossier({ v, onClose }) {
   useEffect(() => {
     if (refreshToken) load();
   }, [refreshToken, load]);
+
+  // Prioritize the currently viewed stock: when its stored analysis is stale,
+  // re-run it once so the dossier updates promptly. Data already on screen
+  // stays visible while the fresh analysis completes.
+  const staleRef = useRef(false);
+  useEffect(() => {
+    if (!data) return;
+    if (data.stale && !staleRef.current) {
+      staleRef.current = true;
+      load(true);
+    }
+  }, [data, load]);
 
   const inst = data?.instrument || {};
 
