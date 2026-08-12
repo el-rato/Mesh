@@ -1,14 +1,16 @@
 import { useEffect, useState, useCallback } from "react";
 import { fetchJSON } from "../api.js";
 import { useApp } from "../App.jsx";
+import AddToPortfolioButton from "./AddToPortfolioButton.jsx";
 import { verdictBadge, verdictClass } from "./ui.jsx";
 
 const FUNCTIONS = [
-  { key: "watchlist", fn: "F2", label: "WATCHLIST", desc: "Your saved tickers and their dossiers" },
-  { key: "funds", fn: "F3", label: "HEDGE FUNDS", desc: "13F buy/sell moves from top funds" },
-  { key: "indexes", fn: "F4", label: "INDEXES", desc: "Benchmark indices with live charts" },
-  { key: "lstm", fn: "F5", label: "LSTM", desc: "Train & review LSTM price predictions" },
-  { key: "scanner", fn: "F6", label: "SCANNER", desc: "Screen the analyzed universe by signal" },
+  { key: "scanner", fn: "F2", label: "SCANNER", desc: "What deserves attention right now" },
+  { key: "portfolio", fn: "F3", label: "PORTFOLIO", desc: "Tracked securities and paper positions" },
+  { key: "paper", fn: "F4", label: "PAPER", desc: "Simulated intraday paper portfolio" },
+  { key: "lstm", fn: "F5", label: "LSTM", desc: "Automatic quantitative model results" },
+  { key: "indexes", fn: "F6", label: "INDEXES", desc: "Benchmark indices with live charts" },
+  { key: "funds", fn: "F7", label: "HEDGE FUNDS", desc: "13F buy/sell moves from top funds" },
 ];
 
 function Stat({ k, v, cls }) {
@@ -133,6 +135,9 @@ export default function OverviewTab() {
                               : "var(--neutral)",
                         }}
                       />
+                    </div>
+                    <div style={{ marginTop: 6 }}>
+                      <AddToPortfolioButton market={v.market} ticker={v.ticker} />
                     </div>
                   </div>
                 ))}

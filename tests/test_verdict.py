@@ -110,14 +110,14 @@ class TestNormalizeNewsScore:
 
 class TestCombineSignals:
     def test_full_signal_weighted_sum(self):
-        # 0.6*0.8 + 0.25*0.6 + 0.15*0.4 = 0.69
+        # 0.55*0.8 + 0.25*0.6 + 0.15*0.4 = 0.65 over available weight 0.95
         c = combine_signals(0.8, 0.6, 0.4, True, True, True)
-        assert c == pytest.approx(0.69)
+        assert c == pytest.approx(0.6842105263157895)
 
     def test_missing_news_renormalized(self):
-        # (0.6*0.8 + 0.25*0.6) / 0.85 = 0.7412
+        # (0.55*0.8 + 0.25*0.6) / 0.8 = 0.7375
         c = combine_signals(0.8, 0.6, 0.0, True, True, False)
-        assert c == pytest.approx(0.74117647)
+        assert c == pytest.approx(0.7375)
 
     def test_missing_all(self):
         assert combine_signals(0.0, 0.0, 0.0, False, False, False) == 0.0
@@ -174,10 +174,23 @@ class TestAgreementLabel:
 
 class TestBuildVerdict:
     def _run(self, monkeypatch, lstm=None, price=None, news=None):
+        from stock_alert_app import signals as signals_module
         from stock_alert_app import verdict as verdict_module
         from stock_alert_app.models import price_lstm
 
         monkeypatch.setattr(price_lstm, "predict_price_lstm", lambda sym: lstm)
+        # Keep tests network-free: social/regime are computed elsewhere in the
+        # live pipeline; stub them as unavailable here.
+        monkeypatch.setattr(
+            signals_module,
+            "social_momentum_signal",
+            lambda t, c="": signals_module.SignalResult("social_momentum", status="no_data"),
+        )
+        monkeypatch.setattr(
+            signals_module,
+            "market_regime_signal",
+            lambda m: signals_module.SignalResult("market_regime", status="no_data"),
+        )
         return verdict_module.build_verdict(
             market="NYSE",
             ticker="TEST",
@@ -246,7 +259,8 @@ class TestBuildVerdict:
         v = self._run(
             monkeypatch, lstm=None, price=_price(momentum=0.08), news=_news(0.30)
         )
-        assert "LSTM: unavailable" in v.reason
+        # Quantitative ensemble still produces a signal from the momentum model.
+        assert "Quantitative:" in v.reason
         assert v.verdict in ("BULL", "NEUTRAL")
         assert v.lstm_confidence is None
         assert isinstance(v.reason, str)
@@ -258,7 +272,7 @@ class TestBuildVerdict:
             price=_price(momentum=0.08),
             news=_news(0.30),
         )
-        assert "LSTM: unavailable" in v.reason
+        assert "Quantitative:" in v.reason
         assert v.verdict in ("BULL", "NEUTRAL")
 
     def test_missing_price_and_news_with_lstm(self, monkeypatch):

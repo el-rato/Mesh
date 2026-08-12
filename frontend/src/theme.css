@@ -176,6 +176,97 @@ body,
 .fn-tab.active .fn {
   color: var(--amber);
 }
+.more-wrap {
+  position: relative;
+}
+.more-menu {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 0;
+  z-index: 60;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-bright);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+}
+.more-item {
+  text-align: left;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.more-item .fn {
+  color: var(--amber-dim);
+  margin-right: 8px;
+}
+.more-item:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.more-item.active {
+  color: var(--amber);
+}
+
+/* Add-to-portfolio */
+.add-portfolio {
+  padding: 2px 8px;
+  font-size: 10px;
+  color: var(--text-muted);
+  border-color: var(--border);
+  background: transparent;
+  white-space: nowrap;
+}
+.add-portfolio:hover {
+  color: var(--amber);
+  border-color: var(--amber-dim);
+}
+.add-portfolio.on {
+  color: var(--bull);
+  border-color: var(--bull);
+}
+.search-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.search-add:hover {
+  color: var(--amber);
+  border-color: var(--amber-dim);
+}
+.search-add.on {
+  color: var(--bull);
+  border-color: var(--bull);
+}
+
+/* Portfolio table (tracked + paper positions) */
+.portfolio-table {
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  width: 100%;
+  overflow-x: auto;
+}
+.portfolio-table .paper-row {
+  grid-template-columns: 1.5fr 0.9fr 0.8fr 0.7fr 0.7fr 0.9fr 2.4fr;
+}
+.portfolio-table .paper-row-head {
+  color: var(--text-muted);
+  font-size: 9px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
 
 /* ---------- Main content ---------- */
 .content {
@@ -445,6 +536,104 @@ body,
 }
 .refresh-status.error {
   color: var(--bear);
+}
+.dim {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+/* Compact scanner card (PRIMARY only) */
+.conv-pct {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+}
+.scanner-primary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2px 8px;
+  margin-top: 8px;
+  font-size: 11px;
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+}
+.scanner-primary .lbl {
+  color: var(--text-muted);
+  font-size: 9px;
+  letter-spacing: 0.6px;
+}
+.scanner-primary .val {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.scanner-meta {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* Decision-first dossier overview */
+.decision-primary {
+  border: 1px solid var(--border-bright);
+  border-left: 3px solid var(--border-bright);
+  background: var(--bg-panel2);
+  padding: 10px;
+}
+.decision-verdict {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.decision-verdict .badge {
+  font-size: 15px;
+  padding: 4px 12px;
+}
+.decision-conviction {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.5px;
+}
+.decision-agreement {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.5px;
+}
+.decision-thesis {
+  margin-top: 10px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.55;
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+}
+.decision-line.dim {
+  color: var(--text-muted);
+}
+.paper-detail {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.paper-detail summary {
+  cursor: pointer;
+  padding: 6px 10px;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  user-select: none;
+}
+.paper-detail summary:hover {
+  color: var(--amber);
+}
+.paper-detail .quote-grid,
+.paper-detail .dossier-summary {
+  border-top: 1px solid var(--border);
 }
 .scan-warning {
   margin-bottom: 10px;
@@ -1175,6 +1364,174 @@ button.ghost {
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
+.decision-block {
+  border: 1px solid var(--border);
+  background: var(--bg-panel2);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.decision-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.decision-conviction {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.decision-thesis {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.decision-line {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.decision-line .lbl {
+  color: var(--amber);
+  font-size: 9px;
+  letter-spacing: 0.8px;
+  margin-right: 6px;
+}
+.paper-committee {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel2);
+  font-size: 10px;
+  color: var(--text-dim);
+  flex-wrap: wrap;
+}
+.paper-qty {
+  width: 72px;
+  padding: 4px 6px;
+  font-size: 11px;
+}
+.paper-trades .panel {
+  cursor: default;
+}
+.paper-line {
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.paper-line .lbl {
+  color: var(--amber);
+  font-size: 9px;
+  letter-spacing: 0.8px;
+  margin-right: 6px;
+}
+.paper-perf .row {
+  font-size: 12px;
+}
+.paper-perf .dossier-company {
+  margin-top: 10px;
+}
+.paper-buy,
+.paper-short {
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.paper-buy {
+  color: var(--bull);
+  border-color: var(--bull);
+  background: rgba(0, 230, 118, 0.08);
+}
+.paper-short {
+  color: var(--bear);
+  border-color: var(--bear);
+  background: rgba(255, 82, 82, 0.08);
+}
+.paper-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.paper-actions button {
+  padding: 2px 8px;
+  font-size: 10px;
+}
+.paper-table {
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  width: 100%;
+  overflow-x: auto;
+}
+.paper-row {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr 0.7fr 1fr 1fr 1fr 1fr 0.9fr 0.9fr 1.6fr;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px dashed var(--border);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.paper-row-head {
+  color: var(--text-muted);
+  font-size: 9px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+.paper-row .sym {
+  color: var(--amber);
+  font-weight: 700;
+}
+.paper-row .dim {
+  color: var(--text-muted);
+}
+.paper-equity {
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  padding: 8px 10px;
+}
+.paper-ticket {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(420px, 94vw);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-bright);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  padding: 14px 16px;
+  z-index: 102;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.paper-ticket-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--amber);
+  font-size: 11px;
+  letter-spacing: 1px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+.paper-ticket-sec {
+  margin-top: 6px;
+}
+.paper-thesis {
+  display: block;
+  width: 100%;
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.4;
+}
 .dossier-mkt {
   color: var(--text-muted);
   font-size: 11px;
@@ -1233,9 +1590,56 @@ button.ghost {
 .team-head,
 .team-row {
   display: grid;
-  grid-template-columns: minmax(105px, 1.4fr) 84px 68px 68px 64px 78px;
+  grid-template-columns: minmax(130px, 1.5fr) 84px 68px 68px 64px 78px;
   align-items: center;
   gap: 8px;
+}
+.team-models {
+  border-top: 1px dashed var(--border);
+  padding: 6px 2px;
+}
+.team-model {
+  display: grid;
+  grid-template-columns: 1.5fr 84px 68px 68px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 11px;
+}
+.team-model.ensemble {
+  border-top: 1px dashed var(--border);
+  margin-top: 4px;
+  padding-top: 6px;
+  font-weight: 600;
+}
+.tm-name {
+  color: var(--text-dim);
+  letter-spacing: 0.6px;
+  font-size: 10px;
+}
+.team-model.ensemble .tm-name {
+  color: var(--amber);
+}
+.tm-dir {
+  color: var(--text);
+  font-weight: 600;
+}
+.tm-score {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.tm-conf {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.tm-na {
+  grid-column: 2 / -1;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.expand {
+  color: var(--amber);
+  margin-left: 4px;
 }
 .team-row {
   padding: 8px 2px;

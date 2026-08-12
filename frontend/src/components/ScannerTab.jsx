@@ -1,25 +1,42 @@
 import { useEffect, useState, useCallback } from "react";
 import { scanner } from "../api.js";
 import { useApp } from "../App.jsx";
+import AddToPortfolioButton from "./AddToPortfolioButton.jsx";
 import { verdictBadge, verdictClass, RefreshStatus } from "./ui.jsx";
-
-function lstmBadge(s) {
-  if (!s || s.signal === "N/A") return null;
-  const bull = s.signal === "BULL";
-  return (
-    <span className={`badge ${bull ? "bull" : "bear"}`} style={{ fontSize: 9, marginLeft: 4 }}>
-      LSTM {bull ? "↑" : "↓"}
-    </span>
-  );
-}
 
 function num(v, d = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : d;
 }
 
+function dirToken(v) {
+  let d = null;
+  if (v && typeof v === "object") d = v.direction;
+  else if (typeof v === "number") d = v > 0.05 ? "BULL" : v < -0.05 ? "BEAR" : "NEUTRAL";
+  if (d === "BULL") return <span className="up">↑</span>;
+  if (d === "BEAR") return <span className="down">↓</span>;
+  return <span className="dim">–</span>;
+}
+
+function agreement(r) {
+  const sigs = (r.committee && r.committee.signals) || [];
+  return `${sigs.filter((s) => s.available).length}/5`;
+}
+
+function freshness(r) {
+  if (!r.updated_at) return "—";
+  const s = Math.max(0, Math.round((Date.now() - new Date(r.updated_at).getTime()) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  return `${Math.round(s / 3600)}h`;
+}
+
+function status(r) {
+  return r.data_status === "no_data" ? "NO DATA" : "OK";
+}
+
 export default function ScannerTab() {
-  const { market, markets, refreshToken, refreshStatus, openDrawer } = useApp();
+  const { market, markets, refreshToken, refreshStatus, openDrawer, openPaperTicket } = useApp();
   const [rows, setRows] = useState(null);
   const [error, setError] = useState("");
   const [filters, setFilters] = useState({
@@ -171,47 +188,25 @@ export default function ScannerTab() {
                 </div>
                 <div>
                   {verdictBadge(r)}
-                  {lstmBadge(r.lstm)}
+                  <span className="conv-pct">{(num(r.confidence) * 100).toFixed(0)}%</span>
                 </div>
               </div>
-              <div className="row">
-                <span className="label">CLOSE</span>
-                <span className="value">{num(r.close).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+              <div className="scanner-primary">
+                <span className="lbl">PRICE</span><span className="val">{num(r.close).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                <span className="lbl">QUANT</span><span className="val">{dirToken(r.quantitative)}</span>
+                <span className="lbl">TECH</span><span className="val">{dirToken(r.technical && num(r.technical.score))}</span>
+                <span className="lbl">NEWS</span><span className="val">{dirToken(r.news_available ? num(r.news_score) : null)}</span>
               </div>
-              <div className="row">
-                <span className="label">MOMENTUM 20D</span>
-                <span className={`value ${num(r.momentum_20) >= 0 ? "up" : "down"}`}>{num(r.momentum_20).toFixed(2)}</span>
+              <div className="scanner-meta">
+                <span>AGREEMENT {agreement(r)}</span>
+                <span>FRESH {freshness(r)}</span>
+                <span className={r.data_status === "no_data" ? "down" : "dim"}>{status(r)}</span>
               </div>
-              <div className="row">
-                <span className="label">TECH</span>
-                <span className="value">{num(r.technical.score).toFixed(2)}</span>
-                <span className="label">NEWS</span>
-                <span className="value">{num(r.news.score).toFixed(2)}</span>
+              <div className="row paper-actions" onClick={(e) => e.stopPropagation()}>
+                <AddToPortfolioButton market={r.market} ticker={r.ticker} company={r.company} />
+                <button className="paper-buy" onClick={() => openPaperTicket({ market: r.market, ticker: r.ticker, symbol: r.symbol, company: r.company, action: "BUY" })}>BUY</button>
+                <button className="paper-short" onClick={() => openPaperTicket({ market: r.market, ticker: r.ticker, symbol: r.symbol, company: r.company, action: "SHORT" })}>SHORT</button>
               </div>
-              <div className="row">
-                <span className="label">CONFIDENCE</span>
-                <span className="value">{(num(r.confidence) * 100).toFixed(0)}%</span>
-              </div>
-              <div className="conf-bar">
-                <span
-                  style={{
-                    width: Math.round(num(r.confidence) * 100) + "%",
-                    background: r.verdict === "BULL" ? "var(--bull)" : r.verdict === "BEAR" ? "var(--bear)" : "var(--neutral)",
-                  }}
-                />
-              </div>
-              <div className="row">
-                <span className="label">COMBINED</span>
-                <span className="value">{num(r.combined_score).toFixed(3)}</span>
-              </div>
-              {r.lstm && r.lstm.probability_up != null && (
-                <div className="row">
-                  <span className="label">LSTM P(↑)</span>
-                  <span className="value" style={{ color: num(r.lstm.probability_up) >= 0.5 ? "var(--bull)" : "var(--bear)" }}>
-                    {(num(r.lstm.probability_up) * 100).toFixed(1)}%
-                  </span>
-                </div>
-              )}
             </div>
           ))}
         </div>

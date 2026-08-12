@@ -7,7 +7,7 @@ function badgeCls(v) {
 }
 
 export default function SearchBox() {
-  const { openDrawer } = useApp();
+  const { openDrawer, addToPortfolio, removeFromPortfolio, inPortfolio } = useApp();
   const [q, setQ] = useState("");
   const [results, setResults] = useState(null);
   const [searching, setSearching] = useState(false);
@@ -126,6 +126,20 @@ export default function SearchBox() {
                       <span className={`badge ${badgeCls(r.verdict)}`}>{r.verdict}</span>
                     )}
                     {unsupported && <span className="badge avoid">UNSUPPORTED</span>}
+                    {!unsupported && r.market && r.ticker && (
+                      <span
+                        className={`search-add ${inPortfolio(r.market, r.ticker) ? "on" : ""}`}
+                        title={inPortfolio(r.market, r.ticker) ? "In portfolio — click to remove" : "Add to portfolio"}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (inPortfolio(r.market, r.ticker)) removeFromPortfolio(r.market, r.ticker);
+                          else addToPortfolio(r.market, r.ticker, r.company || "");
+                        }}
+                      >
+                        {inPortfolio(r.market, r.ticker) ? "✓" : "+"}
+                      </span>
+                    )}
                   </button>
                 );
               })}

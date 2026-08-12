@@ -76,12 +76,64 @@ def _news_count_from_reason(reason: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _parse_signals(row: dict[str, Any]) -> dict[str, Any]:
+    """Parse the stored model-agnostic signals JSON; fall back to legacy columns."""
+    import json
+
+    raw = row.get("signals") or ""
+    payload: dict[str, Any] = {}
+    if raw:
+        try:
+            payload = json.loads(raw) or {}
+        except (ValueError, TypeError):
+            payload = {}
+    quant = payload.get("quantitative") or {}
+    models = payload.get("models") or []
+    social = payload.get("social") or {}
+    regime = payload.get("market_regime") or {}
+    research = payload.get("research")
+    if not quant:
+        # Legacy row: build a single-model quantitative result from lstm columns.
+        quant = {
+            "model_name": "quantitative_ensemble",
+            "direction": signal_from_lstm(row),
+            "score": float(row.get("lstm_score") or 0.0) or None,
+            "confidence": row.get("lstm_confidence"),
+            "status": "ok" if float(row.get("lstm_score") or 0.0) != 0.0 or row.get("lstm_probability_up") is not None else "no_data",
+            "analyzed_at": "",
+            "models": [],
+        }
+        models = [
+            {
+                "model_name": "lstm",
+                "direction": signal_from_lstm(row),
+                "score": float(row.get("lstm_score") or 0.0) or None,
+                "confidence": row.get("lstm_confidence"),
+                "prediction": row.get("lstm_predicted_return"),
+                "status": quant["status"],
+                "analyzed_at": "",
+            }
+        ]
+    return {"quantitative": quant, "models": models, "social": social, "market_regime": regime, "research": research}
+
+
 def verdict_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     """Map a stored verdict row to the canonical verdict block (mirrors Verdict.as_dict)."""
     reason = str(row.get("reason") or "")
     news_available = _news_available_from_reason(reason)
     news_label = _news_label_from_reason(reason)
     news_count = _news_count_from_reason(reason)
+    parsed = _parse_signals(row)
+    lstm_model = next((m for m in parsed["models"] if m.get("model_name") == "lstm"), None)
+    lstm_block = {
+        "score": float(lstm_model.get("score") or 0.0) if lstm_model else float(row.get("lstm_score") or 0.0),
+        "probability_up": row.get("lstm_probability_up"),
+        "predicted_return": lstm_model.get("prediction") if lstm_model else row.get("lstm_predicted_return"),
+        "model_confidence": lstm_model.get("confidence") if lstm_model else row.get("lstm_confidence"),
+        "metrics": {},
+        "model_version": "",
+        "signal": signal_from_lstm(row),
+    }
     return {
         "market": row["market"],
         "ticker": row["ticker"],
@@ -94,15 +146,12 @@ def verdict_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         "decided_at": row["decided_at"],
         "forecast_horizon": "1 trading day",
         "signal_agreement": _signal_agreement_from_row(row),
-        "lstm": {
-            "score": row["lstm_score"],
-            "probability_up": row["lstm_probability_up"],
-            "predicted_return": row["lstm_predicted_return"],
-            "model_confidence": row["lstm_confidence"],
-            "metrics": {},
-            "model_version": "",
-            "signal": signal_from_lstm(row),
-        },
+        "lstm": lstm_block,
+        "quantitative": parsed["quantitative"],
+        "models": parsed["models"],
+        "social": parsed["social"] or None,
+        "market_regime": parsed["market_regime"] or None,
+        "research": parsed["research"],
         "technical": {
             "score": row["technical_score"],
         },
@@ -187,6 +236,12 @@ def apply_canonical(
     vdict["combined_score"] = committee["score"]
     vdict["committee"] = committee
     vdict["factors"] = factors
+    try:
+        from .dossier import committee_decision
+
+        vdict["decision"] = committee_decision(vdict)
+    except Exception:
+        vdict["decision"] = None
     return vdict
 
 
@@ -242,6 +297,7 @@ def stock_analysis(
         "combined_score": committee.get("score"),
         "committee": committee,
         "factors": factors,
+        "decision": v.get("decision"),
         "reason": v["reason"],
         "decided_at": decided_at,
         "price_fetched_at": price_fetched_at,
@@ -253,6 +309,10 @@ def stock_analysis(
         "signal_agreement": v["signal_agreement"],
         "forecast_horizon": v["forecast_horizon"],
         "lstm": v["lstm"],
+        "quantitative": v.get("quantitative"),
+        "models": v.get("models") or [],
+        "social": v.get("social"),
+        "market_regime": v.get("market_regime"),
         "technical": v["technical"],
         "news": news or {"score": 0.0},
         "price": price,

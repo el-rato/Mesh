@@ -86,12 +86,80 @@ CREATE TABLE IF NOT EXISTS agent_recommendations (
     generated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS discovered_tickers (
-    ticker TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS securities (
     market TEXT NOT NULL,
-    discovered_at TEXT NOT NULL,
-    PRIMARY KEY (ticker, market)
+    ticker TEXT NOT NULL,
+    symbol TEXT NOT NULL DEFAULT '',
+    company TEXT NOT NULL DEFAULT '',
+    exchange TEXT NOT NULL DEFAULT '',
+    currency TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'configured',
+    data_status TEXT NOT NULL DEFAULT 'no_data',
+    last_analysis_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (market, ticker)
 );
+
+-- Immutable decision snapshots (paper research engine). Append-only per
+-- (market, ticker, decided_at); a new analysis creates a new snapshot.
+CREATE TABLE IF NOT EXISTS decision_snapshots (
+    decision_id TEXT PRIMARY KEY,
+    security_id TEXT NOT NULL,
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    conviction REAL,
+    reference_price REAL,
+    research_confidence REAL,
+    decision_json TEXT NOT NULL DEFAULT '',
+    UNIQUE(market, ticker, decided_at)
+);
+CREATE INDEX IF NOT EXISTS idx_snapshots_security ON decision_snapshots(market, ticker, decided_at);
+
+-- Paper trading (simulation only — no real orders ever).
+CREATE TABLE IF NOT EXISTS paper_portfolio (
+    session_id TEXT PRIMARY KEY,
+    starting_cash REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    opened_at TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS paper_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT UNIQUE NOT NULL,
+    session_id TEXT NOT NULL,
+    security_id TEXT NOT NULL,
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    side TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    price REAL NOT NULL,
+    fee REAL NOT NULL DEFAULT 0,
+    executed_at TEXT NOT NULL,
+    decision_id TEXT,
+    reason TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_orders_session ON paper_orders(session_id, executed_at);
+
+-- Historical decision evaluation (post-decision prices only; no look-ahead).
+CREATE TABLE IF NOT EXISTS decision_evaluations (
+    decision_id TEXT PRIMARY KEY,
+    reference_price REAL,
+    p5 REAL, p15 REAL, p30 REAL, p60 REAL, close_price REAL,
+    correct INTEGER,
+    status TEXT NOT NULL DEFAULT 'no_data',
+    evaluated_at TEXT NOT NULL
+);
+
+-- Equity curve points for the paper portfolio (simulation only).
+CREATE TABLE IF NOT EXISTS paper_equity_points (
+    session_id TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    equity REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_equity_session ON paper_equity_points(session_id, recorded_at);
 
 CREATE TABLE IF NOT EXISTS fund_filings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -160,6 +228,9 @@ class Database:
     def init_schema(self) -> int:
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            # Legacy discovery registry: useful data was migrated into `securities`
+            # (source='discovered'); the old table is now obsolete.
+            conn.execute("DROP TABLE IF EXISTS discovered_tickers")
             self._migrate_verdicts(conn)
             return self._migrate_verdict_reasons(conn)
 
@@ -173,6 +244,7 @@ class Database:
             "lstm_predicted_return": "REAL",
             "lstm_confidence": "REAL",
             "technical_score": "REAL NOT NULL DEFAULT 0",
+            "signals": "TEXT NOT NULL DEFAULT ''",
         }
         for name, ddl in additions.items():
             if name not in existing:
@@ -343,6 +415,7 @@ class Database:
         lstm_predicted_return: float | None = None,
         lstm_confidence: float | None = None,
         technical_score: float | None = None,
+        signals: str = "",
     ) -> None:
         technical = price_score if technical_score is None else technical_score
         with self.connect() as conn:
@@ -350,8 +423,8 @@ class Database:
                 """INSERT OR REPLACE INTO verdicts
                    (market, ticker, verdict, confidence, news_score, price_score,
                     combined_score, reason, decided_at, lstm_score, lstm_probability_up,
-                    lstm_predicted_return, lstm_confidence, technical_score)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    lstm_predicted_return, lstm_confidence, technical_score, signals)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     market,
                     ticker.upper(),
@@ -367,6 +440,7 @@ class Database:
                     lstm_predicted_return,
                     lstm_confidence,
                     technical,
+                    signals,
                 ),
             )
 
@@ -479,22 +553,251 @@ class Database:
                 ).fetchall()
             return [dict(r) for r in rows]
 
-    def get_recently_discovered(self, cooldown_days: int = 7) -> set[str]:
-        cutoff = datetime.now(UTC).timestamp() - cooldown_days * 86400
-        cutoff_iso = datetime.fromtimestamp(cutoff, UTC).isoformat()
-        with self.connect() as conn:
-            rows = conn.execute(
-                "SELECT ticker FROM discovered_tickers WHERE discovered_at > ?",
-                (cutoff_iso,),
-            ).fetchall()
-            return {r["ticker"].upper() for r in rows}
+    def upsert_security(
+        self,
+        market: str,
+        ticker: str,
+        symbol: str = "",
+        company: str = "",
+        exchange: str = "",
+        currency: str = "",
+        source: str = "configured",
+        data_status: str = "no_data",
+        last_analysis_at: str = "",
+    ) -> None:
+        """Register a security in the canonical universe.
 
-    def mark_discovered(self, ticker: str, market: str) -> None:
+        ``source`` is sticky: a configured security keeps its 'configured'
+        source even if later re-registered by discovery or analysis.
+        """
         with self.connect() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO discovered_tickers (ticker, market, discovered_at) VALUES (?, ?, ?)",
-                (ticker.upper(), market, utc_now()),
+                """INSERT INTO securities
+                   (market, ticker, symbol, company, exchange, currency, source,
+                    data_status, last_analysis_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(market, ticker) DO UPDATE SET
+                     symbol=excluded.symbol,
+                     company=excluded.company,
+                     exchange=excluded.exchange,
+                     currency=excluded.currency,
+                     source=CASE WHEN securities.source = 'configured' THEN 'configured' ELSE excluded.source END,
+                     data_status=excluded.data_status,
+                     last_analysis_at=COALESCE(excluded.last_analysis_at, securities.last_analysis_at),
+                     updated_at=excluded.updated_at""",
+                (
+                    market,
+                    ticker.upper(),
+                    symbol,
+                    company,
+                    exchange,
+                    currency,
+                    source,
+                    data_status,
+                    last_analysis_at,
+                    utc_now(),
+                ),
             )
+
+    def all_securities(self, market: str | None = None) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            if market:
+                rows = conn.execute(
+                    "SELECT * FROM securities WHERE market = ? ORDER BY market, ticker",
+                    (market,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM securities ORDER BY market, ticker"
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def securities_map(self) -> dict[tuple[str, str], dict[str, Any]]:
+        return {(s["market"], s["ticker"].upper()): s for s in self.all_securities()}
+
+    # ---- Decision snapshots (paper research engine) ----
+
+    def insert_decision_snapshot(
+        self,
+        decision_id: str,
+        market: str,
+        ticker: str,
+        decided_at: str,
+        verdict: str,
+        conviction: float | None,
+        reference_price: float | None,
+        research_confidence: float | None,
+        decision_json: str = "",
+    ) -> bool:
+        """Append-only snapshot. Returns True if inserted, False if a snapshot
+        for the same (market, ticker, decided_at) already exists."""
+        with self.connect() as conn:
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO decision_snapshots
+                   (decision_id, security_id, market, ticker, decided_at, verdict,
+                    conviction, reference_price, research_confidence, decision_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    decision_id,
+                    f"{market}:{ticker.upper()}",
+                    market,
+                    ticker.upper(),
+                    decided_at,
+                    verdict,
+                    conviction,
+                    reference_price,
+                    research_confidence,
+                    decision_json,
+                ),
+            )
+            return cur.rowcount > 0
+
+    def decision_snapshots(
+        self, market: str | None = None, ticker: str | None = None, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            sql = "SELECT * FROM decision_snapshots"
+            conds: list[str] = []
+            params: list[Any] = []
+            if market:
+                conds.append("market = ?")
+                params.append(market)
+            if ticker:
+                conds.append("ticker = ?")
+                params.append(ticker.upper())
+            if conds:
+                sql += " WHERE " + " AND ".join(conds)
+            sql += " ORDER BY decided_at DESC LIMIT ?"
+            params.append(limit)
+            rows = conn.execute(sql, params).fetchall()
+            return [dict(r) for r in rows]
+
+    # ---- Paper trading (simulation only) ----
+
+    def upsert_paper_portfolio(
+        self, session_id: str, starting_cash: float, currency: str = "USD"
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO paper_portfolio (session_id, starting_cash, currency, opened_at, active)
+                   VALUES (?, ?, ?, ?, 1)""",
+                (session_id, starting_cash, currency, utc_now()),
+            )
+
+    def active_portfolio(self) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM paper_portfolio WHERE active = 1 ORDER BY opened_at DESC LIMIT 1"
+            ).fetchone()
+            return dict(row) if row else None
+
+    def insert_paper_order(
+        self,
+        order_id: str,
+        session_id: str,
+        market: str,
+        ticker: str,
+        side: str,
+        quantity: float,
+        price: float,
+        fee: float,
+        executed_at: str,
+        decision_id: str | None,
+        reason: str,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT INTO paper_orders
+                   (order_id, session_id, security_id, market, ticker, side, quantity,
+                    price, fee, executed_at, decision_id, reason)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    order_id,
+                    session_id,
+                    f"{market}:{ticker.upper()}",
+                    market,
+                    ticker.upper(),
+                    side,
+                    quantity,
+                    price,
+                    fee,
+                    executed_at,
+                    decision_id,
+                    reason,
+                ),
+            )
+
+    def paper_orders(self, session_id: str | None = None) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            if session_id:
+                rows = conn.execute(
+                    "SELECT * FROM paper_orders WHERE session_id = ? ORDER BY executed_at",
+                    (session_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM paper_orders ORDER BY executed_at"
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    # ---- Historical decision evaluation ----
+
+    def insert_decision_evaluation(
+        self,
+        decision_id: str,
+        reference_price: float | None,
+        prices: dict[str, float | None],
+        correct: int | None,
+        status: str,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO decision_evaluations
+                   (decision_id, reference_price, p5, p15, p30, p60, close_price, correct, status, evaluated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    decision_id,
+                    reference_price,
+                    prices.get("p5"),
+                    prices.get("p15"),
+                    prices.get("p30"),
+                    prices.get("p60"),
+                    prices.get("close"),
+                    correct,
+                    status,
+                    utc_now(),
+                ),
+            )
+
+    def decision_evaluations(self) -> dict[str, dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute("SELECT * FROM decision_evaluations").fetchall()
+            return {r["decision_id"]: dict(r) for r in rows}
+
+    # ---- Paper equity curve ----
+
+    def insert_equity_point(self, session_id: str, equity: float) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO paper_equity_points (session_id, recorded_at, equity) VALUES (?, ?, ?)",
+                (session_id, utc_now(), equity),
+            )
+
+    def equity_points(self, session_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM paper_equity_points WHERE session_id = ? ORDER BY recorded_at",
+                (session_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def last_equity_at(self, session_id: str) -> str | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT recorded_at FROM paper_equity_points WHERE session_id = ? ORDER BY recorded_at DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            return row["recorded_at"] if row else None
 
     def upsert_fund_filing(
         self,

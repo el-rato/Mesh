@@ -31,6 +31,15 @@ class WatchItem(BaseModel):
     company: str = ""
 
 
+class PaperOrder(BaseModel):
+    market: str
+    ticker: str
+    side: str
+    quantity: float
+    decision_id: str = ""
+    reason: str = ""
+
+
 _initialized_dbs: set[str] = set()
 
 
@@ -105,6 +114,9 @@ def _dossier_target(
     symbol: str, market: str, ticker: str
 ) -> tuple[dict[str, object], str]:
     """Resolve a dossier request into (instrument, resolved_symbol) or raise 422/404."""
+    from .universe import register
+
+    db = _db()
     if symbol:
         from . import instruments
 
@@ -114,6 +126,15 @@ def _dossier_target(
                 status_code=404, detail=f"Could not resolve symbol {symbol!r}"
             )
         full = item["symbol"]
+        register(
+            db,
+            item.get("market"),
+            item.get("ticker"),
+            symbol=full,
+            company=item.get("company") or "",
+            exchange=item.get("exchange") or "",
+            source="discovered",
+        )
         return item, full
 
     if market and ticker:
@@ -127,13 +148,25 @@ def _dossier_target(
             tkr = m.get_ticker(ticker)
             company = tkr.name or ""
             composed = f"{ticker.upper()}{tkr.yahoo_suffix or m.yahoo_suffix}"
+            is_configured = True
         except KeyError:
             company = ""
             composed = f"{ticker.upper()}{m.yahoo_suffix}"
+            is_configured = False
         # Prefer the resolver-validated symbol (handles ticker changes without
         # substituting a different security); fall back to the composed symbol
         # so stored-snapshot dossiers keep working.
         full = resolve_for_fetch(m.code, ticker.upper(), company) or composed
+        register(
+            db,
+            m.code,
+            ticker.upper(),
+            symbol=full,
+            company=company,
+            exchange=m.name,
+            currency=m.currency,
+            source="configured" if is_configured else "discovered",
+        )
         item: dict[str, object] = {
             "market": m.code,
             "ticker": ticker.upper(),
@@ -299,15 +332,25 @@ def scanner(
     instead of being a hardcoded list.
     """
     from .analysis import stock_analysis
+    from .universe import universe
 
     db = _db()
     rows, snaps, markets = _analysis_context(db, market or None)
+    latest = {(r["market"], r["ticker"].upper()): r for r in rows}
 
     out: list[dict[str, object]] = []
-    for r in rows:
-        analysis = stock_analysis(
-            r, snaps.get(f"{r['market']}:{r['ticker'].upper()}"), markets
-        )
+    for sec in universe(db, market or None):
+        row = latest.get((sec["market"], sec["ticker"].upper()))
+        if row:
+            analysis = stock_analysis(
+                row, snaps.get(f"{row['market']}:{row['ticker'].upper()}"), markets
+            )
+            analysis["data_status"] = "ok"
+            analysis["security"] = sec
+        else:
+            # Security is known but has no analysis yet: keep it discoverable as
+            # NO_DATA instead of silently dropping it from the universe.
+            analysis = _no_data_analysis(sec)
         if verdict and analysis["verdict"] != verdict.upper():
             continue
         if signal_lstm and analysis["lstm"]["signal"] != signal_lstm.upper():
@@ -333,6 +376,46 @@ def scanner(
     return out[:limit]
 
 
+def _no_data_analysis(sec: dict[str, object]) -> dict[str, object]:
+    """Minimal analysis entry for a known security with no data/analysis yet."""
+    return {
+        "market": sec.get("market"),
+        "ticker": sec.get("ticker"),
+        "symbol": sec.get("symbol") or sec.get("ticker"),
+        "company": sec.get("company") or "",
+        "verdict": "N/A",
+        "confidence": None,
+        "combined_score": None,
+        "committee": {"verdict": "N/A", "score": None, "confidence": None, "signals": [], "why": ["no data"]},
+        "factors": {"bull": [], "bear": []},
+        "decision": None,
+        "reason": ["NO_DATA — security has not been analyzed yet"],
+        "decided_at": sec.get("last_analysis_at") or "",
+        "price_fetched_at": "",
+        "updated_at": sec.get("last_analysis_at") or "",
+        "analyzed_at": sec.get("last_analysis_at") or "",
+        "news_score": 0.0,
+        "price_score": 0.0,
+        "news_available": False,
+        "signal_agreement": "unknown",
+        "forecast_horizon": "",
+        "lstm": {"score": 0.0, "probability_up": None, "predicted_return": None, "model_confidence": None, "metrics": {}, "model_version": "", "signal": "N/A"},
+        "quantitative": {"status": "no_data"},
+        "models": [],
+        "social": None,
+        "market_regime": None,
+        "research": None,
+        "technical": {"score": 0.0, "reasons": ["no data"]},
+        "news": {"score": 0.0},
+        "price": None,
+        "momentum_20": 0.0,
+        "rsi_14": 50.0,
+        "close": 0.0,
+        "data_status": "no_data",
+        "security": sec,
+    }
+
+
 @app.post("/api/refresh")
 def refresh_data() -> dict[str, object]:
     """Run the background refresh cycle (fast price refresh + slow LSTM/news)."""
@@ -349,6 +432,131 @@ def refresh_status() -> dict[str, object]:
     from . import refresh
 
     return refresh.refresh_status()
+
+
+# ---------------------------------------------------------------------------
+# Paper research / portfolio (simulation only — no real orders)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/paper/portfolio")
+def paper_portfolio() -> dict[str, object]:
+    from . import paper
+
+    db = _db()
+    db.init_schema()
+    return paper.portfolio_state(db)
+
+
+@app.get("/api/paper/quote")
+def paper_quote(market: str, ticker: str) -> dict[str, object]:
+    from . import paper
+
+    db = _db()
+    db.init_schema()
+    return paper.quote(db, market, ticker)
+
+
+@app.post("/api/paper/order")
+def paper_order(body: PaperOrder) -> dict[str, object]:
+    from . import paper
+
+    db = _db()
+    db.init_schema()
+    try:
+        order = paper.paper_order(
+            db,
+            body.market,
+            body.ticker,
+            body.side,
+            body.quantity,
+            decision_id=body.decision_id or None,
+            reason=body.reason or "",
+        )
+    except (ValueError, LookupError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"order": order, "portfolio": paper.portfolio_state(db)}
+
+
+@app.post("/api/paper/end-session")
+def paper_end_session() -> dict[str, object]:
+    from . import paper
+
+    db = _db()
+    db.init_schema()
+    return paper.end_session(db)
+
+
+@app.get("/api/paper/leaderboard")
+def paper_leaderboard() -> dict[str, object]:
+    from . import paper
+
+    db = _db()
+    db.init_schema()
+    return paper.leaderboard(db)
+
+
+@app.get("/api/paper/stats")
+def paper_stats() -> dict[str, object]:
+    from . import paper
+
+    db = _db()
+    db.init_schema()
+    return paper.stats(db)
+
+
+@app.get("/api/paper/risk")
+def paper_risk() -> dict[str, object]:
+    from . import paper
+
+    db = _db()
+    db.init_schema()
+    return paper.risk(db)
+
+
+@app.get("/api/paper/equity")
+def paper_equity() -> list[dict[str, object]]:
+    from . import paper
+
+    db = _db()
+    db.init_schema()
+    return paper.equity_history(db)
+
+
+@app.get("/api/paper/trades")
+def paper_trades() -> list[dict[str, object]]:
+    from . import paper
+
+    db = _db()
+    db.init_schema()
+    session = db.active_portfolio()
+    orders = db.paper_orders(session["session_id"]) if session else []
+    return orders
+
+
+@app.get("/api/paper/decisions")
+def paper_decisions(market: str | None = None, ticker: str | None = None) -> list[dict[str, object]]:
+    db = _db()
+    db.init_schema()
+    return db.decision_snapshots(market=market, ticker=ticker)
+
+
+@app.get("/api/paper/performance")
+def paper_performance() -> dict[str, object]:
+    from . import paper
+
+    db = _db()
+    db.init_schema()
+    return paper.performance(db)
+
+
+@app.post("/api/paper/evaluate")
+def paper_evaluate(force: bool = False) -> dict[str, object]:
+    from . import paper
+
+    db = _db()
+    db.init_schema()
+    return paper.refresh_evaluations(db, force=force)
 
 
 @app.get("/api/markets")
@@ -439,7 +647,7 @@ def get_watchlist() -> list[dict[str, object]]:
 
 
 @app.post("/api/watchlist")
-def add_watchlist(item: WatchItem) -> dict[str, object]:
+def add_watchlist(item: WatchItem, analyze: bool = True) -> dict[str, object]:
     if not item.market or not item.ticker:
         raise HTTPException(status_code=422, detail="market and ticker are required")
     db = _db()
@@ -450,7 +658,15 @@ def add_watchlist(item: WatchItem) -> dict[str, object]:
         "market": item.market.upper(),
         "ticker": item.ticker.upper(),
     }
-    if added:
+    # Register in the canonical universe so the security is immediately
+    # discoverable; the background refresh performs the analysis.
+    try:
+        from .universe import register
+
+        register(db, item.market, item.ticker, company=item.company, source="watchlist")
+    except Exception:
+        pass
+    if added and analyze:
         from .verdict import live_verdict
 
         v = live_verdict(item.market, item.ticker, item.company)

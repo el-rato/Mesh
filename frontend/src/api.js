@@ -44,3 +44,58 @@ export async function scanner(params = {}) {
   });
   return fetchJSON(`/api/scanner?${qs.toString()}`);
 }
+
+export async function paperPortfolio() {
+  return fetchJSON("/api/paper/portfolio");
+}
+
+export async function paperQuote(market, ticker) {
+  return fetchJSON(`/api/paper/quote?market=${encodeURIComponent(market)}&ticker=${encodeURIComponent(ticker)}`);
+}
+
+export async function paperOrder({ market, ticker, side, quantity, decision_id = "", reason = "" }) {
+  return fetchJSON("/api/paper/order", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ market, ticker, side, quantity, decision_id, reason }),
+  });
+}
+
+export async function paperTrades() {
+  return fetchJSON("/api/paper/trades");
+}
+
+export async function paperDecisions(market = "", ticker = "") {
+  const qs = new URLSearchParams();
+  if (market) qs.set("market", market);
+  if (ticker) qs.set("ticker", ticker);
+  return fetchJSON(`/api/paper/decisions?${qs.toString()}`);
+}
+
+export async function paperPerformance() {
+  return fetchJSON("/api/paper/performance");
+}
+
+export async function paperEvaluate() {
+  return fetchJSON("/api/paper/evaluate", { method: "POST" });
+}
+
+export async function paperStats() {
+  return fetchJSON("/api/paper/stats");
+}
+
+export async function paperRisk() {
+  return fetchJSON("/api/paper/risk");
+}
+
+export async function paperLeaderboard() {
+  return fetchJSON("/api/paper/leaderboard");
+}
+
+export async function paperEquity() {
+  return fetchJSON("/api/paper/equity");
+}
+
+export async function paperEndSession() {
+  return fetchJSON("/api/paper/end-session", { method: "POST" });
+}

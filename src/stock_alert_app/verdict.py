@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 from collections.abc import Iterable
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -12,6 +14,13 @@ from .price import PriceState
 from .sentiment.aggregate import SourceSentiment
 
 logger = logging.getLogger(__name__)
+
+#: Shared in-flight guard for live analysis, keyed by ``MARKET:TICKER``.
+#: Prevents duplicate concurrent analysis of the same security across the
+#: slow/background refresh and the dossier fresh path, while different
+#: securities still run concurrently.
+_live_inflight: dict[str, Future] = {}
+_inflight_lock = threading.Lock()
 
 BULL = "BULL"
 BEAR = "BEAR"
@@ -61,6 +70,7 @@ class Verdict:
     news_label: str | None = None
     forecast_horizon: str = FORECAST_HORIZON
     signal_agreement: str = "unknown"
+    signals_json: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -104,6 +114,17 @@ class Verdict:
             d["news"] = self.sentiment.as_dict()
         if self.price is not None:
             d["price"] = self.price.as_dict()
+        if self.signals_json:
+            try:
+                import json as _json
+
+                payload = _json.loads(self.signals_json)
+                d["quantitative"] = payload.get("quantitative")
+                d["models"] = payload.get("models")
+                d["social"] = payload.get("social")
+                d["market_regime"] = payload.get("market_regime")
+            except (ValueError, TypeError):
+                pass
         return d
 
 
@@ -199,7 +220,7 @@ def _normalize_price(price: PriceState | None) -> tuple[float, list[str]]:
 
 def _signal_weights() -> dict[str, float]:
     return {
-        "lstm": settings.lstm_weight,
+        "lstm": settings.quant_weight,  # quantitative ensemble slot
         "technical": settings.technical_weight,
         "news": settings.news_weight,
     }
@@ -330,60 +351,60 @@ def build_verdict(
     sentiment: SourceSentiment | None,
     price: PriceState | None,
     yahoo_symbol: str = "",
+    history_df: Any | None = None,
+    research: dict[str, Any] | None = None,
 ) -> Verdict:
-    """Combine LSTM, technical, and news signals into one verdict.
+    """Combine the quantitative ensemble, technical, and news signals.
 
-    This is the single decision engine used by ``run_verdicts`` and
-    ``live_verdict``. Missing signals degrade gracefully: the ener renormalizes
-    across whatever signals are available and never crashes on NaN output.
+    This is the single decision engine used by ``live_verdict``. The
+    quantitative layer is a model-agnostic ensemble (LSTM + GBM + momentum);
+    unavailable models are excluded, never treated as a vote. Missing signals
+    degrade gracefully and never crash on NaN output.
     """
-    from .models.price_lstm import predict_price_lstm
+    import json as _json
 
-    # ---- Signal 1: LSTM price model ----
-    lstm_res = None
-    if yahoo_symbol:
-        try:
-            lstm_res = predict_price_lstm(yahoo_symbol)
-        except Exception as exc:
-            logger.warning("LSTM prediction failed for %s: %s", yahoo_symbol, exc)
-            lstm_res = None
+    from . import signals
+
+    # ---- Signal 1: Quantitative ensemble ----
+    price_dict = price.as_dict() if price is not None else None
+    try:
+        quant, models = signals.quantitative_ensemble(
+            yahoo_symbol, price=price_dict, history_df=history_df
+        )
+    except Exception as exc:
+        logger.warning("Quantitative ensemble failed for %s: %s", yahoo_symbol, exc)
+        quant = signals.SignalResult("quantitative_ensemble", status="error", explanation=[f"ensemble failed: {exc}"])
+        models = []
+    quant_score = quant.score if quant.score is not None else 0.0
+    quant_available = quant.status == "ok" and quant.score is not None
+    quant_confidence = quant.confidence
+
+    lstm_res = next((m for m in models if m.model_name == "lstm"), None)
 
     lstm_score = 0.0
     lstm_prob: float | None = None
     lstm_ret: float | None = None
     lstm_conf: float | None = None
     lstm_available = False
-    if lstm_res is not None:
-        lstm_score, source = normalize_lstm_signal(lstm_res)
-        lstm_available = source is not None
-        if lstm_available:
-            prob = getattr(lstm_res, "probability_up", None)
-            ret = getattr(lstm_res, "predicted_return", None)
-            mconf = getattr(lstm_res, "confidence", None)
-            if _is_finite(prob):
-                lstm_prob = round(float(prob), 4)
-            if _is_finite(ret):
-                lstm_ret = round(float(ret), 6)
-            if _is_finite(mconf):
-                lstm_conf = round(float(mconf), 4)
-        else:
-            logger.warning(
-                "Invalid/NaN LSTM output for %s:%s; using technical+news signals",
-                market,
-                ticker,
-            )
+    if lstm_res is not None and lstm_res.status == "ok":
+        lstm_score = float(lstm_res.score or 0.0)
+        lstm_available = True
+        lstm_ret = lstm_res.prediction
+        lstm_conf = lstm_res.confidence
+        prob = getattr(lstm_res, "prediction", None)
+        lstm_prob = None
+        for expl in lstm_res.explanation:
+            if expl.startswith("P(up)"):
+                try:
+                    lstm_prob = float(expl.split("P(up)")[1].replace("%", "").strip()) / 100.0
+                except (ValueError, IndexError):
+                    lstm_prob = None
+        if not _is_finite(lstm_prob):
+            lstm_prob = None
 
     # ---- Model explainability: pass out fit metrics + version ----
     lstm_metrics: dict[str, float] = {}
     lstm_version = ""
-    if lstm_res is not None:
-        lstm_version = str(getattr(lstm_res, "model_version", "") or "")
-        for key in ("mse", "mae", "directional_accuracy"):
-            val = getattr(lstm_res, key, None)
-            # Prediction-path results leave these at 0.0 (never measured); only
-            # surface metrics that were actually computed by a training run.
-            if _is_finite(val) and float(val) != 0.0:
-                lstm_metrics[key] = round(float(val), 6)
 
     # ---- Signal 2: Technical (price) ----
     technical_score, technical_reasons = _normalize_price(price)
@@ -392,11 +413,29 @@ def build_verdict(
     # ---- Signal 3: News sentiment ----
     news_score, news_available = normalize_news_score(sentiment)
 
+    # ---- Signal 4: Social momentum ----
+    try:
+        social = signals.social_momentum_signal(ticker, "")
+    except Exception as exc:
+        logger.warning("Social momentum failed for %s: %s", ticker, exc)
+        social = signals.SignalResult("social_momentum", status="error", explanation=[f"social failed: {exc}"])
+    social_score = social.score if social.score is not None else 0.0
+    social_available = social.status == "ok" and social.score is not None
+
+    # ---- Signal 5: Market regime ----
+    try:
+        regime = signals.market_regime_signal(market)
+    except Exception as exc:
+        logger.warning("Market regime failed for %s: %s", market, exc)
+        regime = signals.SignalResult("market_regime", status="error", explanation=[f"regime failed: {exc}"])
+    regime_score = regime.score if regime.score is not None else 0.0
+    regime_available = regime.status == "ok" and regime.score is not None
+
     combined = combine_signals(
-        lstm_score,
+        quant_score,
         technical_score,
         news_score,
-        lstm_available,
+        quant_available,
         technical_available,
         news_available,
     )
@@ -404,38 +443,35 @@ def build_verdict(
 
     # Agreement statistics (for confidence + explanation).
     agree = opposing = 0
-    for s in (lstm_score, technical_score, news_score):
+    for s in (quant_score, technical_score, news_score):
         if not _is_finite(s) or abs(s) < _NEUTRAL_EPS:
             continue
         if (s > 0) == (combined > 0):
             agree += 1
         else:
             opposing += 1
-    any_signal = lstm_available or technical_available or news_available
+    any_signal = quant_available or technical_available or news_available
     agreement = _agreement_label(agree, opposing, any_signal)
 
     verdict_confidence = _verdict_confidence(
         combined,
-        lstm_score,
+        quant_score,
         technical_score,
         news_score,
-        lstm_available,
+        quant_available,
         technical_available,
         news_available,
     )
 
     # ---- Explainability: build the reason string ----
     reason_parts = [f"Forecast horizon: {FORECAST_HORIZON}"]
-    if lstm_available:
-        prob_str = f"{lstm_prob:.1%}" if lstm_prob is not None else "n/a"
-        ret_str = f"{lstm_ret:+.2%}" if lstm_ret is not None else "n/a"
-        conf_str = f"{lstm_conf:.0%}" if lstm_conf is not None else "n/a"
+    if quant_available:
         reason_parts.append(
-            f"LSTM: {_signal_label(lstm_score)} signal (P(Up) {prob_str}, "
-            f"predicted return {ret_str}, model confidence {conf_str})"
+            f"Quantitative: {_signal_label(quant_score)} (ensemble {quant_score:+.2f}, "
+            f"{len([m for m in models if m.status == 'ok'])} models)"
         )
     else:
-        reason_parts.append("LSTM: unavailable (technical + news signals only)")
+        reason_parts.append("Quantitative: unavailable (technical + news signals only)")
     reason_parts.append(
         f"Technical: {_signal_label(technical_score)} ({technical_score:+.2f})"
     )
@@ -446,9 +482,22 @@ def build_verdict(
         )
     else:
         reason_parts.append("News: unavailable")
+    if social_available:
+        reason_parts.append(f"Social: {_signal_label(social_score)} ({social_score:+.2f})")
+    if regime_available:
+        reason_parts.append(f"Regime: {_signal_label(regime_score)} ({regime_score:+.2f})")
     reason_parts.append(f"Signal agreement: {agreement}")
     reason_parts.append(f"Final score: {combined:+.2f}")
     reason_parts.append(f"Final verdict: {verdict}")
+
+    signals_payload = {
+        "quantitative": quant.as_dict(),
+        "models": [m.as_dict() for m in models],
+        "social": social.as_dict(),
+        "market_regime": regime.as_dict(),
+        "research": research,
+        "analyzed_at": signals._now_iso(),
+    }
 
     return Verdict(
         market=market,
@@ -473,6 +522,7 @@ def build_verdict(
         news_label=sentiment.label if sentiment is not None else None,
         forecast_horizon=FORECAST_HORIZON,
         signal_agreement=agreement,
+        signals_json=_json.dumps(signals_payload),
     )
 
 
@@ -522,6 +572,41 @@ def live_verdict(
 ) -> Verdict | None:
     """Compute (and store) a verdict for an arbitrary ticker on demand.
 
+    In-flight guarded per ``MARKET:TICKER``: if the same security is already
+    being analyzed (background refresh, dossier fresh path, watchlist add), this
+    reuses the in-flight result instead of running a duplicate expensive
+    analysis. Different securities still run concurrently.
+    """
+    key = f"{market_code.upper()}:{ticker.upper()}"
+    with _inflight_lock:
+        existing = _live_inflight.get(key)
+        if existing is not None:
+            return existing.result()  # await the running analysis (raises on failure)
+        future: Future = Future()
+        _live_inflight[key] = future
+    try:
+        result = _live_verdict_impl(
+            market_code, ticker, company, db_path=db_path, yahoo_symbol=yahoo_symbol
+        )
+        future.set_result(result)
+        return result
+    except BaseException as exc:
+        future.set_exception(exc)
+        raise
+    finally:
+        with _inflight_lock:
+            _live_inflight.pop(key, None)
+
+
+def _live_verdict_impl(
+    market_code: str,
+    ticker: str,
+    company: str = "",
+    db_path: str | None = None,
+    yahoo_symbol: str | None = None,
+) -> Verdict | None:
+    """Compute (and store) a verdict for an arbitrary ticker on demand.
+
     Used for watchlist items that may not be registered in the market config.
     Falls back to lexicon scoring if FinBERT is unavailable.
 
@@ -562,6 +647,7 @@ def live_verdict(
                 status_label(str(detail.get("status"))),
             )
             return None
+    df = None
     try:
         df = fetch_history(yahoo_symbol, period="6mo")
         price = build_price_state(market.code, ticker, df)
@@ -589,6 +675,7 @@ def live_verdict(
     if articles:
         scorer = default_scorer()
         scores: list = []
+        evidence: list[tuple[str, str, str, float]] = []
         for art in articles:
             text = f"{art.title} {art.summary}".strip()
             if not text:
@@ -598,6 +685,7 @@ def live_verdict(
             except Exception:
                 continue
             scores.append((result, art.source, art.published_at))
+            evidence.append((art.title, art.source, result.label, result.score))
             # Persist the article + its per-article sentiment so the News tab can
             # show the exact evidence that contributed to the aggregate score.
             try:
@@ -626,9 +714,46 @@ def live_verdict(
                 pass
         if scores:
             sentiment = aggregate_sentiment(scores)
+    else:
+        evidence = []
+
+    # Researcher: structure evidence (news + 13F + signal factors) into a brief.
+    from . import research as research_mod
+
+    research = None
+    try:
+        institutional_brief = None
+        try:
+            from .institutional import ticker_institutional
+
+            institutional_brief = ticker_institutional(ticker, db)
+        except Exception:
+            institutional_brief = None
+        news_score_brief = sentiment.score if sentiment is not None else None
+        news_label_brief = sentiment.label if sentiment is not None else ""
+        research = research_mod.build_brief(
+            ticker=ticker,
+            company=company or ticker,
+            exchange=market.name,
+            market=market.code,
+            currency=market.currency,
+            news_score=news_score_brief,
+            news_label=news_label_brief,
+            article_count=sentiment.article_count if sentiment is not None else 0,
+            evidence=evidence,
+            institutional=institutional_brief,
+        ).as_dict()
+    except Exception as exc:
+        logger.warning("Researcher failed for %s: %s", ticker, exc)
 
     verdict = build_verdict(
-        market.code, ticker, sentiment, price, yahoo_symbol=yahoo_symbol
+        market.code,
+        ticker,
+        sentiment,
+        price,
+        yahoo_symbol=yahoo_symbol,
+        history_df=df,
+        research=research,
     )
     db.insert_verdict(
         market=verdict.market,
@@ -644,6 +769,46 @@ def live_verdict(
         lstm_predicted_return=verdict.lstm_predicted_return,
         lstm_confidence=verdict.lstm_confidence,
         technical_score=verdict.technical_score,
+        signals=verdict.signals_json,
     )
+    # Register the security in the canonical universe with its data status so a
+    # security with missing data stays discoverable (never silently dropped).
+    try:
+        import json as _json
+
+        from .universe import register
+
+        analyzed = ""
+        if verdict.signals_json:
+            try:
+                analyzed = _json.loads(verdict.signals_json).get("analyzed_at", "")
+            except (ValueError, TypeError):
+                analyzed = ""
+        is_configured = ticker in market.tickers
+        data_status = "ok" if (verdict.price is not None or verdict.news_available) else "no_data"
+        register(
+            db,
+            market.code,
+            ticker,
+            symbol=yahoo_symbol,
+            company=company or ticker,
+            exchange=market.name,
+            currency=market.currency,
+            source="configured" if is_configured else "discovered",
+            data_status=data_status,
+            last_analysis_at=analyzed,
+        )
+    except Exception:
+        pass
+    # Record an immutable decision snapshot for the paper research engine.
+    try:
+        from .analysis import apply_canonical
+        from .paper import record_decision_snapshot
+
+        vdict = verdict.as_dict()
+        apply_canonical(vdict)
+        record_decision_snapshot(db, market.code, ticker, vdict)
+    except Exception as exc:
+        logger.warning("Decision snapshot failed for %s:%s: %s", market.code, ticker, exc)
     logger.info("live_verdict: %s:%s -> %s", market.code, ticker, verdict.verdict)
     return verdict

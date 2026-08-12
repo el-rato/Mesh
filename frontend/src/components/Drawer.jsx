@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchJSON, CHART_RANGES, rangeLabel, dossier } from "../api.js";
 import { useApp } from "../App.jsx";
 import PriceChart from "./PriceChart.jsx";
+import AddToPortfolioButton from "./AddToPortfolioButton.jsx";
 import { verdictBadge, reasonText, RefreshStatus } from "./ui.jsx";
 
 function sigCls(state) {
@@ -23,11 +24,19 @@ function num(v, def = 0) {
 /* ---------------- Analysis workspace ---------------- */
 
 function DossierHeader({ dossierData, v }) {
-  const { refreshStatus } = useApp();
+  const { refreshStatus, openPaperTicket } = useApp();
   const verdict = dossierData.verdict || {};
   const inst = dossierData.instrument || {};
   const conf = verdict.confidence == null ? "N/A" : `${(num(verdict.confidence) * 100).toFixed(0)}%`;
-  const score = verdict.combined_score == null ? "N/A" : `${num(verdict.combined_score) > 0 ? "+" : ""}${num(verdict.combined_score).toFixed(3)}`;
+  const openTicket = (action) =>
+    openPaperTicket({
+      market: inst.market || v.market,
+      ticker: inst.ticker || v.ticker,
+      symbol: inst.symbol || "",
+      company: inst.company || v.company || "",
+      action,
+      decision: verdict.decision || null,
+    });
   return (
     <div className="dossier-header">
       <div>
@@ -37,17 +46,16 @@ function DossierHeader({ dossierData, v }) {
       <div className="dossier-header-right">
         <span className="dossier-mkt">{inst.market || v.market} · {inst.quote_type || "EQUITY"}</span>
         {verdictBadge(verdict)}
+        <AddToPortfolioButton market={inst.market || v.market} ticker={inst.ticker || v.ticker} company={inst.company || v.company} />
+        <button className="paper-buy" onClick={() => openTicket("BUY")} title="Open paper order ticket">BUY</button>
+        <button className="paper-short" onClick={() => openTicket("SHORT")} title="Open paper order ticket">SHORT</button>
         <RefreshStatus status={refreshStatus} />
       </div>
       <div className="dossier-header-meta">
-        CONFIDENCE <strong>{conf}</strong> · SCORE <strong>{score}</strong> · AGREEMENT <strong>{String(verdict.signal_agreement || "unknown").toUpperCase()}</strong>
+        CONFIDENCE <strong>{conf}</strong>
         {dossierData.stale && <span className="stale-flag">STALE</span>}
+        {dossierData.computed_at && <span className="dim"> · ANALYZED {String(dossierData.computed_at).slice(11, 19)}</span>}
       </div>
-      {dossierData.computed_at && (
-        <div className={`dossier-stale ${dossierData.fresh ? "fresh" : ""}`}>
-          {dossierData.stale ? "STALE · " : ""}ANALYZED {String(dossierData.computed_at).slice(0, 19).replace("T", " ")}
-        </div>
-      )}
     </div>
   );
 }
@@ -100,7 +108,12 @@ function ChartSection({ dossierData }) {
 
 function QuoteSection({ dossierData }) {
   const verdict = dossierData.verdict || {};
+  const decision = verdict.decision || {};
   const price = verdict.price || {};
+  const signals = decision.signals || {};
+  const availSignals = Object.values(signals).filter((s) => s.status === "AVAILABLE");
+  const aligned = availSignals.filter((s) => s.direction === decision.verdict).length;
+  const coverage = `${availSignals.length}/${Object.keys(signals).length || 0}`;
   const rows = [
     ["CLOSE", num(price.close).toFixed(2)], ["OPEN", num(price.open).toFixed(2)],
     ["HIGH", num(price.high).toFixed(2)], ["LOW", num(price.low).toFixed(2)],
@@ -110,12 +123,43 @@ function QuoteSection({ dossierData }) {
   ];
   return (
     <div className="quote-section">
-      <h3>STOCK INFORMATION</h3>
-      <div className="quote-grid">
-        {rows.map(([key, value]) => <div className="quote-cell" key={key}><span>{key}</span><strong>{value}</strong></div>)}
-      </div>
-      <h3>VERDICT</h3>
-      <div className="dossier-summary">{reasonText(verdict.reason) || "No additional explanation available."}</div>
+      {decision.status === "ok" ? (
+        <>
+          <div className="decision-primary">
+            <div className="decision-verdict">
+              <span className={`badge ${sigCls(decision.verdict)}`}>{decision.verdict}</span>
+              <span className="decision-conviction">{decision.conviction != null ? Math.round(decision.conviction * 100) : "—"} CONVICTION</span>
+            </div>
+            <div className="decision-agreement">{aligned}/{availSignals.length} SIGNALS ALIGNED · DATA {coverage}</div>
+          </div>
+          {decision.thesis && <div className="decision-thesis">{decision.thesis}</div>}
+          {decision.primary_risks?.[0] && (
+            <div className="decision-line"><span className="lbl">KEY RISK</span>{decision.primary_risks[0]}</div>
+          )}
+          {decision.key_disagreement && (
+            <div className="decision-line"><span className="lbl">DISAGREEMENT</span>{decision.key_disagreement}</div>
+          )}
+          {decision.view_changes_if && (
+            <div className="decision-line dim"><span className="lbl">VIEW CHANGES IF</span>{decision.view_changes_if}</div>
+          )}
+        </>
+      ) : (
+        <div className="decision-primary">
+          <span className={`badge neutral`}>NO DECISION</span>
+          <div className="decision-agreement">DATA {coverage} · VERDICT {String(verdict.verdict || "N/A")}</div>
+        </div>
+      )}
+
+      <details className="paper-detail">
+        <summary>QUOTE &amp; PRICE</summary>
+        <div className="quote-grid">
+          {rows.map(([key, value]) => <div className="quote-cell" key={key}><span>{key}</span><strong>{value}</strong></div>)}
+        </div>
+      </details>
+      <details className="paper-detail">
+        <summary>FULL REASONING</summary>
+        <div className="dossier-summary">{reasonText(verdict.reason) || "No additional explanation available."}</div>
+      </details>
     </div>
   );
 }
@@ -131,24 +175,72 @@ function vRange(inst) {
 
 /* ---------------- Investment Committee ---------------- */
 
+function QuantDetail({ signal }) {
+  const [open, setOpen] = useState(true);
+  const models = signal?.models || [];
+  return (
+    <>
+      <div className="team-row" onClick={() => setOpen((v) => !v)} style={{ cursor: "pointer" }}>
+        <span className="team-label">QUANTITATIVE <span className="expand">{open ? "−" : "+"}</span></span>
+        <StateBadge state={signal.state} />
+        <span className="team-value">{signal.score == null ? "N/A" : `${signal.score > 0 ? "+" : ""}${signal.score.toFixed(2)}`}</span>
+        <span className="team-value">{signal.confidence == null ? "N/A" : `${(signal.confidence * 100).toFixed(0)}%`}</span>
+        <span className="team-value">{(signal.weight * 100).toFixed(0)}%</span>
+        <span className="team-value">{signal.contribution == null ? "N/A" : `${signal.contribution > 0 ? "+" : ""}${signal.contribution.toFixed(2)}`}</span>
+      </div>
+      {open && (
+        <div className="team-models">
+          {(models.length ? models : []).map((m) => (
+            <div className="team-model" key={m.model_name}>
+              <span className="tm-name">{m.model_name.toUpperCase()}</span>
+              {m.status === "ok" ? (
+                <>
+                  <span className="tm-dir">{m.direction || "NEUTRAL"}</span>
+                  <span className="tm-score">{m.score == null ? "—" : (m.score > 0 ? "+" : "") + m.score.toFixed(2)}</span>
+                  <span className="tm-conf">{m.confidence == null ? "—" : (m.confidence * 100).toFixed(0) + "%"}</span>
+                </>
+              ) : (
+                <span className="tm-na">{m.status === "no_data" ? "NO DATA" : "UNAVAILABLE"}</span>
+              )}
+            </div>
+          ))}
+          {signal.available && (
+            <div className="team-model ensemble">
+              <span className="tm-name">ENSEMBLE</span>
+              <span className="tm-dir">{signal.direction}</span>
+              <span className="tm-score">{signal.score == null ? "—" : (signal.score > 0 ? "+" : "") + signal.score.toFixed(2)}</span>
+              <span className="tm-conf">{signal.confidence == null ? "—" : (signal.confidence * 100).toFixed(0) + "%"}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function CommitteeSection({ committee }) {
   const confidence = committee.confidence == null ? "N/A" : `${(Number(committee.confidence) * 100).toFixed(0)}%`;
   const score = committee.score == null ? "N/A" : `${committee.score > 0 ? "+" : ""}${Number(committee.score).toFixed(2)}`;
+  const quant = (committee.signals || []).find((s) => s.key === "quant");
   return (
     <div className="team">
       <div className="team-head">
         <span>SIGNAL</span><span>DIRECTION</span><span>SCORE</span><span>CONF.</span><span>WEIGHT</span><span>CONTRIB.</span>
       </div>
-      {(committee.signals || []).map((s) => (
-        <div className={`team-row ${s.available ? "" : "na"}`} key={s.key}>
-          <span className="team-label">{s.label}</span>
-          <StateBadge state={s.state} />
-          <span className="team-value">{s.score == null ? "N/A" : `${s.score > 0 ? "+" : ""}${s.score.toFixed(2)}`}</span>
-          <span className="team-value">{s.confidence == null ? "N/A" : `${(s.confidence * 100).toFixed(0)}%`}</span>
-          <span className="team-value">{(s.weight * 100).toFixed(0)}%</span>
-          <span className="team-value">{s.contribution == null ? "N/A" : `${s.contribution > 0 ? "+" : ""}${s.contribution.toFixed(2)}`}</span>
-        </div>
-      ))}
+      {(committee.signals || []).map((s) =>
+        s.key === "quant" ? (
+          <QuantDetail signal={s} key={s.key} />
+        ) : (
+          <div className={`team-row ${s.available ? "" : "na"}`} key={s.key}>
+            <span className="team-label">{s.label}</span>
+            <StateBadge state={s.state} />
+            <span className="team-value">{s.score == null ? "N/A" : `${s.score > 0 ? "+" : ""}${s.score.toFixed(2)}`}</span>
+            <span className="team-value">{s.confidence == null ? "N/A" : `${(s.confidence * 100).toFixed(0)}%`}</span>
+            <span className="team-value">{(s.weight * 100).toFixed(0)}%</span>
+            <span className="team-value">{s.contribution == null ? "N/A" : `${s.contribution > 0 ? "+" : ""}${s.contribution.toFixed(2)}`}</span>
+          </div>
+        )
+      )}
       <div className="team-row final">
         <span className="team-label">FINAL</span>
         <StateBadge state={committee.verdict} />
@@ -160,7 +252,7 @@ function CommitteeSection({ committee }) {
         {(committee.why || []).map((reason, i) => <div key={i}>• {reason}</div>)}
       </div>
       <div className="team-note">
-        MISSING SIGNALS ARE EXCLUDED · INSTITUTIONAL = AGGREGATED 13F ACTIVITY WHEN AVAILABLE
+        MISSING SIGNALS ARE EXCLUDED · QUANTITATIVE = ENSEMBLE OF AVAILABLE MODELS
       </div>
     </div>
   );
@@ -202,36 +294,69 @@ function FactorList({ factors }) {
 /* ---------------- Model ---------------- */
 
 function ModelSection({ verdict }) {
+  const quant = verdict.quantitative || {};
+  const models = verdict.models || [];
   const lstm = verdict.lstm || {};
   const prob = lstm.probability_up;
   const isUp = num(prob, 0.5) >= 0.5;
   const metrics = lstm.metrics || {};
-  const rows = [
-    ["P(UP)", prob != null ? <span key="p" style={{ color: isUp ? "var(--bull)" : "var(--bear)" }}>{(num(prob) * 100).toFixed(1)}%</span> : "N/A"],
-    ["PREDICTED RETURN", lstm.predicted_return != null ? <span key="r" className={isUp ? "up" : "down"}>{num(lstm.predicted_return) > 0 ? "+" : ""}{(num(lstm.predicted_return) * 100).toFixed(2)}%</span> : "N/A"],
-    ["MODEL CONFIDENCE", lstm.model_confidence != null ? num(lstm.model_confidence).toFixed(3) : "N/A"],
-    ["LSTM SCORE", num(lstm.score).toFixed(3)],
+  const availableModels = models.filter((m) => m.status === "ok");
+  const quantRows = [
+    ["ENSEMBLE", quant.status === "ok" ? `${quant.direction || "NEUTRAL"} · ${quant.score != null ? (quant.score > 0 ? "+" : "") + quant.score.toFixed(3) : "n/a"} · ${quant.confidence != null ? (quant.confidence * 100).toFixed(0) + "%" : "n/a"}` : "UNAVAILABLE"],
+    ["MODELS AVAILABLE", `${availableModels.length}/${models.length}`],
     ["FORECAST HORIZON", verdict.forecast_horizon || "1 trading day"],
-    ["MODEL VERSION", lstm.model_version || "N/A"],
-    ...Object.entries(metrics).map(([k, v2]) => [k.toUpperCase().replace(/_/g, " "), v2]),
   ];
   return (
     <div className="model">
-      <h3>LSTM PRICE MODEL — OUTPUT</h3>
+      <h3>QUANTITATIVE MODEL — ENSEMBLE</h3>
       <div className="dossier-rows">
-        {rows.map(([k, val]) => (
+        {quantRows.map(([k, val]) => (
           <div className="row" key={k}>
             <span className="label">{k}</span>
             <span className="value">{val}</span>
           </div>
         ))}
       </div>
-      <div className="conf-bar" style={{ margin: "8px 0" }}>
-        <span style={{ width: Math.round(num(prob, 0) * 100) + "%", background: isUp ? "var(--bull)" : "var(--bear)" }} />
+      <h3>MODELS</h3>
+      <div className="team-models">
+        {models.length ? (
+          models.map((m) => (
+            <div className="team-model" key={m.model_name}>
+              <span className="tm-name">{m.model_name.toUpperCase()}</span>
+              {m.status === "ok" ? (
+                <>
+                  <span className="tm-dir">{m.direction || "NEUTRAL"}</span>
+                  <span className="tm-score">{m.score == null ? "—" : (m.score > 0 ? "+" : "") + m.score.toFixed(2)}</span>
+                  <span className="tm-conf">{m.confidence == null ? "—" : (m.confidence * 100).toFixed(0) + "%"}</span>
+                </>
+              ) : (
+                <span className="tm-na">{m.status === "no_data" ? "NO DATA" : "UNAVAILABLE"}</span>
+              )}
+            </div>
+          ))
+        ) : (
+          <div className="team-model"><span className="tm-na">NO MODELS AVAILABLE</span></div>
+        )}
+      </div>
+      <h3>LSTM DETAIL</h3>
+      <div className="dossier-rows">
+        {[
+          ["P(UP)", prob != null ? <span key="p" style={{ color: isUp ? "var(--bull)" : "var(--bear)" }}>{(num(prob) * 100).toFixed(1)}%</span> : "N/A"],
+          ["PREDICTED RETURN", lstm.predicted_return != null ? <span key="r" className={isUp ? "up" : "down"}>{num(lstm.predicted_return) > 0 ? "+" : ""}{(num(lstm.predicted_return) * 100).toFixed(2)}%</span> : "N/A"],
+          ["MODEL CONFIDENCE", lstm.model_confidence != null ? num(lstm.model_confidence).toFixed(3) : "N/A"],
+          ["LSTM SCORE", num(lstm.score).toFixed(3)],
+          ["MODEL VERSION", lstm.model_version || "N/A"],
+          ...Object.entries(metrics).map(([k, v2]) => [k.toUpperCase().replace(/_/g, " "), v2]),
+        ].map(([k, val]) => (
+          <div className="row" key={k}>
+            <span className="label">{k}</span>
+            <span className="value">{val}</span>
+          </div>
+        ))}
       </div>
       <div className="model-disclaimer">
-        PROBABILISTIC MODEL — NOT FINANCIAL ADVICE. MODEL CONFIDENCE ≠ PROBABILITY OF PROFIT.
-        PREDICTIONS ARE ESTIMATES BASED ON HISTORICAL PRICE PATTERNS AND CAN BE WRONG.
+        PROBABILISTIC MODELS — NOT FINANCIAL ADVICE. MODEL CONFIDENCE ≠ PROBABILITY OF PROFIT.
+        PREDICTIONS ARE ESTIMATES AND CAN BE WRONG. MODELS ARE WEIGHTED BY AVAILABILITY.
       </div>
     </div>
   );

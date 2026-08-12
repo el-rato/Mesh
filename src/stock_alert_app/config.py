@@ -104,6 +104,63 @@ class Settings:
         default_factory=lambda: _env_float("STOCK_ALERT_PRICE_WEIGHT", 0.4)
     )
 
+    # Quantitative ensemble weights (per model). Calibratable later using
+    # historical out-of-sample performance; LSTM is not hardcoded as dominant.
+    model_weight_lstm: float = field(
+        default_factory=lambda: _env_float("STOCK_ALERT_MODEL_WEIGHT_LSTM", 0.40)
+    )
+    model_weight_gbm: float = field(
+        default_factory=lambda: _env_float("STOCK_ALERT_MODEL_WEIGHT_GBM", 0.30)
+    )
+    model_weight_momentum: float = field(
+        default_factory=lambda: _env_float("STOCK_ALERT_MODEL_WEIGHT_MOMENTUM", 0.30)
+    )
+
+    # Investment Committee signal weights.
+    quant_weight: float = field(
+        default_factory=lambda: _env_float("STOCK_ALERT_QUANT_WEIGHT", 0.55)
+    )
+    social_weight: float = field(
+        default_factory=lambda: _env_float("STOCK_ALERT_SOCIAL_WEIGHT", 0.05)
+    )
+    social_cache_ttl: int = field(
+        default_factory=lambda: _env_int("STOCK_ALERT_SOCIAL_CACHE_TTL", 1800)
+    )
+
+    # Paper trading (simulation only) — no real brokerage ever.
+    paper_starting_cash: float = field(
+        default_factory=lambda: _env_float("STOCK_ALERT_PAPER_CASH", 100000.0)
+    )
+    paper_commission: float = field(
+        default_factory=lambda: _env_float("STOCK_ALERT_PAPER_COMMISSION", 1.0)
+    )
+    paper_slippage: float = field(
+        default_factory=lambda: _env_float("STOCK_ALERT_PAPER_SLIPPAGE", 0.0005)
+    )
+    # Simple simulated risk rules (assumptions).
+    paper_max_gross_ratio: float = field(
+        default_factory=lambda: _env_float("STOCK_ALERT_PAPER_MAX_GROSS", 2.0)
+    )
+    paper_max_position_ratio: float = field(
+        default_factory=lambda: _env_float("STOCK_ALERT_PAPER_MAX_POSITION", 0.5)
+    )
+    paper_short_margin: float = field(
+        default_factory=lambda: _env_float("STOCK_ALERT_PAPER_SHORT_MARGIN", 1.0)
+    )
+    paper_min_stats: int = field(
+        default_factory=lambda: _env_int("STOCK_ALERT_PAPER_MIN_STATS", 3)
+    )
+    # Intraday session window (local clock; used for display + end-of-session).
+    paper_session_start: str = field(default_factory=lambda: os.getenv("STOCK_ALERT_PAPER_SESSION_START", "09:30"))
+    paper_session_end: str = field(default_factory=lambda: os.getenv("STOCK_ALERT_PAPER_SESSION_END", "16:00"))
+    # Demo competitors are clearly labelled simulated accounts.
+    paper_demo_players: bool = field(
+        default_factory=lambda: os.getenv("STOCK_ALERT_PAPER_DEMO", "1") != "0"
+    )
+    regime_weight: float = field(
+        default_factory=lambda: _env_float("STOCK_ALERT_REGIME_WEIGHT", 0.05)
+    )
+
     # Verdict thresholds applied to the combined score in [-1, +1].
     bull_threshold: float = field(
         default_factory=lambda: _env_float("STOCK_ALERT_BULL_THRESHOLD", 0.25)

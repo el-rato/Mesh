@@ -3,15 +3,22 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from .config import settings
+
 #: Thresholds mirroring verdict._signal_label so committee rows and verdict
 #: reasons agree with each other.
 _NEUTRAL_BAND = 0.05
-_SIGNAL_WEIGHTS = {
-    "quant": 0.60,
-    "technical": 0.25,
-    "news": 0.15,
-    "institutional": 0.10,
-}
+
+
+def _signal_weights() -> dict[str, float]:
+    """Centralized Investment Committee signal weights (configurable)."""
+    return {
+        "quant": settings.quant_weight,
+        "technical": settings.technical_weight,
+        "news": settings.news_weight,
+        "social": settings.social_weight,
+        "regime": settings.regime_weight,
+    }
 
 
 def _is_finite(value: Any) -> bool:
@@ -41,60 +48,50 @@ def signal_state(score: Any) -> str:
     return "NEUTRAL"
 
 
-def _inst_state(inst: dict[str, Any] | None) -> str | None:
-    """Institutional stance from real 13F data; None when unavailable."""
-    if not inst:
-        return None
-    buys = _num(inst.get("buy_count"))
-    sells = _num(inst.get("sell_count"))
-    if buys > sells:
-        return "BULL"
-    if sells > buys:
-        return "BEAR"
-    return "NEUTRAL"
-
-
 def committee_signals(
     verdict: dict[str, Any] | None,
-    institutional: dict[str, Any] | None,
+    institutional: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Compact investment-committee signal table built from stored verdict data.
+    """Investment Committee over generic signals.
 
-    ``verdict`` may come from a live ``Verdict.as_dict()`` or a DB row mapped to
-    the same shape. Every signal is derived from real scores; nothing is
-    invented, and unavailable signals are marked ``N/A``.
+    Consumes Quantitative (ensemble), Technical, News, Social Momentum and
+    Market Regime signals. Missing signals are excluded from the weighted
+    aggregation (never a neutral vote); conflicting signals reduce conviction.
     """
     v = verdict or {}
-    lstm = v.get("lstm") or {}
     technical = v.get("technical") or {}
 
-    lstm_score = _num(lstm.get("score"))
-    lstm_available = _is_finite(lstm.get("score")) and (
-        lstm.get("score") != 0.0 or _is_finite(lstm.get("probability_up"))
-    )
-    lstm_confidence = lstm.get("model_confidence")
+    quant = v.get("quantitative") or {}
+    quant_score = _num(quant.get("score"))
+    quant_available = quant.get("status") == "ok" and _is_finite(quant.get("score"))
+    quant_confidence = quant.get("confidence")
+    models = v.get("models") or []
+
     technical_score = _num(technical.get("score"))
     technical_available = bool(technical.get("available", v.get("price") is not None)) and _is_finite(technical.get("score"))
+
     news_available = bool(v.get("news_available")) and _is_finite(v.get("news_score"))
     news_score = _num(v.get("news_score"))
     news_data = v.get("news") or {}
     news_confidence = news_data.get("confidence", news_data.get("avg_confidence"))
 
-    inst_score = 0.0
-    inst_available = False
-    if institutional:
-        buys = _num(institutional.get("buy_count"))
-        sells = _num(institutional.get("sell_count"))
-        activity = buys + sells
-        if activity > 0:
-            inst_score = _clamp((buys - sells) / activity)
-            inst_available = True
+    social = v.get("social") or {}
+    social_score = _num(social.get("score"))
+    social_available = social.get("status") == "ok" and _is_finite(social.get("score"))
+    social_confidence = social.get("confidence")
 
+    regime = v.get("market_regime") or {}
+    regime_score = _num(regime.get("score"))
+    regime_available = regime.get("status") == "ok" and _is_finite(regime.get("score"))
+    regime_confidence = regime.get("confidence")
+
+    weights = _signal_weights()
     specs = [
-        ("quant", "QUANT/LSTM", lstm_score, lstm_confidence, lstm_available),
+        ("quant", "QUANTITATIVE", quant_score, quant_confidence, quant_available),
         ("technical", "TECHNICAL", technical_score, technical.get("confidence"), technical_available),
         ("news", "NEWS", news_score, news_confidence, news_available),
-        ("institutional", "INSTITUTIONAL", inst_score, None, inst_available),
+        ("social", "SOCIAL MOMENTUM", social_score, social_confidence, social_available),
+        ("regime", "MARKET REGIME", regime_score, regime_confidence, regime_available),
     ]
     signals: list[dict[str, Any]] = []
     denominator = 0.0
@@ -104,7 +101,7 @@ def committee_signals(
         if available:
             confidence = _num(explicit_confidence, abs(score))
             confidence = max(0.0, min(1.0, confidence))
-            weight = _SIGNAL_WEIGHTS[key]
+            weight = weights[key]
             effective = confidence * weight
             denominator += effective
             numerator += score * effective
@@ -112,7 +109,7 @@ def committee_signals(
             direction = signal_state(score)
         else:
             confidence = None
-            weight = _SIGNAL_WEIGHTS[key]
+            weight = weights[key]
             direction = "N/A"
         signals.append(
             {
@@ -125,6 +122,7 @@ def committee_signals(
                 "confidence": round(confidence, 4) if confidence is not None else None,
                 "weight": weight,
                 "contribution": None,
+                "models": models if key == "quant" else None,
             }
         )
 
@@ -201,15 +199,24 @@ def bull_bear_factors(
     bull: list[str] = []
     bear: list[str] = []
 
-    # ---- LSTM ----
-    lstm_score = _num(lstm.get("score"))
-    prob = lstm.get("probability_up")
-    ret = lstm.get("predicted_return")
-    if _is_finite(lstm_score) and abs(lstm_score) > _NEUTRAL_BAND:
-        prob_s = f"{_pct(prob)}" if _is_finite(prob) else "n/a"
-        ret_s = f"{_pct(ret, signed=True)}" if _is_finite(ret) else "n/a"
-        text = f"LSTM predicts upside (P(up) {prob_s}, predicted return {ret_s})" if lstm_score > 0 else f"LSTM predicts downside (P(up) {prob_s}, predicted return {ret_s})"
-        (bull if lstm_score > 0 else bear).append(text)
+    # ---- Quantitative ensemble (prefer it; fall back to the LSTM block) ----
+    quant = v.get("quantitative") or {}
+    quant_score = _num(quant.get("score"))
+    if quant.get("status") == "ok" and _is_finite(quant.get("score")) and abs(quant_score) > _NEUTRAL_BAND:
+        models = v.get("models") or []
+        available = [m for m in models if m.get("status") == "ok"]
+        detail = f"({len(available)} models)" if available else ""
+        text = f"Quantitative model predicts upside {detail}" if quant_score > 0 else f"Quantitative model predicts downside {detail}"
+        (bull if quant_score > 0 else bear).append(text)
+    else:
+        lstm_score = _num(lstm.get("score"))
+        prob = lstm.get("probability_up")
+        ret = lstm.get("predicted_return")
+        if _is_finite(lstm_score) and abs(lstm_score) > _NEUTRAL_BAND:
+            prob_s = f"{_pct(prob)}" if _is_finite(prob) else "n/a"
+            ret_s = f"{_pct(ret, signed=True)}" if _is_finite(ret) else "n/a"
+            text = f"Quantitative model predicts upside (P(up) {prob_s}, predicted return {ret_s})" if lstm_score > 0 else f"Quantitative model predicts downside (P(up) {prob_s}, predicted return {ret_s})"
+            (bull if lstm_score > 0 else bear).append(text)
 
     # ---- Technical / price ----
     if _is_finite(price.get("momentum_20")):
@@ -250,6 +257,24 @@ def bull_bear_factors(
         elif news_score < -0.15:
             bear.append(f"Negative news sentiment ({label}{count_s})")
 
+    # ---- Social momentum ----
+    social = v.get("social") or {}
+    if social.get("status") == "ok" and _is_finite(social.get("score")):
+        s_score = _num(social.get("score"))
+        if s_score > _NEUTRAL_BAND:
+            bull.append("Rising social attention / positive discussion")
+        elif s_score < -_NEUTRAL_BAND:
+            bear.append("Fading social attention / negative discussion")
+
+    # ---- Market regime ----
+    regime = v.get("market_regime") or {}
+    if regime.get("status") == "ok" and _is_finite(regime.get("score")):
+        r_score = _num(regime.get("score"))
+        if r_score > _NEUTRAL_BAND:
+            bull.append("Market regime supportive (index uptrend)")
+        elif r_score < -_NEUTRAL_BAND:
+            bear.append("Market regime unfavorable (index downtrend)")
+
     # ---- Institutional (real 13F activity only) ----
     if institutional:
         buys = int(_num(institutional.get("buy_count")))
@@ -260,3 +285,130 @@ def bull_bear_factors(
             bear.append(f"{sells} tracked funds trimming positions")
 
     return {"bull": bull, "bear": bear}
+
+
+def _thesis(signals: dict[str, Any], verdict: str | None) -> str:
+    parts = []
+    for key in ("quant", "technical", "news", "social", "regime"):
+        s = signals.get(key)
+        if s and s.get("available") and s.get("state") in ("BULL", "BEAR"):
+            parts.append(f"{s['label'].lower()} {s['state'].lower()}")
+    if not parts:
+        return "Insufficient evidence to form a clear thesis."
+    return f"Primary evidence ({'; '.join(parts)}) supports a {verdict} outlook."
+
+
+def _key_disagreement(signals: dict[str, Any]) -> str | None:
+    bulls = [
+        s["label"] for s in signals.values()
+        if s.get("available") and s.get("state") == "BULL"
+    ]
+    bears = [
+        s["label"] for s in signals.values()
+        if s.get("available") and s.get("state") == "BEAR"
+    ]
+    if bulls and bears:
+        return f"{bulls[0].title()} is bullish while {bears[0].title()} is bearish."
+    return None
+
+
+def _view_changes_if(signals: dict[str, Any], verdict: str | None) -> str:
+    if verdict not in ("BULL", "BEAR"):
+        return "No clear invalidation condition without a directional view."
+    opposite = "BEAR" if verdict == "BULL" else "BULL"
+    opposing = [
+        s for s in signals.values()
+        if s.get("available") and s.get("state") == opposite
+    ]
+    if opposing:
+        label = opposing[0]["label"].lower()
+        return f"View would weaken if {label} strengthens against the {verdict.lower()} case."
+    return f"View requires {verdict.lower()} signals to persist; watch for a shift in the strongest evidence."
+
+
+def _signal_status(key: str, v: dict[str, Any], available: bool) -> str:
+    """Explicit signal status (AVAILABLE / NO_DATA / ERROR), never inferred NEUTRAL."""
+    if available:
+        return "AVAILABLE"
+    if key == "quant":
+        st = (v.get("quantitative") or {}).get("status")
+    elif key == "social":
+        st = (v.get("social") or {}).get("status")
+    elif key == "regime":
+        st = (v.get("market_regime") or {}).get("status")
+    else:
+        st = None
+    if st == "error":
+        return "ERROR"
+    return "NO_DATA"
+
+
+def committee_decision(v: dict[str, Any] | None) -> dict[str, Any]:
+    """Structured committee decision (thesis, cases, risks, catalysts, view-change).
+
+    Deterministic and derived only from real signals/research; no fabricated
+    precision. Missing signals are excluded; conflicts reduce conviction.
+    Each signal carries an explicit status (AVAILABLE / NO_DATA / ERROR /
+    STALE / DISABLED) so a missing signal is never mistaken for a neutral vote.
+    """
+    v = v or {}
+    committee = v.get("committee") or committee_signals(v, None)
+    factors = v.get("factors") or bull_bear_factors(v, None)
+    research = v.get("research") or {}
+    signals = {s["key"]: s for s in committee.get("signals", [])}
+    verdict = committee.get("verdict")
+
+    bull_case = list(factors.get("bull", [])) + list(research.get("bull_evidence") or [])
+    bear_case = list(factors.get("bear", [])) + list(research.get("bear_evidence") or [])
+    risks = list(factors.get("bear", [])) + list(research.get("risks") or [])
+    catalysts = list(research.get("catalysts") or [])
+
+    contributing = [
+        {
+            "key": k,
+            "label": s["label"],
+            "direction": s.get("state"),
+            "score": s.get("score"),
+            "confidence": s.get("confidence"),
+            "status": _signal_status(k, v, s.get("available")),
+            "available": bool(s.get("available")),
+        }
+        for k, s in signals.items()
+    ]
+
+    security_id = f"{v.get('market') or ''}:{v.get('ticker') or ''}"
+    signal_map = {}
+    for key, canonical in (
+        ("quant", "quantitative"),
+        ("technical", "technical"),
+        ("news", "news"),
+        ("social", "social_momentum"),
+        ("regime", "market_regime"),
+    ):
+        s = signals.get(key) or {}
+        signal_map[canonical] = {
+            "status": _signal_status(key, v, s.get("available")),
+            "direction": s.get("state"),
+            "score": s.get("score"),
+            "confidence": s.get("confidence"),
+            "weight": s.get("weight"),
+        }
+
+    return {
+        "security_id": security_id,
+        "verdict": verdict,
+        "conviction": committee.get("confidence"),
+        "thesis": _thesis(signals, verdict),
+        "bull_case": bull_case[:10],
+        "bear_case": bear_case[:10],
+        "key_disagreement": _key_disagreement(signals),
+        "primary_risks": risks[:10],
+        "catalysts": catalysts[:10],
+        "view_changes_if": _view_changes_if(signals, verdict),
+        "contributing_signals": contributing,
+        "signals": signal_map,
+        "research_confidence": research.get("confidence"),
+        "research_status": research.get("status", "no_data"),
+        "decision_timestamp": v.get("decided_at") or research.get("analyzed_at") or "",
+        "status": "ok" if verdict not in (None, "N/A") else "no_data",
+    }
