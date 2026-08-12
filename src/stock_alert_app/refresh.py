@@ -79,6 +79,7 @@ def run_fast_refresh(db: Database) -> dict[str, object]:
 
 def run_slow_refresh(db: Database) -> dict[str, object]:
     """Re-run the full verdict pipeline for stale symbols only (LSTM + news)."""
+    from .resolve import resolve_for_fetch
     from .verdict import live_verdict
 
     cutoff = (datetime.now(UTC) - timedelta(seconds=settings.scanner_refresh_slow)).isoformat()
@@ -89,14 +90,20 @@ def run_slow_refresh(db: Database) -> dict[str, object]:
         if row is None or row.get("decided_at", "") < cutoff:
             stale.append((market, ticker, company, ysymbol))
 
-    analyzed = failed = 0
+    analyzed = failed = skipped = 0
     for market, ticker, company, ysymbol in stale[: settings.scanner_refresh_batch]:
         key = (market, ticker.upper())
         if key in _in_flight:
             continue
+        # Validate the symbol first so expensive LSTM/news work is never run
+        # against known-invalid or temporarily unavailable securities.
+        resolved = resolve_for_fetch(market, ticker, company)
+        if not resolved:
+            skipped += 1
+            continue
         _in_flight.add(key)
         try:
-            verdict = live_verdict(market, ticker, company, yahoo_symbol=ysymbol)
+            verdict = live_verdict(market, ticker, company, yahoo_symbol=resolved)
             if verdict is not None:
                 analyzed += 1
         except Exception as exc:
@@ -107,6 +114,7 @@ def run_slow_refresh(db: Database) -> dict[str, object]:
     return {
         "analyzed": analyzed,
         "failed": failed,
+        "skipped": skipped,
         "pending": max(0, len(stale) - settings.scanner_refresh_batch),
     }
 

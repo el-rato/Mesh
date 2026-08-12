@@ -48,10 +48,6 @@ class PriceState:
         }
 
 
-def full_symbol(market_code: str, symbol: str, suffix: str = "") -> str:
-    return symbol + suffix
-
-
 def fetch_history(
     symbol: str, period: str = "6mo", interval: str = "1d"
 ) -> pd.DataFrame:
@@ -144,9 +140,16 @@ def store_price_state(db: Database, state: PriceState) -> None:
 
 
 def fetch_market_prices(market: Market, db: Database) -> dict[str, PriceState]:
+    from .resolve import resolve_for_fetch
+
     states: dict[str, PriceState] = {}
     for symbol in market.tickers:
-        yahoo_symbol = full_symbol(market.code, symbol, market.yahoo_suffix)
+        tkr = market.tickers[symbol]
+        yahoo_symbol = resolve_for_fetch(market.code, symbol, tkr.name)
+        if not yahoo_symbol:
+            # Unavailable/invalid symbols are skipped quietly; the resolver caches
+            # the outcome so they are not re-requested every cycle.
+            continue
         try:
             df = fetch_history(yahoo_symbol, period="6mo")
         except Exception as exc:

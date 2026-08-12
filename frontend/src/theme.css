@@ -1352,6 +1352,29 @@ button.ghost {
 .news-list {
   margin-top: 4px;
 }
+.news-evidence {
+  border: 1px solid var(--border);
+  background: var(--bg-panel2);
+  padding: 8px 10px;
+  margin-top: 10px;
+}
+.news-evidence-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--amber);
+  font-size: 11px;
+  letter-spacing: 1px;
+  margin-bottom: 4px;
+}
+.news-evidence .quote-grid {
+  border-top: 1px solid var(--border);
+  grid-template-columns: repeat(3, 1fr);
+}
+.news-evidence .quote-cell {
+  padding: 6px 4px;
+}
 
 /* ---------- Spinner ---------- */
 .spinner {

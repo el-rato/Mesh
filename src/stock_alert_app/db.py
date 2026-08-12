@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -154,10 +157,11 @@ class Database:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
-    def init_schema(self) -> None:
+    def init_schema(self) -> int:
         with self.connect() as conn:
             conn.executescript(SCHEMA)
             self._migrate_verdicts(conn)
+            return self._migrate_verdict_reasons(conn)
 
     @staticmethod
     def _migrate_verdicts(conn: sqlite3.Connection) -> None:
@@ -173,6 +177,58 @@ class Database:
         for name, ddl in additions.items():
             if name not in existing:
                 conn.execute(f"ALTER TABLE verdicts ADD COLUMN {name} {ddl}")
+
+    @staticmethod
+    def _migrate_verdict_reasons(conn: sqlite3.Connection) -> int:
+        """Rewrite legacy verdict reasons to the current canonical news format.
+
+        Idempotent: only rows still carrying the legacy ``Auxiliary News
+        Sentiment:`` marker (and not the current ``News:`` marker) are rewritten,
+        so running it more than once is safe. Historical information (news label +
+        score) is preserved; article count is taken from scored news items when
+        available.
+        """
+        import re
+
+        rows = conn.execute(
+            "SELECT id, market, ticker, reason, news_score FROM verdicts"
+        ).fetchall()
+        legacy = [
+            r
+            for r in rows
+            if "Auxiliary News Sentiment:" in (r["reason"] or "")
+            and "News:" not in (r["reason"] or "")
+        ]
+        if not legacy:
+            return 0
+        counts: dict[tuple[str, str], int] = {}
+        for r in conn.execute(
+            """SELECT n.market, n.ticker, COUNT(*) AS c
+               FROM news_items n
+               WHERE EXISTS (SELECT 1 FROM sentiment_scores s WHERE s.news_item_id = n.id)
+               GROUP BY n.market, n.ticker"""
+        ):
+            counts[(r["market"], r["ticker"])] = int(r["c"])
+        changed = 0
+        for row in legacy:
+            reason = row["reason"] or ""
+            label_m = re.search(r"Auxiliary News Sentiment:\s*(\w+)", reason)
+            label = label_m.group(1).lower() if label_m else "neutral"
+            if label == "none":
+                new_clause = "News: unavailable"
+            else:
+                score = float(row["news_score"] or 0.0)
+                count = counts.get((row["market"], row["ticker"]), 0)
+                new_clause = f"News: {label} ({count} articles, score {score:+.2f})"
+            new_reason = re.sub(
+                r"Auxiliary News Sentiment:\s*\w+\s*\([^)]*\)", new_clause, reason
+            )
+            conn.execute(
+                "UPDATE verdicts SET reason=? WHERE id=?", (new_reason, row["id"])
+            )
+            changed += 1
+        logger.info("Migrated %d legacy verdict reasons to canonical format", changed)
+        return changed
 
     def insert_news_item(
         self,
@@ -230,6 +286,14 @@ class Database:
                     utc_now(),
                 ),
             )
+
+    def find_news_item_id(self, market: str, ticker: str, url: str) -> int | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM news_items WHERE market = ? AND ticker = ? AND url = ?",
+                (market, ticker.upper(), url),
+            ).fetchone()
+            return int(row["id"]) if row else None
 
     def insert_price_snapshot(
         self,

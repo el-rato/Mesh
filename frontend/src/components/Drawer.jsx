@@ -237,22 +237,49 @@ function ModelSection({ verdict }) {
 
 /* ---------------- News ---------------- */
 
-function NewsSection({ news }) {
-  if (!news || !news.length) return <div className="empty">NO HEADLINES FOR THIS TICKER.</div>;
+function NewsSection({ news, committee }) {
+  const newsRow = (committee?.signals || []).find((s) => s.key === "news");
+  const hasNews = newsRow?.available && news?.length;
   return (
-    <div className="news-list">
-      {news.slice(0, 40).map((n, i) => (
-        <div className="news-item" key={i}>
-          <div className="sender">{n.title}</div>
-          <div className="src">
-            {n.source} · {n.published_at}{" "}
-            <span className={`sent ${n.sentiment_label === "positive" ? "up" : n.sentiment_label === "negative" ? "down" : "neutral"}`}>
-              {n.sentiment_label || "N/A"}
-            </span>
+    <>
+      {newsRow?.available && (
+        <div className="news-evidence">
+          <div className="news-evidence-head">
+            <span>NEWS</span>
+            <StateBadge state={newsRow.state} />
+          </div>
+          <div className="quote-grid">
+            {newsRow.score != null && (
+              <div className="quote-cell"><span>SCORE</span><strong>{newsRow.score > 0 ? "+" : ""}{newsRow.score.toFixed(2)}</strong></div>
+            )}
+            {newsRow.confidence != null && (
+              <div className="quote-cell"><span>CONFIDENCE</span><strong>{(newsRow.confidence * 100).toFixed(0)}%</strong></div>
+            )}
+            {newsRow.article_count != null && (
+              <div className="quote-cell"><span>ARTICLES</span><strong>{newsRow.article_count}</strong></div>
+            )}
           </div>
         </div>
-      ))}
-    </div>
+      )}
+      <h3>CONTRIBUTING ARTICLES</h3>
+      {hasNews ? (
+        <div className="news-list">
+          {news.slice(0, 40).map((n, i) => (
+            <div className="news-item" key={i}>
+              <div className="sender">{n.title}</div>
+              <div className="src">
+                {n.source} · {n.published_at}{" "}
+                <span className={`sent ${n.sentiment_label === "positive" ? "up" : n.sentiment_label === "negative" ? "down" : "neutral"}`}>
+                  {n.sentiment_label || "N/A"}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="empty">NO HEADLINES FOR THIS TICKER.</div>
+      )}
+    </>
   );
 }
 
@@ -399,7 +426,7 @@ function StockDossier({ v, onClose }) {
                 {tab === "committee" && <CommitteeSection committee={data.committee} />}
                 {tab === "bullbear" && <FactorList factors={data.factors} />}
                 {tab === "model" && <ModelSection verdict={data.verdict} />}
-                {tab === "news" && <NewsSection news={data.news} />}
+                {tab === "news" && <NewsSection news={data.news} committee={data.committee} />}
                 {tab === "risk" && (
                   <RiskSection verdict={data.verdict} symbol={inst.symbol} market={inst.market || v.market} ticker={inst.ticker || v.ticker} />
                 )}

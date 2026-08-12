@@ -31,30 +31,31 @@ class WatchItem(BaseModel):
     company: str = ""
 
 
+_initialized_dbs: set[str] = set()
+
+
 def _db() -> Database:
-    return Database(settings.db_path)
+    db = Database(settings.db_path)
+    key = str(db.path.resolve())
+    if key not in _initialized_dbs:
+        db.init_schema()
+        _initialized_dbs.add(key)
+    return db
 
 
-def _latest_verdict_map(db: Database) -> dict[tuple[str, str], dict[str, object]]:
-    try:
-        return {(r["market"], r["ticker"]): r for r in db.latest_verdicts()}
-    except Exception:
-        return {}
+def _analysis_context(
+    db: Database, market: str | None = None
+) -> tuple[list[dict[str, object]], dict[str, dict[str, object]], dict]:
+    """Load stored verdicts + latest price snapshots + markets for analysis."""
+    from .analysis import stock_analysis  # noqa: F401 (kept as the canonical builder)
+    from .markets import load_markets
 
-
-def _enrich_search_result(
-    item: dict[str, object], latest: dict[tuple[str, str], dict[str, object]]
-) -> dict[str, object]:
-    market = item.get("market")
-    ticker = item.get("ticker")
-    v = latest.get((market, ticker)) if market and ticker else None
-    return {
-        **item,
-        "verdict": v["verdict"] if v else None,
-        "confidence": v["confidence"] if v else None,
-        "combined_score": v["combined_score"] if v else None,
-        "reason": v["reason"] if v else None,
+    rows = db.latest_verdicts(market=market)
+    snaps = {
+        f"{s['market']}:{s['ticker'].upper()}": s
+        for s in db.latest_price_snapshots(market=market)
     }
+    return rows, snaps, load_markets(settings.markets_dir)
 
 
 @app.get("/api/search")
@@ -65,26 +66,45 @@ def search_tickers(
 ) -> list[dict[str, object]]:
     """Search the whole supported universe (configured + dynamically discovered).
 
-    Configured 'featured' tickers rank first (they carry stored verdicts); the
-    provider search expands results to any symbol/company the market data source
-    knows. Enriched with the latest verdict when one is already stored.
+    Configured 'featured' tickers rank first; results are enriched with the
+    canonical stored analysis (committee verdict) when one already exists.
     """
     query = (q or "").strip()
     if not query:
         return []
 
     from . import instruments
+    from .analysis import stock_analysis
 
     db = _db()
-    latest = _latest_verdict_map(db)
+    rows, snaps, markets = _analysis_context(db, market)
+    latest = {(r["market"], r["ticker"].upper()): r for r in rows}
     results = instruments.search_universe(query, limit=limit, market_filter=market)
-    return [_enrich_search_result(item, latest) for item in results]
+    out: list[dict[str, object]] = []
+    for item in results:
+        row = latest.get((item.get("market"), (item.get("ticker") or "").upper()))
+        if row:
+            analysis = stock_analysis(
+                row, snaps.get(f"{row['market']}:{row['ticker'].upper()}"), markets
+            )
+            out.append(
+                {
+                    **item,
+                    "verdict": analysis["verdict"],
+                    "confidence": analysis["confidence"],
+                    "combined_score": analysis["combined_score"],
+                    "reason": analysis["reason"],
+                }
+            )
+        else:
+            out.append(item)
+    return out
 
 
 def _dossier_target(
     symbol: str, market: str, ticker: str
 ) -> tuple[dict[str, object], str]:
-    """Resolve a dossier request into (instrument, full_symbol) or raise 422/404."""
+    """Resolve a dossier request into (instrument, resolved_symbol) or raise 422/404."""
     if symbol:
         from . import instruments
 
@@ -98,6 +118,7 @@ def _dossier_target(
 
     if market and ticker:
         from .markets import load_markets
+        from .resolve import resolve_for_fetch
 
         m = load_markets(settings.markets_dir).get(market.upper())
         if m is None:
@@ -105,10 +126,14 @@ def _dossier_target(
         try:
             tkr = m.get_ticker(ticker)
             company = tkr.name or ""
-            full = f"{ticker.upper()}{tkr.yahoo_suffix or m.yahoo_suffix}"
+            composed = f"{ticker.upper()}{tkr.yahoo_suffix or m.yahoo_suffix}"
         except KeyError:
             company = ""
-            full = f"{ticker.upper()}{m.yahoo_suffix}"
+            composed = f"{ticker.upper()}{m.yahoo_suffix}"
+        # Prefer the resolver-validated symbol (handles ticker changes without
+        # substituting a different security); fall back to the composed symbol
+        # so stored-snapshot dossiers keep working.
+        full = resolve_for_fetch(m.code, ticker.upper(), company) or composed
         item: dict[str, object] = {
             "market": m.code,
             "ticker": ticker.upper(),
@@ -123,60 +148,6 @@ def _dossier_target(
         return item, full
 
     raise HTTPException(status_code=422, detail="Provide symbol OR market + ticker")
-
-
-def _snapshot_to_price_dict(snap: dict[str, object] | None) -> dict[str, object] | None:
-    """Map a stored price_snapshots row to PriceState.as_dict() shape."""
-    if not snap:
-        return None
-    sma = float(snap.get("sma_50") or 0.0)
-    close = float(snap.get("close") or 0.0)
-    return {
-        "symbol": snap.get("ticker") or "",
-        "close": close,
-        "open": float(snap.get("open") or 0.0),
-        "high": float(snap.get("high") or 0.0),
-        "low": float(snap.get("low") or 0.0),
-        "volume": int(snap.get("volume") or 0),
-        "momentum_20": float(snap.get("momentum_20") or 0.0),
-        "rsi_14": float(snap.get("rsi_14") or 50.0),
-        "sma_50": sma,
-        "sma_200": 0.0,
-        "trend_50_200": 0.0,
-        "above_sma_50": close >= sma if sma else None,
-    }
-
-
-def _technical_from_snapshot(
-    snap: dict[str, object] | None,
-) -> tuple[float, list[str]]:
-    """Recompute the technical signal score from a stored price snapshot.
-
-    Reuses the exact same normalization as the live verdict engine so the
-    scanner/dossier technical signal tracks the latest price data without
-    running an expensive LSTM/news cycle.
-    """
-    from .price import PriceState
-    from .verdict import _normalize_price
-
-    if not snap:
-        return 0.0, ["no price snapshot available"]
-    close = float(snap.get("close") or 0.0)
-    sma = float(snap.get("sma_50") or 0.0)
-    state = PriceState(
-        market=snap.get("market") or "",
-        ticker=snap.get("ticker") or "",
-        close=close,
-        open=float(snap.get("open") or 0.0),
-        high=float(snap.get("high") or 0.0),
-        low=float(snap.get("low") or 0.0),
-        volume=int(snap.get("volume") or 0),
-        momentum_20=float(snap.get("momentum_20") or 0.0),
-        rsi_14=float(snap.get("rsi_14") or 50.0),
-        sma_50=sma,
-    )
-    score, reasons = _normalize_price(state)
-    return round(score, 4), reasons
 
 
 @app.get("/api/dossier")
@@ -217,41 +188,53 @@ def stock_dossier(
         from .verdict import live_verdict
 
         try:
-            v = live_verdict(
-                mkt, tkr, item.get("company") or "", yahoo_symbol=full
-            )
+            # No forced symbol: live_verdict validates through the symbol
+            # resolution layer before any price/LSTM work.
+            v = live_verdict(mkt, tkr, item.get("company") or "")
         except Exception as exc:
             logger.exception("Dossier live verdict failed for %s", full)
             raise HTTPException(
                 status_code=503, detail=f"Analysis failed for {full}: {exc}"
             )
         if v is None:
+            detail = "no data available"
+            try:
+                from .resolve import resolution, status_label
+
+                res = resolution(mkt, tkr, item.get("company") or "")
+                note = res.get("note") or status_label(str(res.get("status")))
+                if note:
+                    detail = note
+            except Exception:
+                pass
             raise HTTPException(
                 status_code=404,
-                detail=f"No price or news data could be gathered for {full}",
+                detail=f"Data unavailable: {detail}",
             )
         # A resolvable-but-unknown symbol (e.g. a delisted ticker) yields a
         # no-data verdict: treat it as not found rather than a bogus 200.
         if v.price is None and not v.news_available:
             raise HTTPException(
                 status_code=404,
-                detail=f"No price or news data could be gathered for {full}",
+                detail=f"Data unavailable for {full}",
             )
         verdict_dict = v.as_dict()
         computed_at = utc_now()
         fresh = True
     else:
-        verdict_dict = _verdict_row_to_dict(stored)
+        from .analysis import snapshot_price, technical_from_snapshot, verdict_row_to_dict
+
+        verdict_dict = verdict_row_to_dict(stored)
         computed_at = stored.get("decided_at") or ""
         snap = None
         try:
             snap = db.latest_price_snapshot(mkt, tkr)
         except Exception:
             snap = None
-        price = _snapshot_to_price_dict(snap)
+        price = snapshot_price(snap)
         if price is not None:
             verdict_dict["price"] = price
-            technical_score, technical_reasons = _technical_from_snapshot(snap)
+            technical_score, technical_reasons = technical_from_snapshot(snap)
             verdict_dict["technical"] = {
                 "score": technical_score,
                 "reasons": technical_reasons,
@@ -269,16 +252,6 @@ def stock_dossier(
         "computed_at": computed_at,
         "fresh": fresh,
     }
-
-
-def _lstm_signal_from_row(r: dict[str, object]) -> str:
-    """BULL/BEAR from the stored LSTM score, or N/A when the model was unavailable."""
-    score = float(r["lstm_score"] or 0.0)
-    prob = r["lstm_probability_up"]
-    p_up = float(prob) if prob is not None else None
-    if score == 0.0 and p_up is None:
-        return "N/A"
-    return "BULL" if (score > 0 or (p_up is not None and p_up >= 0.5)) else "BEAR"
 
 
 @app.get("/api/scanner")
@@ -299,85 +272,29 @@ def scanner(
     markets plus any dynamically searched/analyzed symbols — so it grows over time
     instead of being a hardcoded list.
     """
-    from . import dossier
-    from .markets import load_markets
+    from .analysis import stock_analysis
 
     db = _db()
-    markets = load_markets(settings.markets_dir)
-    rows = db.latest_verdicts(market=market or None)
-    snaps = {f"{s['market']}:{s['ticker'].upper()}": s for s in db.latest_price_snapshots(market=market or None)}
+    rows, snaps, markets = _analysis_context(db, market or None)
 
     out: list[dict[str, object]] = []
     for r in rows:
-        lstm_score = float(r["lstm_score"] or 0.0)
-        prob_up = r["lstm_probability_up"]
-        p_up = float(prob_up) if prob_up is not None else None
-        lstm_signal = _lstm_signal_from_row(r)
-        if signal_lstm and lstm_signal != signal_lstm.upper():
-            continue
-        if min_news > -1 and float(r["news_score"] or 0.0) < min_news:
-            continue
-        snap = snaps.get(f"{r['market']}:{r['ticker'].upper()}")
-        mom = float((snap or {}).get("momentum_20") or 0.0)
-        if min_momentum > -1 and mom < min_momentum:
-            continue
-
-        committee_input = _verdict_row_to_dict(r)
-        price = _snapshot_to_price_dict(snap)
-        if price is not None:
-            committee_input["price"] = price
-        technical_score, technical_reasons = _technical_from_snapshot(snap)
-        committee_input["technical"] = {
-            "score": technical_score,
-            "reasons": technical_reasons,
-        }
-        if min_technical > -1 and technical_score < min_technical:
-            continue
-        committee = dossier.committee_signals(committee_input, None)
-        if verdict and committee["verdict"] != verdict.upper():
-            continue
-        if min_confidence > 0 and (committee["confidence"] or 0.0) < min_confidence:
-            continue
-
-        m = markets.get(r["market"])
-        company = ""
-        suffix = (m.yahoo_suffix if m else "") or ""
-        if m:
-            try:
-                company = m.get_ticker(r["ticker"]).name or ""
-            except KeyError:
-                company = ""
-
-        decided_at = r.get("decided_at") or ""
-        price_fetched_at = (snap or {}).get("fetched_at") or ""
-        out.append(
-            {
-                "market": r["market"],
-                "ticker": r["ticker"],
-                "symbol": r["ticker"] + suffix,
-                "company": company,
-                "verdict": committee["verdict"],
-                "confidence": committee["confidence"],
-                "combined_score": committee["score"],
-                "committee": committee,
-                "decided_at": decided_at,
-                "price_fetched_at": price_fetched_at,
-                "updated_at": max(decided_at, price_fetched_at) or "",
-                "lstm": {
-                    "score": lstm_score,
-                    "probability_up": p_up,
-                    "signal": lstm_signal,
-                },
-                "technical": {
-                    "score": technical_score,
-                    "reasons": technical_reasons,
-                },
-                "news": {"score": r["news_score"]},
-                "momentum_20": mom,
-                "rsi_14": float((snap or {}).get("rsi_14") or 50.0),
-                "close": float((snap or {}).get("close") or 0.0),
-            }
+        analysis = stock_analysis(
+            r, snaps.get(f"{r['market']}:{r['ticker'].upper()}"), markets
         )
+        if verdict and analysis["verdict"] != verdict.upper():
+            continue
+        if signal_lstm and analysis["lstm"]["signal"] != signal_lstm.upper():
+            continue
+        if min_confidence > 0 and (analysis["confidence"] or 0.0) < min_confidence:
+            continue
+        if min_technical > -1 and analysis["technical"]["score"] < min_technical:
+            continue
+        if min_news > -1 and (analysis["news"] or {}).get("score", -1.0) < min_news:
+            continue
+        if min_momentum > -1 and analysis["momentum_20"] < min_momentum:
+            continue
+        out.append(analysis)
 
     sort_keys = {
         "combined": lambda x: (x["combined_score"] is not None, x["combined_score"] or 0.0),
@@ -444,54 +361,17 @@ def get_verdicts(
             }
         return {k: v.as_dict() for k, v in verdicts.items()}
 
-    rows = db.latest_verdicts(market=market)
+    from .analysis import stock_analysis
+
+    rows, snaps, markets = _analysis_context(db, market)
     if ticker:
         rows = [r for r in rows if r["ticker"].upper() == ticker.upper()]
     return {
-        f"{r['market']}:{r['ticker']}": _verdict_row_to_dict(r) for r in rows
+        f"{r['market']}:{r['ticker']}": stock_analysis(
+            r, snaps.get(f"{r['market']}:{r['ticker'].upper()}"), markets
+        )
+        for r in rows
     }
-
-
-def _verdict_row_to_dict(r: dict[str, object]) -> dict[str, object]:
-    """Map a stored verdict row to the API shape returned to the UI (mirrors Verdict.as_dict)."""
-    reason = str(r.get("reason") or "")
-    news_available = "News:" in reason and "News: unavailable" not in reason
-    return {
-        "market": r["market"],
-        "ticker": r["ticker"],
-        "verdict": r["verdict"],
-        "confidence": r["confidence"],
-        "news_score": r["news_score"],
-        "price_score": r["price_score"],
-        "combined_score": r["combined_score"],
-        "reason": [reason] if reason else [],
-        "decided_at": r["decided_at"],
-        "forecast_horizon": "1 trading day",
-        "signal_agreement": _signal_agreement_from_row(r),
-        "lstm": {
-            "score": r["lstm_score"],
-            "probability_up": r["lstm_probability_up"],
-            "predicted_return": r["lstm_predicted_return"],
-            "model_confidence": r["lstm_confidence"],
-            "metrics": {},
-            "model_version": "",
-        },
-        "technical": {
-            "score": r["technical_score"],
-        },
-        "news_available": news_available,
-    }
-
-
-def _signal_agreement_from_row(row: dict[str, object]) -> str:
-    try:
-        reason = str(row.get("reason") or "")
-    except Exception:
-        return "unknown"
-    for token in ("Signal agreement: strong", "moderate", "mixed", "weak", "none"):
-        if token in reason:
-            return token.replace("Signal agreement: ", "")
-    return "unknown"
 
 
 @app.get("/api/news")
@@ -502,9 +382,12 @@ def get_news(market: str, ticker: str, limit: int = 50) -> list[dict[str, object
 
 @app.get("/api/watchlist")
 def get_watchlist() -> list[dict[str, object]]:
+    from .analysis import stock_analysis
+
     db = _db()
     db.init_schema()
-    latest = {f"{r['market']}:{r['ticker']}": r for r in db.latest_verdicts()}
+    rows, snaps, markets = _analysis_context(db)
+    latest = {(r["market"], r["ticker"].upper()): r for r in rows}
     out: list[dict[str, object]] = []
     for w in db.watchlist():
         item: dict[str, object] = {
@@ -513,15 +396,18 @@ def get_watchlist() -> list[dict[str, object]]:
             "company": w["company"],
             "added_at": w["added_at"],
         }
-        v = latest.get(f"{w['market']}:{w['ticker']}")
-        if v:
-            item["verdict"] = v["verdict"]
-            item["confidence"] = v["confidence"]
-            item["news_score"] = v["news_score"]
-            item["price_score"] = v["price_score"]
-            item["combined_score"] = v["combined_score"]
-            item["reason"] = [v["reason"]] if v["reason"] else []
-            item["decided_at"] = v["decided_at"]
+        row = latest.get((w["market"], w["ticker"].upper()))
+        if row:
+            analysis = stock_analysis(
+                row, snaps.get(f"{row['market']}:{row['ticker'].upper()}"), markets
+            )
+            item["verdict"] = analysis["verdict"]
+            item["confidence"] = analysis["confidence"]
+            item["news_score"] = analysis["news_score"]
+            item["price_score"] = analysis["price_score"]
+            item["combined_score"] = analysis["combined_score"]
+            item["reason"] = analysis["reason"]
+            item["decided_at"] = analysis["decided_at"]
         out.append(item)
     return out
 

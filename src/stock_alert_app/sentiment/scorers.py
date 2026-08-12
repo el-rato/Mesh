@@ -320,6 +320,25 @@ def _clamp(value: float, lo: float = -1.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, value))
 
 
+def default_scorer(prefer_finbert: bool = True, prefer_lstm: bool = True) -> Scorer:
+    """Build the sentiment scorer using the single fallback chain.
+
+    LSTM sentiment -> FinBERT -> lexicon. Used by both the batch sentiment
+    pipeline and the live per-stock verdict path so scoring behaves identically.
+    """
+    if prefer_lstm:
+        try:
+            return LSTMSentimentScorer()
+        except RuntimeError:
+            logger.info("LSTM sentiment unavailable, falling back to FinBERT")
+    if prefer_finbert:
+        try:
+            return FinBERTScorer()
+        except RuntimeError:
+            logger.info("FinBERT unavailable, falling back to lexicon scorer")
+    return LexiconScorer()
+
+
 class LexiconScorer:
     """Zero-dependency keyword sentiment scorer."""
 

@@ -136,6 +136,14 @@ def committee_signals(
                     4,
                 )
 
+    # News evidence for the UI (label + article count contributing to the score).
+    for signal in signals:
+        if signal["key"] == "news" and signal["available"]:
+            count = news_data.get("article_count")
+            signal["article_count"] = int(count) if _is_finite(count) else None
+            label = str(v.get("news_label") or news_data.get("label") or "").lower()
+            signal["sentiment"] = label or signal_state(news_score).lower()
+
     if denominator <= 0:
         final_score = None
         final_state = "N/A"

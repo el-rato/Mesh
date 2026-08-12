@@ -484,24 +484,20 @@ def build_verdict(
 def run_verdicts(
     market_codes: Iterable[str] | None = None,
     db_path: str | None = None,
-    prefer_finbert: bool = True,
-    prefer_lstm: bool = True,
 ) -> dict[str, Verdict]:
+    """Analyze every configured symbol through the single per-stock path.
+
+    Delegates to ``live_verdict`` (which resolves + validates the symbol, fetches
+    price + news, runs LSTM, and stores the verdict) so there is exactly one
+    analysis engine instead of a parallel batch implementation.
+    """
     from .ingest import _load_markets
-    from .price import run_price_fetch
-    from .sentiment.pipeline import run_sentiment
 
     markets = _load_markets()
     db = Database(db_path or settings.db_path)
     db.init_schema()
 
     codes = list(market_codes) if market_codes else list(settings.default_markets)
-
-    prices = run_price_fetch(market_codes=codes, db_path=db_path)
-    result = run_sentiment(
-        db_path=db_path, prefer_finbert=prefer_finbert, prefer_lstm=prefer_lstm
-    )
-    sentiments = result.headlines
 
     verdicts: dict[str, Verdict] = {}
     for code in codes:
@@ -511,29 +507,9 @@ def run_verdicts(
         for symbol in market.tickers:
             key = f"{code}:{symbol}"
             ticker_spec = market.get_ticker(symbol)
-            yahoo_sym = f"{symbol}{ticker_spec.yahoo_suffix or market.yahoo_suffix}"
-            verdicts[key] = build_verdict(
-                code,
-                symbol,
-                sentiments.get(key),
-                prices.get(symbol),
-                yahoo_symbol=yahoo_sym,
-            )
-            db.insert_verdict(
-                market=code,
-                ticker=symbol,
-                verdict=verdicts[key].verdict,
-                confidence=verdicts[key].confidence,
-                news_score=verdicts[key].news_score,
-                price_score=verdicts[key].price_score,
-                combined_score=verdicts[key].combined_score,
-                reason=verdicts[key].reason,
-                lstm_score=verdicts[key].lstm_score,
-                lstm_probability_up=verdicts[key].lstm_probability_up,
-                lstm_predicted_return=verdicts[key].lstm_predicted_return,
-                lstm_confidence=verdicts[key].lstm_confidence,
-                technical_score=verdicts[key].technical_score,
-            )
+            verdict = live_verdict(code, symbol, ticker_spec.name, db_path=db_path)
+            if verdict is not None:
+                verdicts[key] = verdict
     return verdicts
 
 
@@ -551,14 +527,16 @@ def live_verdict(
 
     ``yahoo_symbol`` optionally overrides the symbol used to fetch price/LSTM
     data (e.g. an exact provider symbol like ``BF.B`` or ``0700.HK`` resolved
-    by the dynamic symbol discovery). When omitted the symbol is composed from
-    the ticker + the market's Yahoo suffix as before.
+    by the dynamic symbol discovery). When omitted the symbol is resolved
+    through the symbol-resolution layer (which validates the symbol before any
+    price/LSTM work and skips unavailable securities).
     """
     from .ingest import _load_markets
-    from .price import build_price_state, fetch_history, full_symbol, store_price_state
+    from .price import build_price_state, fetch_history, store_price_state
+    from .resolve import resolve_for_fetch, resolution, status_label
     from .sentiment.aggregate import aggregate_sentiment
-    from .sentiment.scorers import FinBERTScorer, LexiconScorer, LSTMSentimentScorer
-    from .sources import fetch_google_news
+    from .sentiment.scorers import default_scorer
+    from .sources import fetch_google_news, fetch_yahoo_finance
 
     markets = _load_markets()
     market = markets.get(market_code)
@@ -574,7 +552,16 @@ def live_verdict(
     if yahoo_symbol:
         yahoo_symbol = yahoo_symbol.upper()
     else:
-        yahoo_symbol = full_symbol(market.code, ticker, market.yahoo_suffix)
+        yahoo_symbol = resolve_for_fetch(market.code, ticker, company)
+        if not yahoo_symbol:
+            detail = resolution(market.code, ticker, company)
+            logger.info(
+                "live_verdict: skipping %s:%s (%s)",
+                market.code,
+                ticker,
+                status_label(str(detail.get("status"))),
+            )
+            return None
     try:
         df = fetch_history(yahoo_symbol, period="6mo")
         price = build_price_state(market.code, ticker, df)
@@ -590,24 +577,53 @@ def live_verdict(
     except Exception as exc:
         logger.warning("live_verdict: news fetch failed for %s: %s", ticker, exc)
         articles = []
+    if not articles:
+        # Fall back to an existing second provider so a transient Google News
+        # outage does not silently turn every stock into "no news".
+        try:
+            articles = fetch_yahoo_finance(yahoo_symbol, region=market.country, query=query)
+        except Exception as exc:
+            logger.warning("live_verdict: yahoo news fallback failed for %s: %s", ticker, exc)
+            articles = []
 
     if articles:
-        try:
-            scorer = LSTMSentimentScorer()
-        except RuntimeError:
-            try:
-                scorer = FinBERTScorer()
-            except RuntimeError:
-                scorer = LexiconScorer()
+        scorer = default_scorer()
         scores: list = []
         for art in articles:
             text = f"{art.title} {art.summary}".strip()
             if not text:
                 continue
             try:
-                scores.append((scorer.score(text), art.source, art.published_at))
+                result = scorer.score(text)
             except Exception:
                 continue
+            scores.append((result, art.source, art.published_at))
+            # Persist the article + its per-article sentiment so the News tab can
+            # show the exact evidence that contributed to the aggregate score.
+            try:
+                item_id = db.insert_news_item(
+                    market=market.code,
+                    ticker=ticker,
+                    title=art.title,
+                    url=art.url,
+                    source=art.source,
+                    summary=art.summary,
+                    published_at=art.published_at,
+                )
+                if item_id is None:
+                    item_id = db.find_news_item_id(market.code, ticker, art.url)
+                if item_id is not None:
+                    db.insert_sentiment(
+                        news_item_id=item_id,
+                        model=scorer.name,
+                        score=result.score,
+                        label=result.label,
+                        positive=result.positive,
+                        negative=result.negative,
+                        neutral=result.neutral,
+                    )
+            except Exception:
+                pass
         if scores:
             sentiment = aggregate_sentiment(scores)
 
