@@ -16,6 +16,7 @@ import NotificationsBell from "./components/NotificationsBell.jsx";
 import Drawer from "./components/Drawer.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import SearchBox from "./components/SearchBox.jsx";
+import SecurityLink from "./components/SecurityLink.jsx";
 
 export const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
@@ -47,6 +48,21 @@ const TAB_COMPONENTS = {
   funds: FundsTab,
 };
 
+const CURRENCY_SYMBOLS = {
+  GBP: "£",
+  USD: "$",
+  EUR: "€",
+  JPY: "¥",
+  KRW: "₩",
+  INR: "₹",
+  HKD: "HK$",
+  SGD: "S$",
+  AUD: "A$",
+  CAD: "C$",
+  CHF: "CHF ",
+  SEK: "kr ",
+};
+
 function useClock() {
   const [now, setNow] = useState(new Date());
   useEffect(() => {
@@ -56,22 +72,40 @@ function useClock() {
   return now;
 }
 
-function TickerTape({ indexes }) {
-  const items = (indexes || []).slice(0, 40);
+function TickerTape({ tickers }) {
+  const items = useMemo(() => {
+    const arr = [...(tickers || [])];
+    for (let i = arr.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr.slice(0, 60);
+  }, [tickers]);
   if (!items.length) return <div className="ticker-tape" />;
+  const duration = Math.max(60, items.length * 1.5);
+  const render = (s, i) => {
+    const up = (s.change_pct ?? 0) >= 0;
+    const sym = CURRENCY_SYMBOLS[s.currency] || "";
+    const price = Number(s.close || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+    return (
+      <SecurityLink key={i} market={s.market} ticker={s.ticker} className="tape-item" title={`Open Dossier ${s.security_id}`}>
+        <span className="t">{s.security_id}</span>{" "}
+        {sym}{price}{" "}
+        {s.change_pct == null ? (
+          <span className="dim">NO_DATA</span>
+        ) : (
+          <span className={up ? "up" : "down"}>
+            {up ? "+" : ""}
+            {(s.change_pct * 100).toFixed(2)}%
+          </span>
+        )}
+      </SecurityLink>
+    );
+  };
   return (
     <div className="ticker-tape">
-      <div className="tape-inner">
-        {[...items, ...items].map((s, i) => (
-          <span className="tape-item" key={i}>
-            <span className="t">{s.symbol.replace("^", "")}</span>{" "}
-            {Number(s.close || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}{" "}
-            <span className={(s.change_pct || 0) >= 0 ? "up" : "down"}>
-              {(s.change_pct || 0) >= 0 ? "+" : ""}
-              {(s.change_pct * 100).toFixed(2)}%
-            </span>
-          </span>
-        ))}
+      <div className="tape-inner" style={{ animationDuration: `${duration}s` }}>
+        {[...items, ...items].map(render)}
       </div>
     </div>
   );
@@ -82,6 +116,7 @@ export default function App() {
   const [market, setMarket] = useState("");
   const [markets, setMarkets] = useState([]);
   const [indexes, setIndexes] = useState([]);
+  const [tickers, setTickers] = useState([]);
   const [tab, setTab] = useState("overview");
   const [drawer, setDrawer] = useState(null);
   const [paperTicket, setPaperTicket] = useState(null);
@@ -228,9 +263,21 @@ export default function App() {
       .catch(() => {});
   };
 
+  const loadTickers = () => {
+    fetchJSON("/api/ticker-strip")
+      .then(setTickers)
+      .catch(() => {});
+  };
+
   useEffect(() => {
     loadIndexes();
     const t = setInterval(loadIndexes, 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    loadTickers();
+    const t = setInterval(loadTickers, 60000);
     return () => clearInterval(t);
   }, []);
 
@@ -287,8 +334,8 @@ export default function App() {
     [market, markets, indexes, refreshToken, refreshStatus, theme, portfolioIds, addToPortfolio, removeFromPortfolio, inPortfolio, screenerPrefill, openDrawer]
   );
 
-  const enterTerminal = () => {
-    setTab("overview");
+  const enterTerminal = (tab = "overview") => {
+    setTab(tab);
     setView("terminal");
   };
 
@@ -304,7 +351,7 @@ export default function App() {
             <button className="logo" style={{ border: "none", background: "transparent", cursor: "pointer" }} onClick={() => setView("landing")}>
               SV<span className="dim"> | STOCK VERDICT</span>
             </button>
-            <TickerTape indexes={indexes} />
+            <TickerTape tickers={tickers} />
             <SearchBox />
             <NotificationsBell />
             <select className="theme-toggle" value={theme} onChange={(e) => setTheme(e.target.value)} title="Theme">

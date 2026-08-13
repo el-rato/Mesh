@@ -36,6 +36,40 @@ export function Row({ k, v, cls }) {
   );
 }
 
+export function SectionHeader({ title, sub = "", right = null, style, className = "" }) {
+  return (
+    <div className={`section-head ${className}`} style={style}>
+      <span>
+        {title}
+        {sub ? <span className="sub"> · {sub}</span> : null}
+      </span>
+      {right}
+    </div>
+  );
+}
+
+export function Metric({ label, value, tone = "", context = "" }) {
+  return (
+    <div className="metric">
+      <span className="k">{label}</span>
+      <span className={`v ${tone}`}>{value}</span>
+      {context ? <span className="c">{context}</span> : null}
+    </div>
+  );
+}
+
+export function StatusIndicator({ state = "nodata", label = "", children }) {
+  return (
+    <span className={`status ${state}`}>
+      {children || label}
+    </span>
+  );
+}
+
+export function SignalBadge({ verdict, label }) {
+  return verdictBadge({ verdict, label });
+}
+
 export function RefreshStatus({ status }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {

@@ -36,6 +36,7 @@ export default function FundsTab() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [updated, setUpdated] = useState("");
+  const [q, setQ] = useState("");
 
   const load = useCallback(() => {
     fetchJSON("/api/funds")
@@ -62,6 +63,16 @@ export default function FundsTab() {
     }
   };
 
+  const needle = q.trim().toLowerCase();
+  const visible = (data || []).filter((s) => {
+    if (!needle) return true;
+    const hay = [s.fund, s.manager, s.fund_id, s.cik]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return needle.split(/\s+/).every((tok) => hay.includes(tok));
+  });
+
   return (
     <>
       <div className="controls">
@@ -76,11 +87,25 @@ export default function FundsTab() {
       {data && !data.length && <div className="empty">NO FUND DATA YET — CLICK REFRESH.</div>}
 
       {data && data.length > 0 && (
-        <div className="grid">
-          {data.map((s) => (
-            <FundPanel key={s.cik} s={s} onOpen={(s) => openDrawer({ type: "fund", s })} />
-          ))}
-        </div>
+        <>
+          <div className="funds-head">
+            <div className="funds-count">
+              HEDGE FUNDS TRACKED <strong>{data.length.toLocaleString()}</strong>
+            </div>
+            <input
+              className="fund-search"
+              placeholder="Search fund / manager / fund ID"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          </div>
+          {!visible.length && <div className="empty">NO MATCHES FOR “{q}”.</div>}
+          <div className="grid">
+            {visible.map((s) => (
+              <FundPanel key={s.fund_id || s.cik} s={s} onOpen={(s) => openDrawer({ type: "fund", s })} />
+            ))}
+          </div>
+        </>
       )}
     </>
   );

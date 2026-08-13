@@ -124,6 +124,10 @@ export async function notificationsAck(keys) {
   });
 }
 
+export async function tickerStrip() {
+  return fetchJSON("/api/ticker-strip");
+}
+
 export async function screener(params = {}) {
   const qs = new URLSearchParams();
   Object.entries(params).forEach(([k, v]) => {

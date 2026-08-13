@@ -123,6 +123,102 @@ def _http_get(url: str, timeout: int = 60) -> str:
         return resp.read().decode("utf-8", errors="replace")
 
 
+# --- Dynamic 13F-filer universe (replaces the small hardcoded fund list) -------
+#
+# SEC EDGAR exposes the complete set of 13F-HR filers through the company
+# browse endpoint, paginated with `start`/`count` (max 100 per page). We walk
+# the pages to build the available fund universe, deduplicating by the stable
+# SEC CIK. The previous MAJOR_FUNDS list is kept only as an offline fallback.
+
+SEC_FILER_BROWSE = (
+    "https://www.sec.gov/cgi-bin/browse-edgar"
+    "?action=getcompany&type=13F-HR&dateb=&owner=include&start={start}&count={count}"
+)
+
+_FILER_CIK_RE = re.compile(r"CIK=(\d+)", re.IGNORECASE)
+_FILER_NAME_RE = re.compile(r'href="[^"]*Archives[^"]*"[^>]*>([^<]+)</a>', re.IGNORECASE)
+_FILER_TOTAL_RE = re.compile(r"(\d+)\s*-\s*\d+\s*of\s*([\d,]+)", re.IGNORECASE)
+
+
+def _parse_filer_table(html: str) -> list[tuple[str, str]]:
+    """Parse SEC browse-edgar results HTML into [(cik, company_name), ...].
+
+    Pure function (no network) so it can be unit-tested against saved HTML.
+    """
+    results: list[tuple[str, str]] = []
+    if not html:
+        return results
+    for row in re.findall(r"<tr>.*?</tr>", html, re.DOTALL | re.IGNORECASE):
+        m_cik = _FILER_CIK_RE.search(row)
+        m_name = _FILER_NAME_RE.search(row)
+        if m_cik and m_name:
+            cik = m_cik.group(1).lstrip("0") or m_cik.group(1)
+            results.append((cik, m_name.group(1).strip()))
+    return results
+
+
+def sec_13f_filers(
+    max_pages: int | None = None,
+    page_size: int = 100,
+    max_funds: int | None = None,
+) -> list[dict[str, str]]:
+    """Return the available 13F-HR filer universe from SEC EDGAR, paginated.
+
+    Iterates `start`/`count` pages until the total is exhausted, `max_pages`
+    is reached, or no further rows are returned. Results are deduplicated by
+    the stable SEC CIK. Network failures abort gracefully (return what we have).
+    """
+    pages = max_pages if max_pages is not None else settings.institutional_filer_pages
+    seen: dict[str, dict[str, str]] = {}
+    start = 0
+    page = 0
+    while page < pages:
+        url = SEC_FILER_BROWSE.format(start=start, count=page_size)
+        try:
+            html = _http_get(url)
+        except Exception as exc:
+            logger.warning("SEC 13F filer list fetch failed at start=%s: %s", start, exc)
+            break
+        rows = _parse_filer_table(html)
+        if not rows:
+            break
+        for cik, name in rows:
+            if cik not in seen:
+                seen[cik] = {"name": name, "cik": cik}
+        m_total = _FILER_TOTAL_RE.search(html)
+        if m_total:
+            total = int(m_total.group(2).replace(",", ""))
+            if start + page_size >= total:
+                break
+        if max_funds and len(seen) >= max_funds:
+            break
+        start += page_size
+        page += 1
+    funds = list(seen.values())
+    if max_funds:
+        funds = funds[:max_funds]
+    return funds
+
+
+def _dynamic_fund_list() -> list[dict[str, str]]:
+    """Build the fund universe: dynamic SEC filers (capped), seeded with the
+    curated MAJOR_FUNDS fallback when the live list is unavailable."""
+    try:
+        sec = sec_13f_filers()
+    except Exception as exc:
+        logger.warning("Dynamic 13F fund list unavailable: %s", exc)
+        sec = []
+    if sec:
+        merged = {f["cik"]: f for f in sec}
+        for f in MAJOR_FUNDS:
+            merged.setdefault(f["cik"], f)
+        funds = list(merged.values())
+    else:
+        funds = [dict(f) for f in MAJOR_FUNDS]
+    cap = settings.max_institutional_funds
+    return funds[:cap]
+
+
 def _latest_13f_metadata(cik: str, fund_name: str = "") -> dict[str, str] | None:
     """Return the most recent 13F-HR filing metadata for a manager.
 
@@ -352,8 +448,13 @@ def _find_holdings_filename(cik: str, accession: str) -> str | None:
 def fetch_latest_filings(
     funds: list[dict[str, str]] | None = None, max_holdings: int = 500
 ) -> list[FundFiling]:
-    """Fetch the latest 13F filing for each fund."""
-    funds = funds or MAJOR_FUNDS
+    """Fetch the latest 13F filing for each fund.
+
+    When ``funds`` is not provided, the universe is derived dynamically from
+    SEC EDGAR's paginated 13F-filer list (capped + deduplicated by CIK) instead
+    of the small hardcoded list.
+    """
+    funds = funds or _dynamic_fund_list()
     out: list[FundFiling] = []
     for fund in funds:
         cik = fund["cik"]
@@ -572,19 +673,23 @@ def ticker_institutional(ticker: str, db: Database) -> dict[str, Any] | None:
 
 
 def fund_summaries(db: Database) -> list[dict[str, Any]]:
-    """Latest per-fund summary: filing date, top holdings, buy/sell actions."""
-    # Keep the most recent filing per fund name (funds can drift across CIKs).
+    """Latest per-fund summary: filing date, top holdings, buy/sell actions.
+
+    Keyed by the stable SEC CIK (``fund_id``) so funds that file under multiple
+    series/CIKs collapse to a single record instead of being split by display
+    name.
+    """
     filings = sorted(
         db.fund_filings(limit=500), key=lambda f: f["filing_date"], reverse=True
     )
-    latest_by_name: dict[str, dict[str, Any]] = {}
+    latest_by_cik: dict[str, dict[str, Any]] = {}
     for filing in filings:
-        name = filing["fund_name"]
-        if name not in latest_by_name:
-            latest_by_name[name] = filing
+        cik = filing["cik"]
+        if cik not in latest_by_cik:
+            latest_by_cik[cik] = filing
 
     summaries: list[dict[str, Any]] = []
-    for name, filing in latest_by_name.items():
+    for cik, filing in latest_by_cik.items():
         holdings = db.fund_holdings(filing["id"], limit=15)
         changes = compute_quarterly_changes(filing["cik"], db)
         top_actions = [
@@ -592,8 +697,10 @@ def fund_summaries(db: Database) -> list[dict[str, Any]]:
         ][:12]
         summaries.append(
             {
-                "cik": filing["cik"],
+                "fund_id": cik,
+                "cik": cik,
                 "fund": filing["fund_name"],
+                "manager": filing["fund_name"],
                 "form": filing["form"],
                 "filing_date": filing["filing_date"],
                 "period_of_report": filing["period_of_report"],

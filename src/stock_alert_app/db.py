@@ -1238,3 +1238,49 @@ class Database:
                        )"""
                 ).fetchall()
             return [dict(r) for r in rows]
+
+    def ticker_strip_snapshots(
+        self, limit: int = 500, market: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Securities that have real market data, for the overhead ticker strip.
+
+        Returns the latest price snapshot per (market, ticker) joined with the
+        universe `securities` table for display metadata, plus a `change_pct`
+        computed from the previous stored snapshot (None when unavailable, so the
+        UI can show NO_DATA rather than fabricate a move). Only securities that
+        actually have price data are returned.
+        """
+        with self.connect() as conn:
+            sql = """
+                SELECT p.market, p.ticker, p.close, p.fetched_at,
+                       (SELECT p2.close FROM price_snapshots p2
+                        WHERE p2.market = p.market AND p2.ticker = p.ticker
+                          AND p2.fetched_at < p.fetched_at
+                        ORDER BY p2.fetched_at DESC LIMIT 1) AS prev_close,
+                       s.company, s.exchange, s.currency
+                FROM price_snapshots p
+                LEFT JOIN securities s ON s.market = p.market AND s.ticker = p.ticker
+                WHERE (p.market, p.ticker, p.fetched_at) IN (
+                    SELECT market, ticker, MAX(fetched_at)
+                    FROM price_snapshots GROUP BY market, ticker
+                )
+            """
+            args: list[Any] = []
+            if market:
+                sql += " AND p.market = ?"
+                args.append(market)
+            sql += " ORDER BY p.market, p.ticker"
+            if limit:
+                sql += f" LIMIT {int(limit)}"
+            rows = conn.execute(sql, args).fetchall()
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                d = dict(r)
+                prev = d.pop("prev_close", None)
+                close = d.get("close")
+                if prev and close:
+                    d["change_pct"] = (close - prev) / prev if prev else 0.0
+                else:
+                    d["change_pct"] = None
+                out.append(d)
+            return out

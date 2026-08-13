@@ -199,6 +199,18 @@ class Settings:
         default_factory=lambda: _env_int("STOCK_ALERT_REFRESH_BATCH", 25)
     )
 
+    # Institutional / 13F hedge-fund coverage. The tracked fund universe is
+    # derived dynamically from SEC EDGAR's 13F-filer list (paginated) rather
+    # than a small hardcoded list; these caps keep ingestion within API/
+    # rate-limit bounds while allowing the universe to scale far beyond the
+    # previous hardcoded set.
+    max_institutional_funds: int = field(
+        default_factory=lambda: _env_int("STOCK_ALERT_MAX_INSTITUTIONAL_FUNDS", 200)
+    )
+    institutional_filer_pages: int = field(
+        default_factory=lambda: _env_int("STOCK_ALERT_INSTITUTIONAL_PAGES", 10)
+    )
+
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
 

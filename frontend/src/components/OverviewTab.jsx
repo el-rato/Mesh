@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { fetchJSON, notifications, notificationsScan } from "../api.js";
 import { useApp } from "../App.jsx";
-import { verdictBadge, verdictClass } from "./ui.jsx";
+import { verdictBadge, verdictClass, SectionHeader, Metric, StatusIndicator } from "./ui.jsx";
 import SecurityLink, { SecurityText } from "./SecurityLink.jsx";
 
 function num(v, d = 0) {
@@ -95,9 +95,7 @@ export default function OverviewTab() {
 
   return (
     <div className="landing">
-      <div className="landing-h" style={{ fontSize: 15 }}>
-        OVERVIEW <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>· {market || "ALL MARKETS"}</span>
-      </div>
+      <SectionHeader title="OVERVIEW" sub={market || "ALL MARKETS"} right={<StatusIndicator state={error ? "error" : "live"} label={error ? "ERROR" : "LIVE"} />} />
 
       {error && (
         <div className="error">
@@ -124,18 +122,18 @@ export default function OverviewTab() {
       </div>
 
       <div className="landing-stats">
-        <div className="landing-stat"><div className="k">STOCKS SCORED</div><div className="v">{verdicts.length || "—"}</div></div>
-        <div className="landing-stat"><div className="k">BULL</div><div className="v" style={{ color: "var(--bull)" }}>{bulls}</div></div>
-        <div className="landing-stat"><div className="k">BEAR</div><div className="v" style={{ color: "var(--bear)" }}>{bears}</div></div>
-        <div className="landing-stat"><div className="k">NEUTRAL</div><div className="v">{neut}</div></div>
-        <div className="landing-stat"><div className="k">AVG CONFIDENCE</div><div className="v">{verdicts.length ? `${avgConf}%` : "--"}</div></div>
-        <div className="landing-stat"><div className="k">ALERTS</div><div className="v" style={{ color: significant.length ? "var(--bear)" : "var(--blue)" }}>{alerts.length}</div></div>
+        <Metric label="STOCKS SCORED" value={verdicts.length || "—"} />
+        <Metric label="BULL" value={bulls} tone="bull" />
+        <Metric label="BEAR" value={bears} tone="bear" />
+        <Metric label="NEUTRAL" value={neut} />
+        <Metric label="AVG CONFIDENCE" value={verdicts.length ? `${avgConf}%` : "--"} />
+        <Metric label="ALERTS" value={alerts.length} tone={significant.length ? "bear" : ""} />
       </div>
 
       <div className="landing-cols">
         {/* Major movement */}
         <div className="landing-col">
-          <div className="landing-h">MAJOR MARKET MOVEMENT</div>
+          <SectionHeader title="MAJOR MARKET MOVEMENT" />
           <div className="grid landing-index-grid">
             {topMovers.map((s) => {
               const up = (s.change_pct || 0) >= 0;
@@ -158,7 +156,7 @@ export default function OverviewTab() {
             {!topMovers.length && <div className="empty">NO INDEX DATA — RUN A REFRESH.</div>}
           </div>
 
-          <div className="landing-h" style={{ marginTop: 12 }}>TOP COMMITTEE VIEWS</div>
+          <SectionHeader title="TOP COMMITTEE VIEWS" style={{ marginTop: 12 }} />
           {topVerdicts.length ? (
             <div className="grid landing-verdict-grid">
               {topVerdicts.map((v) => (
@@ -184,7 +182,7 @@ export default function OverviewTab() {
 
         {/* Alerts */}
         <div className="landing-col">
-          <div className="landing-h">IMPORTANT ALERTS</div>
+          <SectionHeader title="IMPORTANT ALERTS" />
           {important.length ? (
             <div className="notification-list">
               {important.map((a) => (
@@ -206,7 +204,7 @@ export default function OverviewTab() {
             <div className="empty">NO IMPORTANT ALERTS — THE TERMINAL IS QUIET RIGHT NOW.</div>
           )}
 
-          <div className="landing-h" style={{ marginTop: 12 }}>SIGNIFICANT EVENTS</div>
+          <SectionHeader title="SIGNIFICANT EVENTS" style={{ marginTop: 12 }} />
           {significant.length ? (
             <div className="notification-list">
               {significant.map((a) => (

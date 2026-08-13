@@ -959,8 +959,10 @@ def hedge_fund_detail(cik: str) -> dict[str, object]:
     latest = filings[0]
     changes = compute_quarterly_changes(cik, db)
     return {
+        "fund_id": latest["cik"],
         "cik": latest["cik"],
         "fund": latest["fund_name"],
+        "manager": latest["fund_name"],
         "form": latest["form"],
         "filing_date": latest["filing_date"],
         "period_of_report": latest["period_of_report"],
@@ -1013,6 +1015,34 @@ def get_indexes(market: str | None = None) -> list[dict[str, object]]:
             "fetched_at": s["fetched_at"],
         }
         for s in snapshots
+    ]
+
+
+@app.get("/api/ticker-strip")
+def ticker_strip(market: str | None = None, limit: int = 500) -> list[dict[str, object]]:
+    """Real security universe with most-recent market data, for the overhead strip.
+
+    Only securities that actually have stored price data are returned (securities
+    without data are omitted rather than fabricated). Prices/change come from the
+    latest stored snapshots; ``change_pct`` is ``None`` when a prior snapshot is
+    unavailable so the UI can show NO_DATA instead of an invented move.
+    """
+    db = _db()
+    db.init_schema()
+    rows = db.ticker_strip_snapshots(limit=limit, market=market)
+    return [
+        {
+            "security_id": f"{r['market']}:{r['ticker']}",
+            "market": r["market"],
+            "ticker": r["ticker"],
+            "company": r.get("company") or "",
+            "exchange": r.get("exchange") or "",
+            "currency": r.get("currency") or "",
+            "close": r["close"],
+            "change_pct": (round(r["change_pct"], 4) if r["change_pct"] is not None else None),
+            "price_date": r.get("fetched_at") or "",
+        }
+        for r in rows
     ]
 
 

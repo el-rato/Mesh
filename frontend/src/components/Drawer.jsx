@@ -629,7 +629,7 @@ function FundDetail({ s, onClose }) {
               (13F · {detail.filing_date || "N/A"})
             </span>
           </h2>
-          <div className="a-sub">PERIOD OF REPORT: {detail.period_of_report || "N/A"}</div>
+          <div className="a-sub">PERIOD OF REPORT: {detail.period_of_report || "N/A"} · FUND ID {detail.fund_id || detail.cik || "N/A"}</div>
 
           <h3>Top Holdings</h3>
           {(detail.holdings || []).slice(0, 20).map((h, i) => (
