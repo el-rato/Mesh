@@ -68,24 +68,33 @@ function ChartSection({ dossierData }) {
   const [range, setRange] = useState("1mo");
   const [chartType, setChartType] = useState("candlestick");
   const [showVolume, setShowVolume] = useState(true);
-  const [showSma50, setShowSma50] = useState(true);
+  const [showSma50, setShowSma50] = useState(false);
   const [showSma200, setShowSma200] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+
+  const close = Number(price.close);
+  const open = Number(price.open);
+  const changePct = Number.isFinite(close) && Number.isFinite(open) && open !== 0 ? (close - open) / open : 0;
+  const up = changePct >= 0;
   const rangeHost = vRange(inst);
+  const toggle = (setter) => () => setter((v) => !v);
   return (
-    <section className="dossier-chart-pane">
+    <section className={`dossier-chart-pane${fullscreen ? " is-fullscreen" : ""}`}>
       <div className="chart-pane-head">
-        <div>
-          <span>PRICE / OHLCV</span>
-          <strong className="chart-current">{price.close == null ? "N/A" : num(price.close).toFixed(2)}</strong>
+        <div className="chart-id">
+          <div className="chart-symbol">
+            <span className="chart-ticker">{inst.market}:{inst.ticker}</span>
+            <span className="chart-company">{inst.company || ""}</span>
+          </div>
+          <div className="chart-price-row">
+            <span className="chart-price">{Number.isFinite(close) ? close.toFixed(2) : "N/A"}</span>
+            <span className={`chart-change ${up ? "bull" : "bear"}`}>
+              {up ? "▲" : "▼"} {Math.abs(changePct * 100).toFixed(2)}%
+            </span>
+          </div>
         </div>
         <div className="chart-controls">
-          <select className="chart-type-select" value={chartType} onChange={(event) => setChartType(event.target.value)} aria-label="Chart type">
-            <option value="candlestick">CANDLES</option>
-            <option value="ohlc">OHLC</option>
-            <option value="line">LINE</option>
-            <option value="area">AREA</option>
-          </select>
-          <div className="chart-range-bar">
+          <div className="chart-range-bar" role="group" aria-label="Timeframe">
             {CHART_RANGES.map((r) => (
               <button key={r} className={range === r ? "active" : ""} onClick={() => setRange(r)}>
                 {rangeLabel(r)}
@@ -93,16 +102,30 @@ function ChartSection({ dossierData }) {
             ))}
           </div>
           <div className="indicator-bar">
-            <button className={showVolume ? "active" : ""} onClick={() => setShowVolume((v) => !v)}>VOL</button>
-            <button className={showSma50 ? "active" : ""} onClick={() => setShowSma50((v) => !v)}>SMA 50</button>
-            <button className={showSma200 ? "active" : ""} onClick={() => setShowSma200((v) => !v)}>SMA 200</button>
+            <button className={showVolume ? "active" : ""} onClick={toggle(setShowVolume)} title="Volume">VOL</button>
+            <button className={showSma50 ? "active" : ""} onClick={toggle(setShowSma50)} title="50-period moving average">MA50</button>
+            <button className={showSma200 ? "active" : ""} onClick={toggle(setShowSma200)} title="200-period moving average">MA200</button>
+            <select className="chart-type-select" value={chartType} onChange={(event) => setChartType(event.target.value)} aria-label="Chart type" title="Chart type">
+              <option value="candlestick">CANDLES</option>
+              <option value="ohlc">OHLC</option>
+              <option value="line">LINE</option>
+              <option value="area">AREA</option>
+            </select>
+            <button className="icon-btn" onClick={toggle(setFullscreen)} title={fullscreen ? "Exit fullscreen" : "Fullscreen"}>
+              {fullscreen ? "EXIT" : "⤢"}
+            </button>
           </div>
         </div>
       </div>
       <div className="chart-workspace">
-        <PriceChart url={rangeHost(range)} chartType={chartType} showVolume={showVolume} showSma50={showSma50} showSma200={showSma200} showMomentum theme={theme} refreshKey={dossierData.computed_at} />
+        <PriceChart url={rangeHost(range)} chartType={chartType} showVolume={showVolume} showSma50={showSma50} showSma200={showSma200} theme={theme} refreshKey={dossierData.computed_at} />
       </div>
-      <div className="chart-legend"><span className="legend-price">PRICE</span>{showSma50 && <span className="legend-sma50">SMA 50</span>}{showSma200 && <span className="legend-sma200">SMA 200</span>}{showVolume && <span className="legend-volume">VOLUME</span>}</div>
+      <div className="chart-legend">
+        <span className="legend-price">PRICE</span>
+        {showSma50 && <span className="legend-sma50">MA 50</span>}
+        {showSma200 && <span className="legend-sma200">MA 200</span>}
+        {showVolume && <span className="legend-volume">VOLUME</span>}
+      </div>
     </section>
   );
 }

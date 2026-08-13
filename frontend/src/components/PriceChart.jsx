@@ -43,9 +43,9 @@ function parseRows(raw) {
 }
 
 function rsiSeries(rows, window = 14) {
-  return rows
-    .map((row, i) => {
-      if (i < window) return { x: row.time, y: null };
+    return rows
+      .map((row, i) => {
+        if (i < window) return { x: row.time.getTime(), y: null };
       let gains = 0;
       let losses = 0;
       for (let j = i - window + 1; j <= i; j += 1) {
@@ -53,9 +53,9 @@ function rsiSeries(rows, window = 14) {
         if (change >= 0) gains += change;
         else losses -= change;
       }
-      if (losses === 0) return { x: row.time, y: 100 };
+      if (losses === 0) return { x: row.time.getTime(), y: 100 };
       const rs = gains / losses;
-      return { x: row.time, y: 100 - 100 / (1 + rs) };
+      return { x: row.time.getTime(), y: 100 - 100 / (1 + rs) };
     })
     .filter((point) => point.y != null);
 }
@@ -204,7 +204,7 @@ export default function PriceChart({
       ? {
           type: mode,
           label: "PRICE",
-          data: rows.map((r) => ({ x: r.time, o: r.open, h: r.high, l: r.low, c: r.close, volume: r.volume })),
+          data: rows.map((r) => ({ x: r.time.getTime(), o: r.open, h: r.high, l: r.low, c: r.close, volume: r.volume })),
           color: candleColors,
           borderColor: candleColors,
           borderWidth: 1,
@@ -224,10 +224,10 @@ export default function PriceChart({
         };
     const mainDatasets = [mainDataset];
     if (showSma50) {
-      mainDatasets.push({ type: "line", label: "SMA 50", data: rows.filter((r) => finite(r.sma50)).map((r) => ({ x: r.time, y: r.sma50 })), borderColor: blue, borderWidth: 1.5, pointRadius: 0, tension: 0 });
+      mainDatasets.push({ type: "line", label: "SMA 50", data: rows.filter((r) => finite(r.sma50)).map((r) => ({ x: r.time.getTime(), y: r.sma50 })), borderColor: blue, borderWidth: 1.5, pointRadius: 0, tension: 0 });
     }
     if (showSma200) {
-      mainDatasets.push({ type: "line", label: "SMA 200", data: rows.filter((r) => finite(r.sma200)).map((r) => ({ x: r.time, y: r.sma200 })), borderColor: purple, borderWidth: 1.5, pointRadius: 0, tension: 0 });
+      mainDatasets.push({ type: "line", label: "SMA 200", data: rows.filter((r) => finite(r.sma200)).map((r) => ({ x: r.time.getTime(), y: r.sma200 })), borderColor: purple, borderWidth: 1.5, pointRadius: 0, tension: 0 });
     }
 
     const dataMin = rows[0].time.getTime();
@@ -295,8 +295,9 @@ export default function PriceChart({
             callbacks: {
               title(context) {
                 const raw = context[0]?.raw;
-                if (!raw || !(raw.x instanceof Date)) return "";
-                return raw.x.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+                if (!raw || raw.x == null) return "";
+                const dt = raw.x instanceof Date ? raw.x : new Date(raw.x);
+                return dt.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
               },
               label(context) {
                 const value = context.raw;
@@ -324,7 +325,7 @@ export default function PriceChart({
     if (showSubpanel && subCanvas.current) {
       const datasets = [];
       if (showVolume) {
-        datasets.push({ type: "bar", label: "VOLUME", yAxisID: "volume", data: rows.map((r) => ({ x: r.time, y: r.volume })), backgroundColor: rows.map((r) => (r.close >= r.open ? `${bull}99` : `${bear}99`)), barPercentage: 1, categoryPercentage: 1 });
+        datasets.push({ type: "bar", label: "VOLUME", yAxisID: "volume", data: rows.map((r) => ({ x: r.time.getTime(), y: r.volume })), backgroundColor: rows.map((r) => (r.close >= r.open ? `${bull}99` : `${bear}99`)), barPercentage: 1, categoryPercentage: 1 });
       }
       if (showMomentum) {
         datasets.push({ type: "line", label: "RSI 14", yAxisID: "momentum", data: rsiSeries(rows), borderColor: purple, backgroundColor: `${purple}22`, borderWidth: 1.5, pointRadius: 0, tension: 0.15 });
