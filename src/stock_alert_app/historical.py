@@ -360,3 +360,42 @@ def fetch(
         provider_errors=errors,
         error="No provider returned sufficient data for this range.",
     )
+
+
+def fetch_symbol(
+    symbol: str,
+    start: str,
+    end: str,
+    timeframe: str = "1d",
+    min_rows: int = 30,
+    providers: tuple[str, ...] = ("secondary", "tertiary"),
+) -> list[dict[str, Any]]:
+    """Fetch an arbitrary provider symbol (e.g. a benchmark index) for an exact
+    historical range, bypassing the universe symbol mapping.
+
+    Only explicit-range providers are used because a period-relative provider
+    (e.g. "last 6 months") cannot honor an arbitrary past window without
+    leaking future data. Returns validated rows (or [] on failure).
+    """
+    attempted: list[str] = []
+    for name in providers:
+        attempted.append(name)
+        provider = _PROVIDERS.get(name)
+        if provider is None:
+            continue
+        key = f"SYM|{symbol}|{start}|{end}|{timeframe}|{name}"
+        cached = _cache_get(key)
+        if cached is not None:
+            raw = cached
+        else:
+            try:
+                raw = provider(symbol, "", "", start, end, timeframe)
+            except Exception as exc:
+                raw = {"status": "error", "rows": [], "error": str(exc)}
+            ttl = _SUCCESS_TTL if raw.get("status") in ("ok", "unsupported") else _ERROR_TTL
+            _cache_set(key, raw, ttl)
+        if raw.get("status") == "ok":
+            valid = validate_rows(raw.get("rows", []), start, end, timeframe, min_rows)
+            if valid["status"] in ("ok", "partial") and valid["overlap"]:
+                return valid["rows"]
+    return []

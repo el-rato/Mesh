@@ -1856,3 +1856,89 @@ button.ghost {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--border-bright);
 }
+
+/* ---- Historical replay (SimulationTab) ---- */
+.replay-panel {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 10px 0;
+  background: var(--panel, transparent);
+}
+.replay-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+.replay-clock {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.replay-clock .big {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.replay-stats {
+  margin-top: 0 !important;
+}
+.replay-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+.replay-controls .progress {
+  margin-left: auto;
+}
+.replay-timeline {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+}
+.replay-event {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.replay-event:hover {
+  background: var(--hover, rgba(128,128,128,0.12));
+}
+.replay-event.active {
+  outline: 1px solid var(--border-bright);
+  background: var(--hover, rgba(128,128,128,0.15));
+}
+.replay-event .replay-time {
+  color: var(--muted, #888);
+  min-width: 130px;
+}
+.replay-event .replay-action {
+  font-weight: 700;
+  min-width: 90px;
+}
+.replay-event .replay-verdict {
+  font-weight: 600;
+  min-width: 70px;
+}
+.replay-detail {
+  margin-top: 10px;
+}
+.replay-reason {
+  padding: 8px 10px;
+  border-left: 2px solid var(--border-bright);
+  color: var(--text, #ddd);
+  font-size: 13px;
+  line-height: 1.5;
+}

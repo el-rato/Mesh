@@ -188,6 +188,44 @@ CREATE TABLE IF NOT EXISTS backtest_snapshots (
     UNIQUE(run_id, decision_id)
 );
 
+-- Historical replay runs + immutable chronological decision snapshots.
+CREATE TABLE IF NOT EXISTS replay_runs (
+    run_id TEXT PRIMARY KEY,
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    interval_minutes INTEGER NOT NULL,
+    capital REAL NOT NULL,
+    summary_json TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS replay_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    decision_id TEXT UNIQUE NOT NULL,
+    security_id TEXT NOT NULL,
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    action TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    conviction REAL,
+    reference_price REAL,
+    execution_price REAL,
+    quantity REAL,
+    cash REAL,
+    equity REAL,
+    position_direction TEXT,
+    position_qty REAL,
+    reason TEXT NOT NULL DEFAULT '',
+    detail_json TEXT NOT NULL DEFAULT '',
+    UNIQUE(run_id, decision_id)
+);
+CREATE INDEX IF NOT EXISTS idx_replay_decisions_run ON replay_decisions(run_id, ts);
+
 CREATE TABLE IF NOT EXISTS fund_filings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     cik TEXT NOT NULL,
@@ -860,6 +898,84 @@ class Database:
                 (run_id, decision_id, f"{market}:{ticker.upper()}", market, ticker.upper(), ts, verdict,
                  conviction, reference_price, signals_json, forward_json, correct),
             )
+
+    # ---- Historical replay runs / immutable decision snapshots ----
+
+    def insert_replay_run(
+        self,
+        run_id: str,
+        market: str,
+        ticker: str,
+        start_date: str,
+        end_date: str,
+        timeframe: str,
+        interval_minutes: int,
+        capital: float,
+        summary_json: str = "",
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO replay_runs
+                   (run_id, market, ticker, start_date, end_date, timeframe,
+                    interval_minutes, capital, summary_json, started_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (run_id, market, ticker.upper(), start_date, end_date, timeframe,
+                 interval_minutes, capital, summary_json, utc_now()),
+            )
+
+    def insert_replay_decision(
+        self,
+        run_id: str,
+        decision_id: str,
+        market: str,
+        ticker: str,
+        ts: str,
+        action: str,
+        verdict: str,
+        conviction: float | None,
+        reference_price: float | None,
+        execution_price: float | None,
+        quantity: float,
+        cash: float,
+        equity: float,
+        position_direction: str | None,
+        position_qty: float,
+        reason: str,
+        detail_json: str = "",
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO replay_decisions
+                   (run_id, decision_id, security_id, market, ticker, ts, action, verdict,
+                    conviction, reference_price, execution_price, quantity, cash, equity,
+                    position_direction, position_qty, reason, detail_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (run_id, decision_id, f"{market}:{ticker.upper()}", market, ticker.upper(), ts, action, verdict,
+                 conviction, reference_price, execution_price, quantity, cash, equity,
+                 position_direction, position_qty, reason, detail_json),
+            )
+
+    def latest_replay_run(self) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM replay_runs ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()
+            return dict(row) if row else None
+
+    def replay_runs(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM replay_runs ORDER BY started_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def replay_decisions(self, run_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM replay_decisions WHERE run_id = ? ORDER BY ts",
+                (run_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     def upsert_fund_filing(
         self,
