@@ -148,7 +148,8 @@ def test_markets_are_data_driven():
     assert "SIX" in markets  # Switzerland
     assert "LSE" in markets and "NYSE" in markets
     for m in markets.values():
-        assert m.as_dict()["coverage"]["price"] in (True, False)
+        caps = m.as_dict()["capabilities"]
+        assert caps["price"] in ("AVAILABLE", "NO_DATA")
     codes = enabled_market_codes()
     assert "EPA" in codes and "SIX" in codes and "LSE" in codes
 
@@ -156,5 +157,5 @@ def test_markets_are_data_driven():
 def test_market_coverage_partial_support():
     markets = load_markets(settings.markets_dir)
     # Institutional (13F) is US-only; European markets expose it as unavailable.
-    assert markets["EPA"].as_dict()["coverage"]["institutional"] is False
-    assert markets["EPA"].as_dict()["coverage"]["price"] is True
+    assert markets["EPA"].as_dict()["capabilities"]["institutional"] == "NO_DATA"
+    assert markets["EPA"].as_dict()["capabilities"]["price"] == "AVAILABLE"

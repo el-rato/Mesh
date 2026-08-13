@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Dict, List
 from zoneinfo import ZoneInfo
 
+from ..capabilities import CAPABILITIES, capability_map
+
 
 @dataclass(frozen=True)
 class Ticker:
@@ -34,18 +36,33 @@ class Market:
     session_open: str = "09:30"
     session_close: str = "16:00"
     enabled: bool = True
-    # Per-market data coverage, keyed by signal domain. A market can be
-    # partially supported (e.g. PRICE available, SOCIAL no_data). Values are
-    # tri-state: True (available), False (unavailable), None (unknown/limited).
-    coverage: dict[str, bool | None] = field(default_factory=dict)
+    # Canonical capability map (capability key -> AVAILABLE/NO_DATA/ERROR/STALE).
+    capabilities: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def market_id(self) -> str:
+        """Canonical market id (== code); securities use ``market_id:ticker``."""
+        return self.code
+
+    @property
+    def exchange(self) -> str:
+        return self.name
 
     def get_ticker(self, symbol: str) -> Ticker:
         return self.tickers[symbol.upper()]
 
+    def capability(self, key: str) -> str:
+        return self.capabilities.get(key, "NO_DATA")
+
     def as_dict(self) -> dict[str, object]:
+        caps = dict(self.capabilities)
+        for key in CAPABILITIES:
+            caps.setdefault(key, "NO_DATA")
         return {
             "code": self.code,
+            "market_id": self.code,
             "name": self.name,
+            "exchange": self.name,
             "country": self.country,
             "currency": self.currency,
             "timezone": self.timezone,
@@ -53,9 +70,16 @@ class Market:
             "session_open": self.session_open,
             "session_close": self.session_close,
             "enabled": self.enabled,
-            "coverage": dict(self.coverage),
+            "capabilities": caps,
             "tickers": sorted(self.tickers.keys()),
         }
+
+
+def _social_configured() -> bool:
+    """Social (Reddit) is a provider-level capability, not per-market."""
+    from ..config import settings
+
+    return bool(settings.reddit_client_id and settings.reddit_client_secret)
 
 
 def load_market(path: Path) -> Market:
@@ -70,17 +94,16 @@ def load_market(path: Path) -> Market:
         for symbol, spec in data["tickers"].items()
     }
     session = data.get("session") or {}
-    coverage = data.get("coverage") or {}
-    if not coverage:
-        # Infer coverage from what is actually configured for this market so
-        # every market exposes an honest capability map without hand-editing
-        # each JSON. 13F institutional data is SEC EDGAR (US) only.
-        coverage = {
-            "price": bool(data.get("yahoo_suffix")),
-            "news": bool(data.get("financial_feeds") or data.get("rss_queries")),
-            "social": None,
-            "institutional": data.get("code") == "NYSE",
-        }
+    declared = data.get("capabilities") or data.get("coverage") or {}
+    social = bool(declared.get("social")) if "social" in declared else _social_configured()
+    has_price = bool(data.get("tickers"))
+    capabilities = capability_map(
+        declared,
+        price=has_price,
+        news=bool(data.get("financial_feeds") or data.get("rss_queries")),
+        social=social,
+        institutional=data.get("code") == "NYSE",
+    )
     return Market(
         code=data["code"],
         name=data["name"],
@@ -94,7 +117,7 @@ def load_market(path: Path) -> Market:
         session_open=session.get("open", "09:30"),
         session_close=session.get("close", "16:00"),
         enabled=bool(data.get("enabled", True)),
-        coverage={str(k): v for k, v in coverage.items()},
+        capabilities=capabilities,
     )
 
 

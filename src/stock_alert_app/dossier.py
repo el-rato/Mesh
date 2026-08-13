@@ -326,10 +326,12 @@ def _view_changes_if(signals: dict[str, Any], verdict: str | None) -> str:
     return f"View requires {verdict.lower()} signals to persist; watch for a shift in the strongest evidence."
 
 
-def _signal_status(key: str, v: dict[str, Any], available: bool) -> str:
-    """Explicit signal status (AVAILABLE / NO_DATA / ERROR), never inferred NEUTRAL."""
+def _signal_status(key: str, v: dict[str, Any], available: bool, stale: bool = False) -> str:
+    """Explicit signal status (AVAILABLE / NO_DATA / ERROR / STALE), never
+    inferred NEUTRAL. A STALE signal is available but out of date — it is still
+    usable, but flagged so it is not mistaken for fresh evidence."""
     if available:
-        return "AVAILABLE"
+        return "STALE" if stale else "AVAILABLE"
     if key == "quant":
         st = (v.get("quantitative") or {}).get("status")
     elif key == "social":
@@ -343,7 +345,7 @@ def _signal_status(key: str, v: dict[str, Any], available: bool) -> str:
     return "NO_DATA"
 
 
-def committee_decision(v: dict[str, Any] | None) -> dict[str, Any]:
+def committee_decision(v: dict[str, Any] | None, stale: bool = False) -> dict[str, Any]:
     """Structured committee decision (thesis, cases, risks, catalysts, view-change).
 
     Deterministic and derived only from real signals/research; no fabricated
@@ -370,7 +372,7 @@ def committee_decision(v: dict[str, Any] | None) -> dict[str, Any]:
             "direction": s.get("state"),
             "score": s.get("score"),
             "confidence": s.get("confidence"),
-            "status": _signal_status(k, v, s.get("available")),
+            "status": _signal_status(k, v, s.get("available"), stale),
             "available": bool(s.get("available")),
         }
         for k, s in signals.items()
@@ -387,7 +389,7 @@ def committee_decision(v: dict[str, Any] | None) -> dict[str, Any]:
     ):
         s = signals.get(key) or {}
         signal_map[canonical] = {
-            "status": _signal_status(key, v, s.get("available")),
+            "status": _signal_status(key, v, s.get("available"), stale),
             "direction": s.get("state"),
             "score": s.get("score"),
             "confidence": s.get("confidence"),
