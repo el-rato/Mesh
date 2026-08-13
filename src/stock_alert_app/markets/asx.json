@@ -19,63 +19,110 @@
   "tickers": {
     "BHP": {
       "name": "BHP Group",
-      "keywords": ["BHP Group", "BHP"]
+      "keywords": [
+        "BHP Group",
+        "BHP"
+      ]
     },
     "CBA": {
       "name": "Commonwealth Bank of Australia",
-      "keywords": ["Commonwealth Bank", "CBA"]
+      "keywords": [
+        "Commonwealth Bank",
+        "CBA"
+      ]
     },
     "CSL": {
       "name": "CSL Limited",
-      "keywords": ["CSL Limited", "CSL"]
+      "keywords": [
+        "CSL Limited",
+        "CSL"
+      ]
     },
     "NAB": {
       "name": "National Australia Bank",
-      "keywords": ["National Australia Bank", "NAB"]
+      "keywords": [
+        "National Australia Bank",
+        "NAB"
+      ]
     },
     "WBC": {
       "name": "Westpac Banking Corporation",
-      "keywords": ["Westpac Banking", "Westpac"]
+      "keywords": [
+        "Westpac Banking",
+        "Westpac"
+      ]
     },
     "ANZ": {
       "name": "ANZ Group Holdings",
-      "keywords": ["ANZ Group", "ANZ"]
+      "keywords": [
+        "ANZ Group",
+        "ANZ"
+      ]
     },
     "WES": {
       "name": "Wesfarmers",
-      "keywords": ["Wesfarmers"]
+      "keywords": [
+        "Wesfarmers"
+      ]
     },
     "MQG": {
       "name": "Macquarie Group",
-      "keywords": ["Macquarie Group", "Macquarie"]
+      "keywords": [
+        "Macquarie Group",
+        "Macquarie"
+      ]
     },
     "TLS": {
       "name": "Telstra Group",
-      "keywords": ["Telstra Group", "Telstra"]
+      "keywords": [
+        "Telstra Group",
+        "Telstra"
+      ]
     },
     "WOW": {
       "name": "Woolworths Group",
-      "keywords": ["Woolworths Group", "Woolworths"]
+      "keywords": [
+        "Woolworths Group",
+        "Woolworths"
+      ]
     },
     "RIO": {
       "name": "Rio Tinto",
-      "keywords": ["Rio Tinto"]
+      "keywords": [
+        "Rio Tinto"
+      ]
     },
     "FMG": {
       "name": "Fortescue Metals Group",
-      "keywords": ["Fortescue Metals", "Fortescue"]
+      "keywords": [
+        "Fortescue Metals",
+        "Fortescue"
+      ]
     },
     "TCL": {
       "name": "Transurban Group",
-      "keywords": ["Transurban Group", "Transurban"]
+      "keywords": [
+        "Transurban Group",
+        "Transurban"
+      ]
     },
     "STO": {
       "name": "Santos Limited",
-      "keywords": ["Santos Limited", "Santos"]
+      "keywords": [
+        "Santos Limited",
+        "Santos"
+      ]
     },
     "COL": {
       "name": "Coles Group",
-      "keywords": ["Coles Group", "Coles"]
+      "keywords": [
+        "Coles Group",
+        "Coles"
+      ]
     }
+  },
+  "session": {
+    "open": "10:00",
+    "close": "16:00"
   }
 }

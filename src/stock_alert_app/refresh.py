@@ -149,6 +149,14 @@ def run_refresh(db: Database) -> dict[str, object]:
             except Exception as exc:
                 _state["last_error"] = f"slow refresh: {exc}"
                 logger.warning("Slow refresh failed: %s", exc)
+        # Market event detection rides the existing refresh cadence (idempotent
+        # per deterministic event keys).
+        try:
+            from .notifications import scan as scan_notifications
+
+            scan_notifications(db)
+        except Exception as exc:
+            logger.warning("Notification scan failed: %s", exc)
     finally:
         _state["running"] = False
         _lock.release()

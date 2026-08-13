@@ -1,15 +1,18 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { fetchJSON } from "./api.js";
+import { getDossierPath, parseDossierHash, securityIdOf, splitSecurityId } from "./nav.js";
 import Landing from "./components/Landing.jsx";
 import OverviewTab from "./components/OverviewTab.jsx";
 import PortfolioTab from "./components/PortfolioTab.jsx";
 import ScannerTab from "./components/ScannerTab.jsx";
+import ScreenerTab from "./components/ScreenerTab.jsx";
 import FundsTab from "./components/FundsTab.jsx";
 import IndexesTab from "./components/IndexesTab.jsx";
 import LSTMTab from "./components/LSTMTab.jsx";
 import SimulationTab from "./components/SimulationTab.jsx";
 import PaperTab from "./components/PaperTab.jsx";
 import PaperOrderTicket from "./components/PaperOrderTicket.jsx";
+import NotificationsBell from "./components/NotificationsBell.jsx";
 import Drawer from "./components/Drawer.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import SearchBox from "./components/SearchBox.jsx";
@@ -25,16 +28,18 @@ const PRIMARY_TABS = [
 ];
 
 const SECONDARY_TABS = [
-  { key: "lstm", fn: "F5", label: "LSTM" },
-  { key: "sim", fn: "F6", label: "SIM / BACKTEST" },
-  { key: "indexes", fn: "F7", label: "INDEXES" },
-  { key: "funds", fn: "F8", label: "HEDGE FUNDS" },
+  { key: "screener", fn: "F5", label: "SCREENER" },
+  { key: "lstm", fn: "F6", label: "LSTM" },
+  { key: "sim", fn: "F7", label: "SIM / BACKTEST" },
+  { key: "indexes", fn: "F8", label: "INDEXES" },
+  { key: "funds", fn: "F9", label: "HEDGE FUNDS" },
 ];
 
 const TAB_COMPONENTS = {
   overview: OverviewTab,
   portfolio: PortfolioTab,
   scanner: ScannerTab,
+  screener: ScreenerTab,
   paper: PaperTab,
   lstm: LSTMTab,
   sim: SimulationTab,
@@ -94,9 +99,61 @@ export default function App() {
   const [resolvedTheme, setResolvedTheme] = useState("dark");
   const [portfolioIds, setPortfolioIds] = useState(new Set());
   const [moreOpen, setMoreOpen] = useState(false);
+  const [screenerPrefill, setScreenerPrefill] = useState(null);
   const moreRef = useRef(null);
   const now = useClock();
   const refreshInFlight = useRef(false);
+  // Tracks a stock-dossier open initiated by openDrawer so the hashchange
+  // handler does not clobber the rich drawer payload with a minimal one.
+  const lastOpenRef = useRef(null);
+
+  // Canonical Dossier route: #/dossier/{security_id}. The hash is the single
+  // source of truth for stock dossiers: SecurityLink anchors, openDrawer calls
+  // and browser back/forward all converge here, then open the same Drawer.
+  const openDrawer = useCallback((d) => {
+    if (d && d.type === "stock" && d.v) {
+      const id = securityIdOf(d.v.market, d.v.ticker);
+      if (id) {
+        setDrawer(d);
+        const path = getDossierPath(id);
+        if (window.location.hash !== path) {
+          lastOpenRef.current = { id };
+          window.location.hash = path;
+        }
+        return;
+      }
+    }
+    lastOpenRef.current = null;
+    setDrawer(d);
+  }, []);
+
+  const closeDrawer = useCallback(() => {
+    setDrawer(null);
+    if (parseDossierHash(window.location.hash)) {
+      // Collapse the dossier URL on close without adding a history entry.
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onHash = () => {
+      const id = parseDossierHash(window.location.hash);
+      if (!id) {
+        setDrawer((cur) => (cur && cur.type === "stock" ? null : cur));
+        return;
+      }
+      const last = lastOpenRef.current;
+      if (last && last.id === id) {
+        lastOpenRef.current = null; // already opened by openDrawer with rich data
+        return;
+      }
+      const { market, ticker } = splitSecurityId(id);
+      setDrawer({ type: "stock", v: { market, ticker, company: "", reason: ["DOSSIER LINK"] } });
+    };
+    window.addEventListener("hashchange", onHash);
+    if (parseDossierHash(window.location.hash)) onHash(); // deep link on load
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   useEffect(() => {
     const onDoc = (e) => {
@@ -215,14 +272,16 @@ export default function App() {
       },
       refreshToken,
       refreshStatus,
-      openDrawer: (d) => setDrawer(d),
+      openDrawer: (d) => openDrawer(d),
       openPaperTicket: (t) => setPaperTicket(t),
       portfolioIds,
       addToPortfolio,
       removeFromPortfolio,
       inPortfolio,
+      screenerPrefill,
+      setScreenerPrefill,
     }),
-    [market, markets, indexes, refreshToken, refreshStatus, theme, portfolioIds, addToPortfolio, removeFromPortfolio, inPortfolio]
+    [market, markets, indexes, refreshToken, refreshStatus, theme, portfolioIds, addToPortfolio, removeFromPortfolio, inPortfolio, screenerPrefill, openDrawer]
   );
 
   const enterTerminal = () => {
@@ -244,6 +303,7 @@ export default function App() {
             </button>
             <TickerTape indexes={indexes} />
             <SearchBox />
+            <NotificationsBell />
             <select className="theme-toggle" value={theme} onChange={(e) => setTheme(e.target.value)} title="Theme">
               <option value="dark">DARK</option>
               <option value="light">LIGHT</option>
@@ -330,7 +390,7 @@ export default function App() {
         </div>
       )}
       <ErrorBoundary key={drawer ? `${drawer.type}:${drawer.v?.ticker || drawer.s?.cik || "?"}` : "closed"}>
-        <Drawer item={drawer} onClose={() => setDrawer(null)} />
+        <Drawer item={drawer} onClose={closeDrawer} />
       </ErrorBoundary>
       <ErrorBoundary key={paperTicket ? `${paperTicket.market}:${paperTicket.ticker}` : "closed"}>
         <PaperOrderTicket ticket={paperTicket} onClose={() => setPaperTicket(null)} />

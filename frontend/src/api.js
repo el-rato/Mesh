@@ -107,3 +107,27 @@ export async function simulate(params) {
     body: JSON.stringify(params),
   });
 }
+
+export async function notifications(limit = 50) {
+  return fetchJSON(`/api/notifications?limit=${limit}`);
+}
+
+export async function notificationsScan() {
+  return fetchJSON("/api/notifications/scan", { method: "POST" });
+}
+
+export async function notificationsAck(keys) {
+  return fetchJSON("/api/notifications/ack", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keys }),
+  });
+}
+
+export async function screener(params = {}) {
+  const qs = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== "") qs.set(k, v);
+  });
+  return fetchJSON(`/api/screener?${qs.toString()}`);
+}

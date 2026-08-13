@@ -47,6 +47,7 @@ function DossierHeader({ dossierData, v }) {
         <span className="dossier-mkt">{inst.market || v.market} · {inst.quote_type || "EQUITY"}</span>
         {verdictBadge(verdict)}
         <AddToPortfolioButton market={inst.market || v.market} ticker={inst.ticker || v.ticker} company={inst.company || v.company} />
+        <button className="paper-trade" onClick={() => openTicket("")} title="Open paper order ticket (BUY / SELL / SHORT / COVER)">PAPER TRADE</button>
         <button className="paper-buy" onClick={() => openTicket("BUY")} title="Open paper order ticket">BUY</button>
         <button className="paper-short" onClick={() => openTicket("SHORT")} title="Open paper order ticket">SHORT</button>
         <RefreshStatus status={refreshStatus} />

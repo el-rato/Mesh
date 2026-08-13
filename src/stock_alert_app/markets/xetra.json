@@ -19,63 +19,112 @@
   "tickers": {
     "SAP": {
       "name": "SAP SE",
-      "keywords": ["SAP SE", "SAP"]
+      "keywords": [
+        "SAP SE",
+        "SAP"
+      ]
     },
     "SIE": {
       "name": "Siemens AG",
-      "keywords": ["Siemens AG", "Siemens"]
+      "keywords": [
+        "Siemens AG",
+        "Siemens"
+      ]
     },
     "DTE": {
       "name": "Deutsche Telekom AG",
-      "keywords": ["Deutsche Telekom", "Telekom"]
+      "keywords": [
+        "Deutsche Telekom",
+        "Telekom"
+      ]
     },
     "ALV": {
       "name": "Allianz SE",
-      "keywords": ["Allianz SE", "Allianz"]
+      "keywords": [
+        "Allianz SE",
+        "Allianz"
+      ]
     },
     "BMW": {
       "name": "BMW AG",
-      "keywords": ["BMW AG", "BMW"]
+      "keywords": [
+        "BMW AG",
+        "BMW"
+      ]
     },
     "VOW3": {
       "name": "Volkswagen AG",
-      "keywords": ["Volkswagen AG", "Volkswagen", "VW"]
+      "keywords": [
+        "Volkswagen AG",
+        "Volkswagen",
+        "VW"
+      ]
     },
     "BAS": {
       "name": "BASF SE",
-      "keywords": ["BASF SE", "BASF"]
+      "keywords": [
+        "BASF SE",
+        "BASF"
+      ]
     },
     "BAYN": {
       "name": "Bayer AG",
-      "keywords": ["Bayer AG", "Bayer"]
+      "keywords": [
+        "Bayer AG",
+        "Bayer"
+      ]
     },
     "DHL": {
       "name": "Deutsche Post AG",
-      "keywords": ["Deutsche Post", "DHL"]
+      "keywords": [
+        "Deutsche Post",
+        "DHL"
+      ]
     },
     "MUV2": {
       "name": "Munich Re",
-      "keywords": ["Munich Re", "Muenchener Rueck"]
+      "keywords": [
+        "Munich Re",
+        "Muenchener Rueck"
+      ]
     },
     "IFX": {
       "name": "Infineon Technologies",
-      "keywords": ["Infineon Technologies", "Infineon"]
+      "keywords": [
+        "Infineon Technologies",
+        "Infineon"
+      ]
     },
     "DPW": {
       "name": "Deutsche Post AG",
-      "keywords": ["Deutsche Post"]
+      "keywords": [
+        "Deutsche Post"
+      ]
     },
     "MRK": {
       "name": "Merck KGaA",
-      "keywords": ["Merck KGaA", "Merck"]
+      "keywords": [
+        "Merck KGaA",
+        "Merck"
+      ]
     },
     "RWE": {
       "name": "RWE AG",
-      "keywords": ["RWE AG", "RWE"]
+      "keywords": [
+        "RWE AG",
+        "RWE"
+      ]
     },
     "EOAN": {
       "name": "E.ON SE",
-      "keywords": ["E.ON SE", "E.ON"]
+      "keywords": [
+        "E.ON SE",
+        "E.ON"
+      ]
     }
+  },
+  "session": {
+    "open": "09:00",
+    "close": "17:30"
   }
 }

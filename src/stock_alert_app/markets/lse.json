@@ -19,27 +19,46 @@
   "tickers": {
     "SHEL": {
       "name": "Shell plc",
-      "keywords": ["Shell", "Royal Dutch Shell"]
+      "keywords": [
+        "Shell",
+        "Royal Dutch Shell"
+      ]
     },
     "AZN": {
       "name": "AstraZeneca PLC",
-      "keywords": ["AstraZeneca"]
+      "keywords": [
+        "AstraZeneca"
+      ]
     },
     "HSBA": {
       "name": "HSBC Holdings plc",
-      "keywords": ["HSBC"]
+      "keywords": [
+        "HSBC"
+      ]
     },
     "BP": {
       "name": "BP p.l.c.",
-      "keywords": ["BP plc", "BP oil"]
+      "keywords": [
+        "BP plc",
+        "BP oil"
+      ]
     },
     "ULVR": {
       "name": "Unilever PLC",
-      "keywords": ["Unilever"]
+      "keywords": [
+        "Unilever"
+      ]
     },
     "GSK": {
       "name": "GSK plc",
-      "keywords": ["GlaxoSmithKline", "GSK"]
+      "keywords": [
+        "GlaxoSmithKline",
+        "GSK"
+      ]
     }
+  },
+  "session": {
+    "open": "08:00",
+    "close": "16:30"
   }
 }

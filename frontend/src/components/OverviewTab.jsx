@@ -1,30 +1,27 @@
 import { useEffect, useState, useCallback } from "react";
-import { fetchJSON } from "../api.js";
+import { fetchJSON, notifications, notificationsScan } from "../api.js";
 import { useApp } from "../App.jsx";
-import AddToPortfolioButton from "./AddToPortfolioButton.jsx";
 import { verdictBadge, verdictClass } from "./ui.jsx";
 
-const FUNCTIONS = [
-  { key: "scanner", fn: "F2", label: "SCANNER", desc: "What deserves attention right now" },
-  { key: "portfolio", fn: "F3", label: "PORTFOLIO", desc: "Tracked securities and paper positions" },
-  { key: "paper", fn: "F4", label: "PAPER", desc: "Simulated intraday paper portfolio" },
-  { key: "lstm", fn: "F5", label: "LSTM", desc: "Automatic quantitative model results" },
-  { key: "indexes", fn: "F6", label: "INDEXES", desc: "Benchmark indices with live charts" },
-  { key: "funds", fn: "F7", label: "HEDGE FUNDS", desc: "13F buy/sell moves from top funds" },
-];
+function num(v, d = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : d;
+}
 
-function Stat({ k, v, cls }) {
-  return (
-    <div className="landing-stat">
-      <div className="k">{k}</div>
-      <div className="v" style={cls ? { color: cls } : undefined}>{v}</div>
-    </div>
-  );
+function pct(v) {
+  return `${v > 0 ? "+" : ""}${(num(v) * 100).toFixed(2)}%`;
+}
+
+function sevClass(sev) {
+  if (sev === "HIGH") return "high";
+  if (sev === "IMPORTANT") return "important";
+  return "";
 }
 
 export default function OverviewTab() {
-  const { market, markets, indexes, refreshToken, setTab } = useApp();
+  const { market, markets, indexes, refreshToken, setTab, openDrawer, setScreenerPrefill } = useApp();
   const [verdicts, setVerdicts] = useState([]);
+  const [alerts, setAlerts] = useState([]);
   const [error, setError] = useState("");
 
   const loadVerdicts = useCallback(() => {
@@ -34,6 +31,21 @@ export default function OverviewTab() {
       .catch((e) => setError(e.message));
   }, []);
 
+  const loadAlerts = useCallback(() => {
+    notifications(40)
+      .then(setAlerts)
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    // Bootstrap the event detectors once, then poll. Repeated scans are
+    // idempotent (deterministic event keys).
+    notificationsScan().catch(() => {});
+    loadAlerts();
+    const t = setInterval(loadAlerts, 20000);
+    return () => clearInterval(t);
+  }, [loadAlerts]);
+
   useEffect(() => {
     loadVerdicts();
     const t = setInterval(loadVerdicts, 30000);
@@ -41,18 +53,44 @@ export default function OverviewTab() {
   }, [loadVerdicts]);
 
   useEffect(() => {
-    if (refreshToken) loadVerdicts();
-  }, [refreshToken]);
+    if (refreshToken) {
+      loadVerdicts();
+      loadAlerts();
+    }
+  }, [refreshToken, loadVerdicts, loadAlerts]);
 
   const bulls = verdicts.filter((v) => verdictClass(v.verdict) === "bull").length;
   const bears = verdicts.filter((v) => verdictClass(v.verdict) === "bear").length;
   const neut = verdicts.length - bulls - bears;
-  const topMovers = [...(indexes || [])]
-    .sort((a, b) => (b.change_pct || 0) - (a.change_pct || 0))
-    .slice(0, 6);
   const avgConf = verdicts.length
     ? ((verdicts.reduce((s, v) => s + (v.confidence || 0), 0) / verdicts.length) * 100).toFixed(1)
     : "--";
+  const marketsOpen = (markets || []).filter((m) => m.status?.status === "open").length;
+
+  const topMovers = [...(indexes || [])]
+    .sort((a, b) => (b.change_pct || 0) - (a.change_pct || 0))
+    .slice(0, 5);
+
+  const topVerdicts = [...verdicts]
+    .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
+    .slice(0, 6);
+
+  const important = alerts.filter((a) => a.severity === "HIGH" || a.severity === "IMPORTANT").slice(0, 6);
+  const significant = alerts.filter((a) => a.severity === "HIGH").slice(0, 6);
+
+  const openDossier = (a) =>
+    openDrawer({
+      type: "stock",
+      v: { market: a.market || "", ticker: a.ticker || "", company: "", reason: ["NOTIFICATION"] },
+    });
+
+  const screenSimilar = (a) => {
+    const prefill = { market: a.market || "" };
+    if (a.type === "significant_trade" || a.type === "position_reversed") prefill.market = a.market || "";
+    if (a.payload?.notional) prefill.min_conviction = "0.60";
+    setScreenerPrefill(prefill);
+    setTab("screener");
+  };
 
   return (
     <div className="landing">
@@ -67,17 +105,36 @@ export default function OverviewTab() {
         </div>
       )}
 
+      {/* Market status */}
+      <div className="market-status-strip">
+        <span className="dim">MARKET STATUS</span>
+        {(markets || []).map((m) => {
+          const st = m.status || {};
+          const open = st.status === "open";
+          return (
+            <span key={m.code} className={`market-chip ${open ? "open" : "closed"}`} title={`${m.name} · ${st.timezone || m.timezone || ""} local ${st.local_time || ""}`}>
+              <span className="dot" />
+              {m.code}
+              {open ? <span className="chip-time">OPEN {st.opened_at}</span> : <span className="chip-time">{st.opening_soon ? "SOON" : st.local_time || "CLOSED"}</span>}
+            </span>
+          );
+        })}
+        <span className="dim" style={{ marginLeft: "auto" }}>{marketsOpen}/{markets?.length || 0} MARKETS OPEN</span>
+      </div>
+
       <div className="landing-stats">
-        <Stat k="STOCKS SCORED" v={verdicts.length || "—"} cls="var(--amber)" />
-        <Stat k="BULL" v={bulls} cls="var(--bull)" />
-        <Stat k="BEAR" v={bears} cls="var(--bear)" />
-        <Stat k="NEUTRAL" v={neut} />
-        <Stat k="AVG CONFIDENCE" v={verdicts.length ? `${avgConf}%` : "--"} cls="var(--blue)" />
+        <div className="landing-stat"><div className="k">STOCKS SCORED</div><div className="v">{verdicts.length || "—"}</div></div>
+        <div className="landing-stat"><div className="k">BULL</div><div className="v" style={{ color: "var(--bull)" }}>{bulls}</div></div>
+        <div className="landing-stat"><div className="k">BEAR</div><div className="v" style={{ color: "var(--bear)" }}>{bears}</div></div>
+        <div className="landing-stat"><div className="k">NEUTRAL</div><div className="v">{neut}</div></div>
+        <div className="landing-stat"><div className="k">AVG CONFIDENCE</div><div className="v">{verdicts.length ? `${avgConf}%` : "--"}</div></div>
+        <div className="landing-stat"><div className="k">ALERTS</div><div className="v" style={{ color: significant.length ? "var(--bear)" : "var(--blue)" }}>{alerts.length}</div></div>
       </div>
 
       <div className="landing-cols">
+        {/* Major movement */}
         <div className="landing-col">
-          <div className="landing-h">MARKET SNAPSHOT</div>
+          <div className="landing-h">MAJOR MARKET MOVEMENT</div>
           <div className="grid landing-index-grid">
             {topMovers.map((s) => {
               const up = (s.change_pct || 0) >= 0;
@@ -88,9 +145,7 @@ export default function OverviewTab() {
                       <div className="symbol" style={{ fontSize: 13 }}>{s.name}</div>
                       <div className="name">{s.market} · {s.symbol}</div>
                     </div>
-                    <span className={`badge ${up ? "bull" : "bear"}`}>
-                      {up ? "+" : ""}{(s.change_pct * 100).toFixed(2)}%
-                    </span>
+                    <span className={`badge ${up ? "bull" : "bear"}`}>{up ? "+" : ""}{(s.change_pct * 100).toFixed(2)}%</span>
                   </div>
                   <div className="row">
                     <span className="label">CLOSE</span>
@@ -99,64 +154,84 @@ export default function OverviewTab() {
                 </div>
               );
             })}
+            {!topMovers.length && <div className="empty">NO INDEX DATA — RUN A REFRESH.</div>}
           </div>
-          {!topMovers.length && <div className="empty">RUN <code>indexes</code> OR CLICK REFRESH TO LOAD THE INDEX TAPE.</div>}
-        </div>
 
-        <div className="landing-col">
-          <div className="landing-h">TOP BULL / BEAR</div>
-          {verdicts.length ? (
+          <div className="landing-h" style={{ marginTop: 12 }}>TOP COMMITTEE VIEWS</div>
+          {topVerdicts.length ? (
             <div className="grid landing-verdict-grid">
-              {[...verdicts]
-                .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
-                .slice(0, 8)
-                .map((v) => (
-                  <div key={`${v.market}:${v.ticker}`} className={`panel ${verdictClass(v.verdict)}`}>
-                    <div className="panel-head">
-                      <div>
-                        <div className="symbol" style={{ fontSize: 13 }}>{v.ticker}</div>
-                        <div className="name">{v.market}</div>
-                      </div>
-                      {verdictBadge(v)}
+              {topVerdicts.map((v) => (
+                <div key={`${v.market}:${v.ticker}`} className={`panel ${verdictClass(v.verdict)}`} onClick={() => openDrawer({ type: "stock", v: { market: v.market, ticker: v.ticker, company: v.company || "", reason: ["OVERVIEW"] } })}>
+                  <div className="panel-head">
+                    <div>
+                      <div className="symbol" style={{ fontSize: 13 }}>{v.ticker}</div>
+                      <div className="name">{v.market}</div>
                     </div>
-                    <div className="row">
-                      <span className="label">CONFIDENCE</span>
-                      <span className="value">{(v.confidence * 100).toFixed(0)}%</span>
-                    </div>
-                    <div className="conf-bar">
-                      <span
-                        style={{
-                          width: (v.confidence * 100).toFixed(0) + "%",
-                          background:
-                            v.verdict === "BULL"
-                              ? "var(--bull)"
-                              : v.verdict === "BEAR"
-                              ? "var(--bear)"
-                              : "var(--neutral)",
-                        }}
-                      />
-                    </div>
-                    <div style={{ marginTop: 6 }}>
-                      <AddToPortfolioButton market={v.market} ticker={v.ticker} />
-                    </div>
+                    {verdictBadge(v)}
                   </div>
-                ))}
+                  <div className="conf-bar">
+                    <span style={{ width: (v.confidence * 100).toFixed(0) + "%", background: v.verdict === "BULL" ? "var(--bull)" : v.verdict === "BEAR" ? "var(--bear)" : "var(--neutral)" }} />
+                  </div>
+                  <div className="row"><span className="label">CONFIDENCE</span><span className="value">{(v.confidence * 100).toFixed(0)}%</span></div>
+                </div>
+              ))}
             </div>
           ) : (
-            <div className="empty">NO VERDICTS YET — REFRESH DATA OR OPEN SCANNER.</div>
+            <div className="empty">NO VERDICTS YET — RUN A REFRESH.</div>
+          )}
+        </div>
+
+        {/* Alerts */}
+        <div className="landing-col">
+          <div className="landing-h">IMPORTANT ALERTS</div>
+          {important.length ? (
+            <div className="notification-list">
+              {important.map((a) => (
+                <div key={a.event_key} className={`notification-item ${sevClass(a.severity)}`}>
+                  <div className="notif-head">
+                    <span className={`badge sev ${sevClass(a.severity)}`}>{a.severity}</span>
+                    <span className="notif-title">{a.title}</span>
+                    <span className="dim notif-time">{String(a.created_at).slice(11, 19)}</span>
+                  </div>
+                  <div className="notif-msg">{a.message}</div>
+                  <div className="notif-actions">
+                    {a.security_id && <button className="ghost" onClick={() => openDossier(a)}>OPEN DOSSIER</button>}
+                    <button className="ghost" onClick={() => screenSimilar(a)}>SCREEN SIMILAR</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty">NO IMPORTANT ALERTS — THE TERMINAL IS QUIET RIGHT NOW.</div>
+          )}
+
+          <div className="landing-h" style={{ marginTop: 12 }}>SIGNIFICANT EVENTS</div>
+          {significant.length ? (
+            <div className="notification-list">
+              {significant.map((a) => (
+                <div key={a.event_key} className={`notification-item high`}>
+                  <div className="notif-head">
+                    <span className="badge sev high">{a.severity}</span>
+                    <span className="notif-title">{a.title}</span>
+                    <span className="dim notif-time">{String(a.created_at).slice(11, 19)}</span>
+                  </div>
+                  <div className="notif-msg">{a.message}</div>
+                  <div className="notif-actions">
+                    {a.security_id && <button className="ghost" onClick={() => openDossier(a)}>OPEN DOSSIER</button>}
+                    <button className="ghost" onClick={() => screenSimilar(a)}>SCREEN SIMILAR</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty">NO SIGNIFICANT EVENTS DETECTED.</div>
           )}
         </div>
       </div>
 
-      <div className="landing-h">QUICK NAVIGATION</div>
-      <div className="landing-funcs">
-        {FUNCTIONS.map((f) => (
-          <button key={f.key} className="landing-func" onClick={() => setTab(f.key)}>
-            <span className="fn">{f.fn}</span>
-            <span className="lbl">{f.label}</span>
-            <span className="desc">{f.desc}</span>
-          </button>
-        ))}
+      <div className="team-note" style={{ marginTop: 12 }}>
+        WORKFLOW: EVENT → SCREENER (F5) → DOSSIER (click a security) → PAPER TRADE (PAPER tab / dossier button).
+        NOTIFICATIONS ARE DETERMINISTIC — A MARKET OPEN OR SIGNIFICANT EVENT FIRES ONCE PER SESSION, NOT PER REFRESH.
       </div>
     </div>
   );

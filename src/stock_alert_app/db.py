@@ -226,6 +226,28 @@ CREATE TABLE IF NOT EXISTS replay_decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_replay_decisions_run ON replay_decisions(run_id, ts);
 
+-- Terminal notifications (deterministic event keys, append-only).
+CREATE TABLE IF NOT EXISTS notification_events (
+    event_key TEXT PRIMARY KEY,
+    severity TEXT NOT NULL,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    security_id TEXT NOT NULL DEFAULT '',
+    market TEXT NOT NULL DEFAULT '',
+    ticker TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    acked INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_created ON notification_events(created_at DESC);
+
+-- Dedup registry for scanned events (market open / committee change / trades).
+CREATE TABLE IF NOT EXISTS notification_processed (
+    event_key TEXT PRIMARY KEY,
+    processed_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS fund_filings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     cik TEXT NOT NULL,
@@ -976,6 +998,107 @@ class Database:
                 (run_id,),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    # ---- Notification events (deterministic keys, append-only) ----
+
+    def insert_notification_event(
+        self,
+        event_key: str,
+        severity: str,
+        type_: str,
+        title: str,
+        message: str,
+        security_id: str = "",
+        market: str = "",
+        ticker: str = "",
+        payload: str = "",
+    ) -> bool:
+        """Insert an event only if its key is new. Returns True when inserted."""
+        with self.connect() as conn:
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO notification_events
+                   (event_key, severity, type, title, message, security_id,
+                    market, ticker, payload_json, created_at, acked)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                (event_key, severity, type_, title, message, security_id,
+                 market, ticker.upper(), payload, utc_now()),
+            )
+            return cur.rowcount > 0
+
+    def mark_notification_processed(self, event_key: str) -> bool:
+        """Record an event key as processed (dedup across polls)."""
+        with self.connect() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO notification_processed (event_key, processed_at) VALUES (?, ?)",
+                (event_key, utc_now()),
+            )
+            return cur.rowcount > 0
+
+    def is_notification_processed(self, event_key: str) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM notification_processed WHERE event_key = ?", (event_key,)
+            ).fetchone()
+            return row is not None
+
+    def notifications(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM notification_events
+                   ORDER BY acked ASC, created_at DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def ack_notifications(self, keys: list[str]) -> int:
+        if not keys:
+            return 0
+        with self.connect() as conn:
+            cur = conn.execute(
+                f"UPDATE notification_events SET acked = 1 WHERE event_key IN ({','.join('?' * len(keys))})",
+                keys,
+            )
+            return cur.rowcount
+
+    # ---- Verdict / price history pairs (for change + screener detection) ----
+
+    def verdict_pairs(self, market: str | None = None) -> dict[tuple[str, str], tuple[dict[str, Any] | None, dict[str, Any] | None]]:
+        """For every security: (latest_verdict, previous_verdict_or_None)."""
+        with self.connect() as conn:
+            if market:
+                rows = conn.execute(
+                    "SELECT * FROM verdicts WHERE market = ? ORDER BY market, ticker, decided_at",
+                    (market,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM verdicts ORDER BY market, ticker, decided_at"
+                ).fetchall()
+        pairs: dict[tuple[str, str], tuple[dict[str, Any] | None, dict[str, Any] | None]] = {}
+        for r in rows:
+            key = (r["market"], r["ticker"])
+            latest, previous = pairs.get(key, (None, None))
+            pairs[key] = (dict(r), latest)
+        return pairs
+
+    def price_snapshot_pairs(self, market: str | None = None) -> dict[tuple[str, str], tuple[dict[str, Any] | None, dict[str, Any] | None]]:
+        """For every security: (latest_price_snapshot, previous_or_None)."""
+        with self.connect() as conn:
+            if market:
+                rows = conn.execute(
+                    "SELECT * FROM price_snapshots WHERE market = ? ORDER BY market, ticker, fetched_at",
+                    (market,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM price_snapshots ORDER BY market, ticker, fetched_at"
+                ).fetchall()
+        pairs: dict[tuple[str, str], tuple[dict[str, Any] | None, dict[str, Any] | None]] = {}
+        for r in rows:
+            key = (r["market"], r["ticker"])
+            latest, previous = pairs.get(key, (None, None))
+            pairs[key] = (dict(r), latest)
+        return pairs
 
     def upsert_fund_filing(
         self,

@@ -19,63 +19,112 @@
   "tickers": {
     "RY": {
       "name": "Royal Bank of Canada",
-      "keywords": ["Royal Bank Canada", "RBC"]
+      "keywords": [
+        "Royal Bank Canada",
+        "RBC"
+      ]
     },
     "TD": {
       "name": "Toronto-Dominion Bank",
-      "keywords": ["TD Bank", "Toronto-Dominion"]
+      "keywords": [
+        "TD Bank",
+        "Toronto-Dominion"
+      ]
     },
     "SHOP": {
       "name": "Shopify Inc",
-      "keywords": ["Shopify", "Shopify Inc"]
+      "keywords": [
+        "Shopify",
+        "Shopify Inc"
+      ]
     },
     "ENB": {
       "name": "Enbridge Inc",
-      "keywords": ["Enbridge Inc", "Enbridge"]
+      "keywords": [
+        "Enbridge Inc",
+        "Enbridge"
+      ]
     },
     "BNS": {
       "name": "Bank of Nova Scotia",
-      "keywords": ["Bank Nova Scotia", "Scotiabank"]
+      "keywords": [
+        "Bank Nova Scotia",
+        "Scotiabank"
+      ]
     },
     "BMO": {
       "name": "Bank of Montreal",
-      "keywords": ["Bank Montreal", "BMO"]
+      "keywords": [
+        "Bank Montreal",
+        "BMO"
+      ]
     },
     "CNQ": {
       "name": "Canadian Natural Resources",
-      "keywords": ["Canadian Natural Resources", "CNRL"]
+      "keywords": [
+        "Canadian Natural Resources",
+        "CNRL"
+      ]
     },
     "CP": {
       "name": "Canadian Pacific Kansas City",
-      "keywords": ["Canadian Pacific", "CP Rail"]
+      "keywords": [
+        "Canadian Pacific",
+        "CP Rail"
+      ]
     },
     "CNR": {
       "name": "Canadian National Railway",
-      "keywords": ["Canadian National Railway", "CN Rail"]
+      "keywords": [
+        "Canadian National Railway",
+        "CN Rail"
+      ]
     },
     "BCE": {
       "name": "BCE Inc",
-      "keywords": ["BCE Inc", "Bell Canada"]
+      "keywords": [
+        "BCE Inc",
+        "Bell Canada"
+      ]
     },
     "MFC": {
       "name": "Manulife Financial",
-      "keywords": ["Manulife Financial", "Manulife"]
+      "keywords": [
+        "Manulife Financial",
+        "Manulife"
+      ]
     },
     "SU": {
       "name": "Suncor Energy",
-      "keywords": ["Suncor Energy", "Suncor"]
+      "keywords": [
+        "Suncor Energy",
+        "Suncor"
+      ]
     },
     "ABX": {
       "name": "Barrick Gold",
-      "keywords": ["Barrick Gold", "Barrick"]
+      "keywords": [
+        "Barrick Gold",
+        "Barrick"
+      ]
     },
     "NTR": {
       "name": "Nutrien Ltd",
-      "keywords": ["Nutrien Ltd", "Nutrien"]
+      "keywords": [
+        "Nutrien Ltd",
+        "Nutrien"
+      ]
     },
     "ATD": {
       "name": "Alimentation Couche-Tard",
-      "keywords": ["Alimentation Couche-Tard", "Couche-Tard"]
+      "keywords": [
+        "Alimentation Couche-Tard",
+        "Couche-Tard"
+      ]
     }
+  },
+  "session": {
+    "open": "09:30",
+    "close": "16:00"
   }
 }

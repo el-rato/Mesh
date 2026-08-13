@@ -19,63 +19,106 @@
   "tickers": {
     "0700": {
       "name": "Tencent Holdings",
-      "keywords": ["Tencent Holdings", "Tencent"]
+      "keywords": [
+        "Tencent Holdings",
+        "Tencent"
+      ]
     },
     "0941": {
       "name": "China Mobile",
-      "keywords": ["China Mobile"]
+      "keywords": [
+        "China Mobile"
+      ]
     },
     "1299": {
       "name": "AIA Group",
-      "keywords": ["AIA Group", "AIA"]
+      "keywords": [
+        "AIA Group",
+        "AIA"
+      ]
     },
     "2318": {
       "name": "Ping An Insurance",
-      "keywords": ["Ping An Insurance", "Ping An"]
+      "keywords": [
+        "Ping An Insurance",
+        "Ping An"
+      ]
     },
     "0388": {
       "name": "Hong Kong Exchanges",
-      "keywords": ["Hong Kong Exchanges", "HKEX"]
+      "keywords": [
+        "Hong Kong Exchanges",
+        "HKEX"
+      ]
     },
     "1398": {
       "name": "ICBC",
-      "keywords": ["ICBC", "Industrial Commercial Bank China"]
+      "keywords": [
+        "ICBC",
+        "Industrial Commercial Bank China"
+      ]
     },
     "0883": {
       "name": "CNOOC",
-      "keywords": ["CNOOC"]
+      "keywords": [
+        "CNOOC"
+      ]
     },
     "0939": {
       "name": "China Construction Bank",
-      "keywords": ["China Construction Bank", "CCB"]
+      "keywords": [
+        "China Construction Bank",
+        "CCB"
+      ]
     },
     "3988": {
       "name": "Bank of China",
-      "keywords": ["Bank of China"]
+      "keywords": [
+        "Bank of China"
+      ]
     },
     "0005": {
       "name": "HSBC Holdings",
-      "keywords": ["HSBC Holdings", "HSBC"]
+      "keywords": [
+        "HSBC Holdings",
+        "HSBC"
+      ]
     },
     "0762": {
       "name": "China Unicom",
-      "keywords": ["China Unicom"]
+      "keywords": [
+        "China Unicom"
+      ]
     },
     "0016": {
       "name": "Sun Hung Kai Properties",
-      "keywords": ["Sun Hung Kai Properties", "SHKP"]
+      "keywords": [
+        "Sun Hung Kai Properties",
+        "SHKP"
+      ]
     },
     "2007": {
       "name": "Country Garden",
-      "keywords": ["Country Garden"]
+      "keywords": [
+        "Country Garden"
+      ]
     },
     "0386": {
       "name": "Sinopec",
-      "keywords": ["Sinopec", "China Petroleum"]
+      "keywords": [
+        "Sinopec",
+        "China Petroleum"
+      ]
     },
     "2382": {
       "name": "Sunny Optical",
-      "keywords": ["Sunny Optical"]
+      "keywords": [
+        "Sunny Optical"
+      ]
     }
+  },
+  "session": {
+    "open": "09:30",
+    "close": "16:00"
   }
 }

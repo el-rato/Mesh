@@ -1942,3 +1942,121 @@ button.ghost {
   font-size: 13px;
   line-height: 1.5;
 }
+
+/* ---- Market status strip (Overview) ---- */
+.market-status-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.market-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+.market-chip .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.market-chip.open { color: var(--bull); border-color: var(--bull); }
+.market-chip.open .dot { background: var(--bull); }
+.market-chip.closed { color: var(--text-muted); }
+.market-chip.closed .dot { background: var(--neutral); }
+.chip-time { color: var(--text-muted); font-weight: 400; }
+
+/* ---- Notifications ---- */
+.notification-list { display: flex; flex-direction: column; gap: 6px; }
+.notification-item {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--neutral);
+  border-radius: 4px;
+  padding: 6px 8px;
+  background: var(--panel, transparent);
+}
+.notification-item.high { border-left-color: var(--bear); }
+.notification-item.important { border-left-color: var(--amber); }
+.notification-item.acked { opacity: 0.5; }
+.notif-head { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.notif-title { font-weight: 700; }
+.notif-time { margin-left: auto; }
+.notif-msg { font-size: 12px; color: var(--text-muted); margin: 4px 0; line-height: 1.4; }
+.notif-actions { display: flex; gap: 6px; }
+.notif-actions .ghost { padding: 2px 8px; font-size: 11px; }
+.badge.sev.high { background: var(--bear); color: #fff; }
+.badge.sev.important { background: var(--amber); color: #111; }
+
+/* ---- Notification bell ---- */
+.bell-wrap { position: relative; }
+.bell-btn { position: relative; background: none; border: none; font-size: 16px; cursor: pointer; padding: 4px; }
+.bell-count {
+  position: absolute; top: -4px; right: -6px;
+  background: var(--bear); color: #fff;
+  font-size: 10px; font-weight: 700;
+  border-radius: 8px; padding: 0 4px;
+}
+.bell-menu {
+  position: absolute; right: 0; top: 32px;
+  width: 380px; max-height: 480px; overflow-y: auto;
+  background: var(--bg, #101216);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  z-index: 60;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+.bell-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 2px 8px; font-size: 11px; }
+
+/* ---- Screener ---- */
+.screener-presets { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.preset-btn {
+  background: none; border: 1px solid var(--border);
+  color: var(--text-muted); font-size: 11px; font-weight: 600;
+  padding: 4px 10px; border-radius: 4px; cursor: pointer;
+}
+.preset-btn.active { color: var(--accent, #8b5cf6); border-color: var(--accent, #8b5cf6); }
+.screener-search { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.screener-search input { flex: 1; }
+.screener-search-results { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.search-result {
+  background: none; border: 1px solid var(--border);
+  color: var(--text, #ddd); text-align: left;
+  padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;
+}
+.search-result:hover { border-color: var(--border-bright); }
+.screener-table { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.screener-row {
+  display: grid;
+  grid-template-columns: 2.2fr 0.8fr 0.6fr 0.8fr 0.8fr 0.7fr 0.9fr 0.9fr 0.7fr;
+  gap: 6px;
+  align-items: center;
+  padding: 5px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.screener-row:last-child { border-bottom: none; }
+.screener-row:hover { background: var(--hover, rgba(128,128,128,0.08)); }
+.screener-row .sec { display: flex; flex-direction: column; line-height: 1.3; }
+.screener-head { font-size: 10px; color: var(--text-muted); font-weight: 700; cursor: default; }
+.screener-head:hover { background: none; }
+.screener-head span { text-transform: uppercase; }
+
+/* ---- Dossier paper trade action ---- */
+.paper-trade {
+  background: var(--accent, #8b5cf6); color: #fff;
+  border: none; border-radius: 4px;
+  font-size: 11px; font-weight: 700;
+  padding: 5px 10px; cursor: pointer;
+}
+.paper-trade:hover { filter: brightness(1.15); }

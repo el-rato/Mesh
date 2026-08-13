@@ -53,6 +53,10 @@ class ReplayRequest(BaseModel):
     size_ratio: float = 0.25
 
 
+class AckRequest(BaseModel):
+    keys: list[str]
+
+
 _initialized_dbs: set[str] = set()
 
 
@@ -596,20 +600,84 @@ def simulate(body: ReplayRequest) -> dict[str, object]:
 
 @app.get("/api/markets")
 def list_markets() -> list[dict[str, object]]:
-    from .markets import load_markets
+    from datetime import UTC, datetime
+
+    from .markets import load_markets, market_status
 
     markets = load_markets(settings.markets_dir)
-    return [
-        {
-            "code": m.code,
-            "name": m.name,
-            "country": m.country,
-            "currency": m.currency,
-            "yahoo_suffix": m.yahoo_suffix,
-            "tickers": sorted(m.tickers.keys()),
-        }
-        for m in markets.values()
-    ]
+    now = datetime.now(UTC)
+    out = []
+    for m in markets.values():
+        item = m.as_dict()
+        item["status"] = market_status(m, now)
+        out.append(item)
+    return out
+
+
+@app.get("/api/notifications")
+def get_notifications(limit: int = 50) -> list[dict[str, object]]:
+    from . import notifications
+
+    return notifications.recent(_db(), limit=limit)
+
+
+@app.post("/api/notifications/scan")
+def scan_notifications() -> dict[str, object]:
+    """Run the event detectors (market open, committee changes, significant
+    trades). Deterministic event keys make repeated polls idempotent."""
+    from . import notifications
+
+    return notifications.scan(_db())
+
+
+@app.post("/api/notifications/ack")
+def ack_notifications(body: AckRequest) -> dict[str, object]:
+    from . import notifications
+
+    return notifications.ack(_db(), body.keys)
+
+
+@app.get("/api/screener")
+def screener(
+    market: str | None = None,
+    q: str = "",
+    sector: str = "",
+    preset: str = "",
+    verdict: str = "",
+    min_conviction: float = 0.0,
+    min_momentum: float | None = None,
+    max_momentum: float | None = None,
+    min_move: float | None = None,
+    min_volume_ratio: float | None = None,
+    signal: str = "",
+    signal_key: str = "quant",
+    min_agreement: float | None = None,
+    regime: str = "",
+    above_sma: str = "",
+    news_min: float | None = None,
+    research: str = "",
+    reversal: str = "",
+    conflict: str = "",
+    no_data_only: bool = False,
+    sort: str = "combined",
+    limit: int = 100,
+) -> list[dict[str, object]]:
+    """Screen the dynamic universe (configured/discovered securities, never a
+    hardcoded list). Results reuse the canonical analysis + Committee data."""
+    from . import screener as screener_mod
+
+    filters = dict(
+        market=market, q=q, sector=sector, verdict=verdict,
+        min_conviction=min_conviction, min_momentum=min_momentum,
+        max_momentum=max_momentum, min_move=min_move,
+        min_volume_ratio=min_volume_ratio, signal=signal, signal_key=signal_key,
+        min_agreement=min_agreement, regime=regime, above_sma=above_sma,
+        news_min=news_min, research=research, reversal=reversal,
+        conflict=conflict, no_data_only=no_data_only, sort=sort, limit=limit,
+    )
+    if preset:
+        filters.update(screener_mod.apply_preset(preset))
+    return screener_mod.run(_db(), **filters)
 
 
 @app.get("/api/verdicts")

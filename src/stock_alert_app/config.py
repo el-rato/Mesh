@@ -169,6 +169,12 @@ class Settings:
             _env_csv("STOCK_ALERT_HIST_PROVIDERS", "primary,secondary,tertiary")
         )
     )
+
+    # Minimum simulated trade notional that triggers a "significant trade"
+    # notification. Reversals always notify; small trades below this are silent.
+    notification_trade_threshold: float = field(
+        default_factory=lambda: _env_float("STOCK_ALERT_NOTIFY_TRADE_THRESHOLD", 25000.0)
+    )
     regime_weight: float = field(
         default_factory=lambda: _env_float("STOCK_ALERT_REGIME_WEIGHT", 0.05)
     )
