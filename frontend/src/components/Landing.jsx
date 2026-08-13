@@ -1,4 +1,4 @@
-import { Row, StatusIndicator } from "./ui.jsx";
+﻿import { Row, StatusIndicator } from "./ui.jsx";
 
 const ILLUSTRATIVE = <span className="lp-illus">ILLUSTRATIVE</span>;
 
@@ -181,18 +181,18 @@ const STEPS = [
   { n: "05", t: "PAPER TRADE", d: "Test the decision without risking real capital." },
 ];
 
-export default function Landing({ onEnter }) {
+export default function Landing({ onLogin, onRegister }) {
   return (
     <div className="lp">
       {/* Navigation */}
       <header className="lp-nav">
         <div className="lp-nav-brand">SV<span> · STOCK VERDICT</span></div>
         <nav className="lp-nav-links" aria-label="Landing">
-          <button className="lp-nav-link" onClick={() => onEnter()}>TERMINAL</button>
-          <button className="lp-nav-link" onClick={() => onEnter("screener")}>SCREENER</button>
           <a className="lp-nav-link" href="#how-it-works">HOW IT WORKS</a>
+          <button className="lp-nav-link" onClick={onLogin}>LOGIN</button>
+          <button className="lp-nav-link" onClick={onRegister}>GET STARTED</button>
         </nav>
-        <button className="primary lp-nav-cta" onClick={() => onEnter()}>OPEN TERMINAL</button>
+        <button className="primary lp-nav-cta" onClick={onLogin}>OPEN TERMINAL</button>
       </header>
 
       {/* Hero */}
@@ -207,7 +207,7 @@ export default function Landing({ onEnter }) {
             Committee, and test decisions before risking real capital.
           </p>
           <div className="lp-hero-ctas">
-            <button className="primary lp-cta" onClick={() => onEnter()}>OPEN TERMINAL ⟶</button>
+            <button className="primary lp-cta" onClick={onLogin}>OPEN TERMINAL ⟶</button>
             <a className="lp-cta-ghost" href="#how-it-works">SEE HOW IT WORKS</a>
           </div>
           <div className="lp-hero-meta">Simulated trading · No broker · No real money</div>
@@ -336,7 +336,7 @@ export default function Landing({ onEnter }) {
           See the workflow, the evidence and the Committee for yourself — then
           paper-trade a decision before any real capital moves.
         </p>
-        <button className="primary lp-cta" onClick={() => onEnter()}>OPEN TERMINAL ⟶</button>
+        <button className="primary lp-cta" onClick={onLogin}>OPEN TERMINAL ⟶</button>
       </section>
 
       {/* Footer */}

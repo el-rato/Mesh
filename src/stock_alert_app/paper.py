@@ -186,12 +186,12 @@ def refresh_evaluations(db: Database, force: bool = False) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def ensure_session(db: Database) -> dict[str, Any]:
-    session = db.active_portfolio()
+def ensure_session(db: Database, user_id: str = "") -> dict[str, Any]:
+    session = db.active_portfolio(user_id)
     if session is None:
-        session_id = f"SESS-{int(time.time())}"
-        db.upsert_paper_portfolio(session_id, settings.paper_starting_cash)
-        session = db.active_portfolio()
+        session_id = f"SESS-{int(time.time())}-{secrets.token_hex(3).upper()}"
+        db.upsert_paper_portfolio(session_id, settings.paper_starting_cash, user_id=user_id)
+        session = db.active_portfolio(user_id)
     return session
 
 
@@ -223,6 +223,7 @@ def paper_order(
     quantity: float,
     decision_id: str | None = None,
     reason: str = "",
+    user_id: str = "",
 ) -> dict[str, Any]:
     """Execute a simulated order at the latest available valid price.
 
@@ -242,7 +243,7 @@ def paper_order(
     if not math.isfinite(quantity) or quantity <= 0:
         raise ValueError("quantity must be a positive number")
 
-    session = ensure_session(db)
+    session = ensure_session(db, user_id)
     symbol = _symbol_for(db, market, ticker)
     price = _execution_price(db, symbol, market, ticker)
     if price is None or price <= 0 or not math.isfinite(price):
@@ -252,7 +253,7 @@ def paper_order(
     fee = settings.paper_commission
     ticker = ticker.upper()
 
-    orders = db.paper_orders(session["session_id"])
+    orders = db.paper_orders(session["session_id"], user_id)
     current = positions_from_orders(orders)
     held = current.get((market, ticker), {"direction": None, "qty": 0.0, "entry": 0.0, "realized": 0.0})
 
@@ -305,7 +306,7 @@ def paper_order(
     db.insert_paper_order(
         order["order_id"], order["session_id"], market, ticker, side,
         order["quantity"], order["price"], order["fee"], order["executed_at"],
-        decision_id, reason,
+        decision_id, reason, user_id,
     )
     return order
 
@@ -389,14 +390,14 @@ def _net_market_value(
     return net
 
 
-def portfolio_state(db: Database, record_equity: bool = True) -> dict[str, Any]:
+def portfolio_state(db: Database, record_equity: bool = True, user_id: str = "") -> dict[str, Any]:
     """Current simulated portfolio: cash, exposures, positions, P&L, value.
 
     Position prices use the last stored price snapshot (lightweight; refreshed
     by the automatic refresh cycle). No look-ahead / fabricated prices.
     """
-    session = ensure_session(db)
-    orders = db.paper_orders(session["session_id"])
+    session = ensure_session(db, user_id)
+    orders = db.paper_orders(session["session_id"], user_id)
     positions = positions_from_orders(orders)
     prices: dict[tuple[str, str], float] = {}
     as_of: dict[tuple[str, str], str] = {}
@@ -530,10 +531,10 @@ def realized_per_order(orders: list[dict[str, Any]]) -> dict[str, float]:
     return out
 
 
-def stats(db: Database) -> dict[str, Any]:
+def stats(db: Database, user_id: str = "") -> dict[str, Any]:
     """Intraday trade statistics from realized P&L (min sample size enforced)."""
-    session = ensure_session(db)
-    orders = db.paper_orders(session["session_id"])
+    session = ensure_session(db, user_id)
+    orders = db.paper_orders(session["session_id"], user_id)
     rp = realized_per_order(orders)
     realized = [v for v in rp.values() if abs(v) > 1e-9]
     wins = [v for v in realized if v > 0]
@@ -569,9 +570,9 @@ def stats(db: Database) -> dict[str, Any]:
     return result
 
 
-def risk(db: Database) -> dict[str, Any]:
+def risk(db: Database, user_id: str = "") -> dict[str, Any]:
     """Simple portfolio risk view + limit warnings (simulation assumptions)."""
-    state = portfolio_state(db, record_equity=False)
+    state = portfolio_state(db, record_equity=False, user_id=user_id)
     positions = state["positions"]
     equity = state["equity"]
     gross = state["gross_exposure"]
@@ -595,17 +596,17 @@ def risk(db: Database) -> dict[str, Any]:
     }
 
 
-def equity_history(db: Database) -> list[dict[str, Any]]:
-    session = ensure_session(db)
+def equity_history(db: Database, user_id: str = "") -> list[dict[str, Any]]:
+    session = ensure_session(db, user_id)
     return db.equity_points(session["session_id"])
 
 
-def leaderboard(db: Database) -> dict[str, Any]:
+def leaderboard(db: Database, user_id: str = "") -> dict[str, Any]:
     """Simulated leaderboard: the local player plus clearly-labelled demo accounts.
 
     Demo competitors are deterministic, simulated accounts — never real users.
     """
-    player = portfolio_state(db, record_equity=True)
+    player = portfolio_state(db, record_equity=True, user_id=user_id)
     rows = [
         {
             "rank": 1,
@@ -640,11 +641,11 @@ def leaderboard(db: Database) -> dict[str, Any]:
     return {"rows": rows, "demo_label": "DEMO COMPETITORS ARE SIMULATED ACCOUNTS — NOT REAL USERS."}
 
 
-def end_session(db: Database) -> dict[str, Any]:
+def end_session(db: Database, user_id: str = "") -> dict[str, Any]:
     """Liquidate all open positions at the final valid market price and return
     the session result (intraday simulation: no overnight positions)."""
-    session = ensure_session(db)
-    orders = db.paper_orders(session["session_id"])
+    session = ensure_session(db, user_id)
+    orders = db.paper_orders(session["session_id"], user_id)
     positions = positions_from_orders(orders)
     closed: list[dict[str, Any]] = []
     for (market, ticker), p in positions.items():
@@ -652,11 +653,11 @@ def end_session(db: Database) -> dict[str, Any]:
             continue
         side = "SELL" if p["direction"] == "LONG" else "COVER"
         try:
-            order = paper_order(db, market, ticker, side, p["qty"], reason="session close")
+            order = paper_order(db, market, ticker, side, p["qty"], reason="session close", user_id=user_id)
         except (ValueError, LookupError):
             continue
         closed.append({"market": market, "ticker": ticker, "side": order["side"], "qty": order["quantity"], "price": order["price"]})
-    final = portfolio_state(db, record_equity=True)
+    final = portfolio_state(db, record_equity=True, user_id=user_id)
     final["closed_positions"] = closed
     return final
 

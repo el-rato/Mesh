@@ -11,6 +11,22 @@ logger = logging.getLogger(__name__)
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
 CREATE TABLE IF NOT EXISTS news_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     market TEXT NOT NULL,
@@ -319,7 +335,28 @@ class Database:
             # (source='discovered'); the old table is now obsolete.
             conn.execute("DROP TABLE IF EXISTS discovered_tickers")
             self._migrate_verdicts(conn)
+            self._migrate_user_ownership(conn)
             return self._migrate_verdict_reasons(conn)
+
+    @staticmethod
+    def _migrate_user_ownership(conn: sqlite3.Connection) -> None:
+        """Safe migration: add ``user_id`` to paper tables for per-user ownership.
+
+        Idempotent. Legacy rows keep the empty ``user_id`` (anonymous) — they are
+        never deleted or silently reassigned to another user.
+        """
+        for table in ("paper_portfolio", "paper_orders"):
+            cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if "user_id" not in cols:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN user_id TEXT NOT NULL DEFAULT ''"
+                )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_orders_user ON paper_orders(user_id, executed_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_portfolio_user ON paper_portfolio(user_id)"
+        )
 
     @staticmethod
     def _migrate_verdicts(conn: sqlite3.Connection) -> None:
@@ -388,6 +425,45 @@ class Database:
             changed += 1
         logger.info("Migrated %d legacy verdict reasons to canonical format", changed)
         return changed
+
+    # ---- Authentication ----
+
+    def create_user(self, user_id: str, email: str, password_hash: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO users (id, email, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (user_id, email.lower().strip(), password_hash, utc_now(), utc_now()),
+            )
+
+    def get_user_by_email(self, email: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE email = ?", (email.lower().strip(),)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_user_by_id(self, user_id: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+            return dict(row) if row else None
+
+    def create_session(self, token_hash: str, user_id: str, expires_at: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+                (token_hash, user_id, utc_now(), expires_at),
+            )
+
+    def get_session(self, token_hash: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM sessions WHERE token_hash = ?", (token_hash,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def delete_session(self, token_hash: str) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
 
     def insert_news_item(
         self,
@@ -762,19 +838,24 @@ class Database:
     # ---- Paper trading (simulation only) ----
 
     def upsert_paper_portfolio(
-        self, session_id: str, starting_cash: float, currency: str = "USD"
+        self,
+        session_id: str,
+        starting_cash: float,
+        currency: str = "USD",
+        user_id: str = "",
     ) -> None:
         with self.connect() as conn:
             conn.execute(
-                """INSERT OR IGNORE INTO paper_portfolio (session_id, starting_cash, currency, opened_at, active)
-                   VALUES (?, ?, ?, ?, 1)""",
-                (session_id, starting_cash, currency, utc_now()),
+                """INSERT OR IGNORE INTO paper_portfolio (session_id, starting_cash, currency, opened_at, active, user_id)
+                   VALUES (?, ?, ?, ?, 1, ?)""",
+                (session_id, starting_cash, currency, utc_now(), user_id),
             )
 
-    def active_portfolio(self) -> dict[str, Any] | None:
+    def active_portfolio(self, user_id: str = "") -> dict[str, Any] | None:
         with self.connect() as conn:
             row = conn.execute(
-                "SELECT * FROM paper_portfolio WHERE active = 1 ORDER BY opened_at DESC LIMIT 1"
+                "SELECT * FROM paper_portfolio WHERE active = 1 AND user_id = ? ORDER BY opened_at DESC LIMIT 1",
+                (user_id,),
             ).fetchone()
             return dict(row) if row else None
 
@@ -791,13 +872,14 @@ class Database:
         executed_at: str,
         decision_id: str | None,
         reason: str,
+        user_id: str = "",
     ) -> None:
         with self.connect() as conn:
             conn.execute(
                 """INSERT INTO paper_orders
                    (order_id, session_id, security_id, market, ticker, side, quantity,
-                    price, fee, executed_at, decision_id, reason)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    price, fee, executed_at, decision_id, reason, user_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     order_id,
                     session_id,
@@ -811,19 +893,21 @@ class Database:
                     executed_at,
                     decision_id,
                     reason,
+                    user_id,
                 ),
             )
 
-    def paper_orders(self, session_id: str | None = None) -> list[dict[str, Any]]:
+    def paper_orders(self, session_id: str | None = None, user_id: str = "") -> list[dict[str, Any]]:
         with self.connect() as conn:
             if session_id:
                 rows = conn.execute(
-                    "SELECT * FROM paper_orders WHERE session_id = ? ORDER BY executed_at",
-                    (session_id,),
+                    "SELECT * FROM paper_orders WHERE session_id = ? AND user_id = ? ORDER BY executed_at",
+                    (session_id, user_id),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM paper_orders ORDER BY executed_at"
+                    "SELECT * FROM paper_orders WHERE user_id = ? ORDER BY executed_at",
+                    (user_id,),
                 ).fetchall()
             return [dict(r) for r in rows]
 

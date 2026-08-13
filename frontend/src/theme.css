@@ -2611,3 +2611,118 @@ button.ghost {
   font-size: 12px;
 }
 .fund-search:focus { outline: none; border-color: var(--amber-dim); }
+
+/* ---- Authentication ---- */
+.boot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  color: var(--amber);
+  font-family: var(--mono);
+  letter-spacing: 2px;
+  font-size: 13px;
+}
+.auth-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: var(--bg);
+  font-family: var(--sans);
+}
+.auth-card {
+  width: 100%;
+  max-width: 380px;
+  border: 1px solid var(--border-bright);
+  background: var(--bg-panel);
+  border-radius: var(--r-md);
+  padding: 32px 30px;
+}
+.auth-brand {
+  font-family: var(--mono);
+  color: var(--amber);
+  font-weight: 700;
+  letter-spacing: 1px;
+  font-size: 13px;
+  margin-bottom: 26px;
+}
+.auth-brand span { color: var(--text-muted); font-weight: 400; }
+.auth-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  margin-bottom: 6px;
+}
+.auth-sub {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin-bottom: 24px;
+}
+.auth-form { display: flex; flex-direction: column; gap: 14px; }
+.auth-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+}
+.auth-form input {
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 10px 12px;
+  color: var(--text);
+  background: var(--bg-panel2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.auth-form input:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber); }
+.auth-error {
+  color: var(--bear);
+  font-size: 12px;
+  font-family: var(--mono);
+  border: 1px solid var(--bear);
+  background: rgba(255, 82, 82, 0.06);
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+}
+.auth-submit {
+  margin-top: 4px;
+  padding: 11px 16px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.auth-switch {
+  margin-top: 20px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+.auth-switch button {
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  color: var(--amber);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+/* ---- Authenticated user menu (topbar) ---- */
+.user-menu {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.user-email {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

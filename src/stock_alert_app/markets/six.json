@@ -1,0 +1,37 @@
+{
+  "code": "SIX",
+  "name": "SIX Swiss Exchange",
+  "country": "CH",
+  "currency": "CHF",
+  "timezone": "Europe/Zurich",
+  "yahoo_suffix": ".SW",
+  "enabled": true,
+  "coverage": {
+    "price": true,
+    "news": true,
+    "social": null,
+    "institutional": false
+  },
+  "rss_queries": [
+    "SIX Swiss Exchange",
+    "SMI",
+    "Swiss equities"
+  ],
+  "financial_feeds": [
+    "https://www.investing.com/rss/news_5.rss"
+  ],
+  "tickers": {
+    "NESN": { "name": "Nestlé S.A.", "keywords": ["Nestle"] },
+    "ROG": { "name": "Roche Holding AG", "keywords": ["Roche"] },
+    "NOVN": { "name": "Novartis AG", "keywords": ["Novartis"] },
+    "UBSG": { "name": "UBS Group AG", "keywords": ["UBS"] },
+    "ABBN": { "name": "ABB Ltd", "keywords": ["ABB"] },
+    "ZURN": { "name": "Zurich Insurance Group AG", "keywords": ["Zurich Insurance"] },
+    "LONN": { "name": "Lonza Group AG", "keywords": ["Lonza"] },
+    "CFR": { "name": "Richemont", "keywords": ["Compagnie Financiere Richemont"] }
+  },
+  "session": {
+    "open": "09:00",
+    "close": "17:30"
+  }
+}

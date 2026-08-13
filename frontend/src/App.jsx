@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { fetchJSON } from "./api.js";
+import { fetchJSON, authMe, authLogout } from "./api.js";
 import { getDossierPath, parseDossierHash, securityIdOf, splitSecurityId } from "./nav.js";
 import Landing from "./components/Landing.jsx";
+import AuthScreen from "./components/AuthScreen.jsx";
 import OverviewTab from "./components/OverviewTab.jsx";
 import PortfolioTab from "./components/PortfolioTab.jsx";
 import ScannerTab from "./components/ScannerTab.jsx";
@@ -112,7 +113,8 @@ function TickerTape({ tickers }) {
 }
 
 export default function App() {
-  const [view, setView] = useState("landing");
+  const [auth, setAuth] = useState({ status: "checking", user: null });
+  const [authMode, setAuthMode] = useState(null);
   const [market, setMarket] = useState("");
   const [markets, setMarkets] = useState([]);
   const [indexes, setIndexes] = useState([]);
@@ -257,6 +259,32 @@ export default function App() {
       .catch(() => setMarkets([]));
   }, []);
 
+  // Initial session check: decides landing vs. terminal without a visible
+  // landing->redirect flicker.
+  useEffect(() => {
+    authMe()
+      .then((d) => setAuth({ status: "authed", user: d.user || null }))
+      .catch(() => setAuth({ status: "anon", user: null }));
+  }, []);
+
+  const handleAuthSuccess = useCallback(async () => {
+    try {
+      const d = await authMe();
+      setAuth({ status: "authed", user: d.user || null });
+      setAuthMode(null);
+      setTab("overview");
+    } catch {
+      setAuth({ status: "anon", user: null });
+    }
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    await authLogout().catch(() => {});
+    setAuth({ status: "anon", user: null });
+    setAuthMode(null);
+  }, []);
+
+
   const loadIndexes = () => {
     fetchJSON("/api/indexes")
       .then(setIndexes)
@@ -301,11 +329,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (view !== "terminal") return undefined;
+    if (auth.status !== "authed") return undefined;
     runBackgroundRefresh();
     const t = setInterval(runBackgroundRefresh, 15000);
     return () => clearInterval(t);
-  }, [view, runBackgroundRefresh]);
+  }, [auth.status, runBackgroundRefresh]);
 
   const ctx = useMemo(
     () => ({
@@ -334,21 +362,24 @@ export default function App() {
     [market, markets, indexes, refreshToken, refreshStatus, theme, portfolioIds, addToPortfolio, removeFromPortfolio, inPortfolio, screenerPrefill, openDrawer]
   );
 
-  const enterTerminal = (tab = "overview") => {
-    setTab(tab);
-    setView("terminal");
-  };
-
   const ActiveTab = TAB_COMPONENTS[tab];
 
   return (
     <AppContext.Provider value={ctx}>
-      {view === "landing" ? (
-        <Landing onEnter={enterTerminal} />
+      {auth.status === "checking" ? (
+        <div className="boot"><span>SV · STOCK VERDICT</span></div>
+      ) : auth.status === "anon" ? (
+        authMode === "login" ? (
+          <AuthScreen mode="login" onSwitch={setAuthMode} onSuccess={handleAuthSuccess} />
+        ) : authMode === "register" ? (
+          <AuthScreen mode="register" onSwitch={setAuthMode} onSuccess={handleAuthSuccess} />
+        ) : (
+          <Landing onLogin={() => setAuthMode("login")} onRegister={() => setAuthMode("register")} />
+        )
       ) : (
         <div className="terminal">
           <header className="topbar">
-            <button className="logo" style={{ border: "none", background: "transparent", cursor: "pointer" }} onClick={() => setView("landing")}>
+            <button className="logo" style={{ border: "none", background: "transparent", cursor: "pointer" }} onClick={() => setTab("overview")}>
               SV<span className="dim"> | STOCK VERDICT</span>
             </button>
             <TickerTape tickers={tickers} />
@@ -359,6 +390,10 @@ export default function App() {
               <option value="light">LIGHT</option>
               <option value="system">SYSTEM</option>
             </select>
+            <div className="user-menu" title={auth.user?.email || ""}>
+              <span className="user-email">{auth.user?.email || "ACCOUNT"}</span>
+              <button className="ghost" onClick={handleLogout}>LOGOUT</button>
+            </div>
             <span className="clock">{now.toLocaleTimeString()}</span>
           </header>
 

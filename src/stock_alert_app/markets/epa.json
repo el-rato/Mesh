@@ -1,0 +1,38 @@
+{
+  "code": "EPA",
+  "name": "Euronext Paris",
+  "country": "FR",
+  "currency": "EUR",
+  "timezone": "Europe/Paris",
+  "yahoo_suffix": ".PA",
+  "enabled": true,
+  "coverage": {
+    "price": true,
+    "news": true,
+    "social": null,
+    "institutional": false
+  },
+  "rss_queries": [
+    "Euronext Paris",
+    "CAC 40",
+    "French equities"
+  ],
+  "financial_feeds": [
+    "https://www.investing.com/rss/news_72.rss",
+    "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EFCHI&region=FR&lang=fr-FR"
+  ],
+  "tickers": {
+    "MC": { "name": "LVMH Moët Hennessy Louis Vuitton SE", "keywords": ["LVMH"] },
+    "OR": { "name": "L'Oréal S.A.", "keywords": ["L'Oreal"] },
+    "TTE": { "name": "TotalEnergies SE", "keywords": ["Total"] },
+    "SAN": { "name": "Sanofi", "keywords": ["Sanofi"] },
+    "AI": { "name": "Air Liquide S.A.", "keywords": ["Air Liquide"] },
+    "AIR": { "name": "Airbus SE", "keywords": ["Airbus"] },
+    "BNP": { "name": "BNP Paribas S.A.", "keywords": ["BNP Paribas"] },
+    "SU": { "name": "Schneider Electric S.E.", "keywords": ["Schneider Electric"] }
+  },
+  "session": {
+    "open": "09:00",
+    "close": "17:30"
+  }
+}

@@ -211,6 +211,12 @@ class Settings:
         default_factory=lambda: _env_int("STOCK_ALERT_INSTITUTIONAL_PAGES", 10)
     )
 
+    # Authentication. Session cookies are HTTP-only. Set STOCK_ALERT_AUTH_SECURE=1
+    # when serving over HTTPS; local/dev HTTP deployments keep Secure disabled.
+    auth_cookie_secure: bool = field(
+        default_factory=lambda: os.getenv("STOCK_ALERT_AUTH_SECURE", "0") == "1"
+    )
+
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
 

@@ -169,12 +169,13 @@ def run_price_fetch(
     db_path: str | None = None,
 ) -> dict[str, PriceState]:
     from .ingest import _load_markets  # reuse market loading without duplicating
+    from .markets import scan_market_codes
 
     markets = _load_markets()
     db = Database(db_path or settings.db_path)
     db.init_schema()
 
-    codes = list(market_codes) if market_codes else list(settings.default_markets)
+    codes = list(market_codes) if market_codes else scan_market_codes()
     states: dict[str, PriceState] = {}
     for code in codes:
         market = markets.get(code)

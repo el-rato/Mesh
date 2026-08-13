@@ -542,12 +542,13 @@ def run_verdicts(
     analysis engine instead of a parallel batch implementation.
     """
     from .ingest import _load_markets
+    from .markets import scan_market_codes
 
     markets = _load_markets()
     db = Database(db_path or settings.db_path)
     db.init_schema()
 
-    codes = list(market_codes) if market_codes else list(settings.default_markets)
+    codes = list(market_codes) if market_codes else scan_market_codes()
 
     verdicts: dict[str, Verdict] = {}
     for code in codes:

@@ -7,13 +7,17 @@ from dataclasses import dataclass
 from . import sources
 from .config import settings
 from .db import Database
-from .markets import Market, Ticker, load_markets
+from .markets import Market, Ticker, load_markets, scan_market_codes
 
 logger = logging.getLogger(__name__)
 
 
 def _load_markets() -> dict[str, Market]:
     return load_markets(settings.markets_dir)
+
+
+def _enabled_codes() -> list[str]:
+    return scan_market_codes(settings.markets_dir)
 
 
 @dataclass
@@ -135,7 +139,7 @@ def run_ingest(
     db = Database(db_path or settings.db_path)
     db.init_schema()
 
-    codes = list(market_codes) if market_codes else list(settings.default_markets)
+    codes = list(market_codes) if market_codes else _enabled_codes()
     results: dict[str, IngestResult] = {}
     for code in codes:
         market = markets.get(code)

@@ -44,11 +44,11 @@ def refresh_status() -> dict[str, object]:
 
 def _candidates(db: Database) -> list[tuple[str, str, str, str]]:
     """Configured markets + watchlist -> (market, ticker, company, yahoo_symbol)."""
-    from .markets import load_markets
+    from .markets import load_markets, scan_market_codes
 
     markets = load_markets(settings.markets_dir)
     candidates: list[tuple[str, str, str, str]] = []
-    for code in settings.default_markets:
+    for code in scan_market_codes():
         market = markets.get(code)
         if not market:
             continue
@@ -72,8 +72,9 @@ def _candidates(db: Database) -> list[tuple[str, str, str, str]]:
 def run_fast_refresh(db: Database) -> dict[str, object]:
     """Fetch current prices and store lightweight price snapshots (no LSTM/news)."""
     from .price import run_price_fetch
+    from .markets import scan_market_codes
 
-    states = run_price_fetch(market_codes=list(settings.default_markets), db_path=str(db.path))
+    states = run_price_fetch(market_codes=scan_market_codes(), db_path=str(db.path))
     return {"prices": len(states)}
 
 

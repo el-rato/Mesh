@@ -86,11 +86,12 @@ def _emit(
 
 
 def _market_open_events(db: Database, now: datetime) -> list[dict[str, Any]]:
-    from .markets import load_markets, market_status
+    from .markets import enabled_market_codes, load_markets, market_status
 
+    enabled = set(enabled_market_codes())
     events: list[dict[str, Any]] = []
     for market in load_markets(settings.markets_dir).values():
-        if market.code not in settings.default_markets:
+        if market.code not in enabled:
             continue
         status = market_status(market, now)
         if status["status"] != "open":

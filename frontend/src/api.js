@@ -128,6 +128,30 @@ export async function tickerStrip() {
   return fetchJSON("/api/ticker-strip");
 }
 
+export async function authRegister(email, password) {
+  return fetchJSON("/api/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function authLogin(email, password) {
+  return fetchJSON("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function authLogout() {
+  return fetchJSON("/api/auth/logout", { method: "POST" });
+}
+
+export async function authMe() {
+  return fetchJSON("/api/auth/me");
+}
+
 export async function screener(params = {}) {
   const qs = new URLSearchParams();
   Object.entries(params).forEach(([k, v]) => {

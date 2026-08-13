@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import logging
+import re
+import secrets
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import Cookie, Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import settings
 from .db import Database, utc_now
+from . import auth
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +60,16 @@ class AckRequest(BaseModel):
     keys: list[str]
 
 
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
 _initialized_dbs: set[str] = set()
 
 
@@ -67,6 +80,71 @@ def _db() -> Database:
         db.init_schema()
         _initialized_dbs.add(key)
     return db
+
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_MIN_PASSWORD = 8
+
+
+def _set_session_cookie(response, token: str) -> None:
+    response.set_cookie(
+        key="sv_session",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        secure=settings.auth_cookie_secure,
+        path="/",
+        max_age=auth.SESSION_TTL_HOURS * 3600,
+    )
+
+
+@app.post("/api/auth/register")
+def auth_register(body: RegisterRequest):
+    from . import auth
+
+    db = _db()
+    email = (body.email or "").strip().lower()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(status_code=422, detail="enter a valid email address")
+    if not body.password or len(body.password) < _MIN_PASSWORD:
+        raise HTTPException(status_code=422, detail=f"password must be at least {_MIN_PASSWORD} characters")
+    if db.get_user_by_email(email):
+        raise HTTPException(status_code=409, detail="an account with this email already exists")
+    user_id = secrets.token_hex(16)
+    db.create_user(user_id, email, auth.hash_password(body.password))
+    token = auth.new_session(db, user_id)
+    resp = JSONResponse({"user": {"id": user_id, "email": email}})
+    _set_session_cookie(resp, token)
+    return resp
+
+
+@app.post("/api/auth/login")
+def auth_login(body: LoginRequest):
+    from . import auth
+
+    db = _db()
+    user = db.get_user_by_email((body.email or "").strip())
+    if not user or not auth.verify_password(body.password or "", user["password_hash"]):
+        raise HTTPException(status_code=401, detail="invalid email or password")
+    token = auth.new_session(db, user["id"])
+    resp = JSONResponse({"user": {"id": user["id"], "email": user["email"]}})
+    _set_session_cookie(resp, token)
+    return resp
+
+
+@app.post("/api/auth/logout")
+def auth_logout(sv_session: str | None = Cookie(default=None)):
+    from . import auth
+
+    auth.clear_session(_db(), sv_session)
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie("sv_session", path="/")
+    return resp
+
+
+@app.get("/api/auth/me")
+def auth_me(user: dict = Depends(auth.current_user)):
+    return {"user": {"id": user["id"], "email": user["email"]}}
 
 
 def _analysis_context(
@@ -457,16 +535,16 @@ def refresh_status() -> dict[str, object]:
 
 
 @app.get("/api/paper/portfolio")
-def paper_portfolio() -> dict[str, object]:
+def paper_portfolio(user: dict = Depends(auth.current_user)) -> dict[str, object]:
     from . import paper
 
     db = _db()
     db.init_schema()
-    return paper.portfolio_state(db)
+    return paper.portfolio_state(db, user_id=user["id"])
 
 
 @app.get("/api/paper/quote")
-def paper_quote(market: str, ticker: str) -> dict[str, object]:
+def paper_quote(market: str, ticker: str, user: dict = Depends(auth.current_user)) -> dict[str, object]:
     from . import paper
 
     db = _db()
@@ -475,7 +553,7 @@ def paper_quote(market: str, ticker: str) -> dict[str, object]:
 
 
 @app.post("/api/paper/order")
-def paper_order(body: PaperOrder) -> dict[str, object]:
+def paper_order(body: PaperOrder, user: dict = Depends(auth.current_user)) -> dict[str, object]:
     from . import paper
 
     db = _db()
@@ -489,77 +567,80 @@ def paper_order(body: PaperOrder) -> dict[str, object]:
             body.quantity,
             decision_id=body.decision_id or None,
             reason=body.reason or "",
+            user_id=user["id"],
         )
     except (ValueError, LookupError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    return {"order": order, "portfolio": paper.portfolio_state(db)}
+    return {"order": order, "portfolio": paper.portfolio_state(db, user_id=user["id"])}
 
 
 @app.post("/api/paper/end-session")
-def paper_end_session() -> dict[str, object]:
+def paper_end_session(user: dict = Depends(auth.current_user)) -> dict[str, object]:
     from . import paper
 
     db = _db()
     db.init_schema()
-    return paper.end_session(db)
+    return paper.end_session(db, user_id=user["id"])
 
 
 @app.get("/api/paper/leaderboard")
-def paper_leaderboard() -> dict[str, object]:
+def paper_leaderboard(user: dict = Depends(auth.current_user)) -> dict[str, object]:
     from . import paper
 
     db = _db()
     db.init_schema()
-    return paper.leaderboard(db)
+    return paper.leaderboard(db, user_id=user["id"])
 
 
 @app.get("/api/paper/stats")
-def paper_stats() -> dict[str, object]:
+def paper_stats(user: dict = Depends(auth.current_user)) -> dict[str, object]:
     from . import paper
 
     db = _db()
     db.init_schema()
-    return paper.stats(db)
+    return paper.stats(db, user_id=user["id"])
 
 
 @app.get("/api/paper/risk")
-def paper_risk() -> dict[str, object]:
+def paper_risk(user: dict = Depends(auth.current_user)) -> dict[str, object]:
     from . import paper
 
     db = _db()
     db.init_schema()
-    return paper.risk(db)
+    return paper.risk(db, user_id=user["id"])
 
 
 @app.get("/api/paper/equity")
-def paper_equity() -> list[dict[str, object]]:
+def paper_equity(user: dict = Depends(auth.current_user)) -> list[dict[str, object]]:
     from . import paper
 
     db = _db()
     db.init_schema()
-    return paper.equity_history(db)
+    return paper.equity_history(db, user_id=user["id"])
 
 
 @app.get("/api/paper/trades")
-def paper_trades() -> list[dict[str, object]]:
-    from . import paper
-
+def paper_trades(user: dict = Depends(auth.current_user)) -> list[dict[str, object]]:
     db = _db()
     db.init_schema()
-    session = db.active_portfolio()
-    orders = db.paper_orders(session["session_id"]) if session else []
+    session = db.active_portfolio(user["id"])
+    orders = db.paper_orders(session["session_id"], user["id"]) if session else []
     return orders
 
 
 @app.get("/api/paper/decisions")
-def paper_decisions(market: str | None = None, ticker: str | None = None) -> list[dict[str, object]]:
+def paper_decisions(
+    market: str | None = None,
+    ticker: str | None = None,
+    user: dict = Depends(auth.current_user),
+) -> list[dict[str, object]]:
     db = _db()
     db.init_schema()
     return db.decision_snapshots(market=market, ticker=ticker)
 
 
 @app.get("/api/paper/performance")
-def paper_performance() -> dict[str, object]:
+def paper_performance(user: dict = Depends(auth.current_user)) -> dict[str, object]:
     from . import paper
 
     db = _db()
@@ -568,7 +649,7 @@ def paper_performance() -> dict[str, object]:
 
 
 @app.post("/api/paper/evaluate")
-def paper_evaluate(force: bool = False) -> dict[str, object]:
+def paper_evaluate(force: bool = False, user: dict = Depends(auth.current_user)) -> dict[str, object]:
     from . import paper
 
     db = _db()
