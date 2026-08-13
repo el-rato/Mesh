@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchJSON, screener } from "../api.js";
 import { useApp } from "../App.jsx";
+import SecurityLink from "./SecurityLink.jsx";
 
 const PRESETS = [
   { key: "strong_bullish", label: "STRONG BULLISH" },
@@ -246,7 +247,7 @@ export default function ScreenerTab() {
           {rows.map((r) => (
             <div className="screener-row" key={`${r.market}:${r.ticker}`} onClick={() => openDossier(r)} title={`Open Dossier ${r.market}:${r.ticker}`}>
               <span className="sec">
-                <strong>{r.ticker}</strong>
+                <SecurityLink market={r.market} ticker={r.ticker}><strong>{r.ticker}</strong></SecurityLink>
                 <span className="dim">{r.market} · {r.company || ""}</span>
               </span>
               <span className={r.verdict === "BULL" ? "up" : r.verdict === "BEAR" ? "down" : "dim"}>{r.verdict || "NO_DATA"}</span>

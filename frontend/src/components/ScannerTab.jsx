@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { scanner } from "../api.js";
 import { useApp } from "../App.jsx";
 import AddToPortfolioButton from "./AddToPortfolioButton.jsx";
+import SecurityLink from "./SecurityLink.jsx";
 import { verdictBadge, verdictClass, RefreshStatus } from "./ui.jsx";
 
 function num(v, d = 0) {
@@ -183,8 +184,8 @@ export default function ScannerTab() {
             >
               <div className="panel-head">
                 <div>
-                  <div className="symbol">{r.ticker}</div>
-                  <div className="name">{r.market} · {r.company || r.symbol}</div>
+                  <SecurityLink market={r.market} ticker={r.ticker} className="symbol">{r.ticker}</SecurityLink>
+                  <div className="name">{r.market} · <SecurityLink market={r.market} ticker={r.ticker} className="link-inline">{r.company || r.symbol}</SecurityLink></div>
                 </div>
                 <div>
                   {verdictBadge(r)}

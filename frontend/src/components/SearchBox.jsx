@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchJSON } from "../api.js";
 import { useApp } from "../App.jsx";
+import SecurityLink from "./SecurityLink.jsx";
 
 function badgeCls(v) {
   return v === "BULL" ? "bull" : v === "BEAR" ? "bear" : "neutral";
@@ -106,16 +107,25 @@ export default function SearchBox() {
               {results.map((r) => {
                 const unsupported = r.supported === false;
                 return (
-                  <button
+                  <div
                     key={`${r.market || ""}:${r.ticker || ""}:${r.symbol || ""}`}
                     className={`search-item ${unsupported ? "disabled" : ""}`}
-                    disabled={unsupported}
+                    role="button"
+                    tabIndex={unsupported ? -1 : 0}
                     onMouseDown={(e) => {
+                      if (unsupported) return;
                       e.preventDefault();
                       choose(r);
                     }}
                   >
-                    <span className="t">{r.ticker}</span>
+                    <SecurityLink
+                      market={r.market}
+                      ticker={r.ticker}
+                      className="t"
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      {r.ticker}
+                    </SecurityLink>
                     <span className="n">{r.company || r.symbol || r.market || ""}</span>
                     <span className="m">
                       {r.market || "—"}
@@ -140,7 +150,7 @@ export default function SearchBox() {
                         {inPortfolio(r.market, r.ticker) ? "✓" : "+"}
                       </span>
                     )}
-                  </button>
+                  </div>
                 );
               })}
             </div>

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { fetchJSON, notifications, notificationsScan } from "../api.js";
 import { useApp } from "../App.jsx";
 import { verdictBadge, verdictClass } from "./ui.jsx";
+import SecurityLink, { SecurityText } from "./SecurityLink.jsx";
 
 function num(v, d = 0) {
   const n = Number(v);
@@ -164,7 +165,7 @@ export default function OverviewTab() {
                 <div key={`${v.market}:${v.ticker}`} className={`panel ${verdictClass(v.verdict)}`} onClick={() => openDrawer({ type: "stock", v: { market: v.market, ticker: v.ticker, company: v.company || "", reason: ["OVERVIEW"] } })}>
                   <div className="panel-head">
                     <div>
-                      <div className="symbol" style={{ fontSize: 13 }}>{v.ticker}</div>
+                      <SecurityLink market={v.market} ticker={v.ticker} className="symbol" style={{ fontSize: 13 }}>{v.ticker}</SecurityLink>
                       <div className="name">{v.market}</div>
                     </div>
                     {verdictBadge(v)}
@@ -190,10 +191,10 @@ export default function OverviewTab() {
                 <div key={a.event_key} className={`notification-item ${sevClass(a.severity)}`}>
                   <div className="notif-head">
                     <span className={`badge sev ${sevClass(a.severity)}`}>{a.severity}</span>
-                    <span className="notif-title">{a.title}</span>
+                    <span className="notif-title"><SecurityText text={a.title} securityId={a.security_id} market={a.market} ticker={a.ticker} /></span>
                     <span className="dim notif-time">{String(a.created_at).slice(11, 19)}</span>
                   </div>
-                  <div className="notif-msg">{a.message}</div>
+                  <div className="notif-msg"><SecurityText text={a.message} securityId={a.security_id} market={a.market} ticker={a.ticker} /></div>
                   <div className="notif-actions">
                     {a.security_id && <button className="ghost" onClick={() => openDossier(a)}>OPEN DOSSIER</button>}
                     <button className="ghost" onClick={() => screenSimilar(a)}>SCREEN SIMILAR</button>
@@ -212,10 +213,10 @@ export default function OverviewTab() {
                 <div key={a.event_key} className={`notification-item high`}>
                   <div className="notif-head">
                     <span className="badge sev high">{a.severity}</span>
-                    <span className="notif-title">{a.title}</span>
+                    <span className="notif-title"><SecurityText text={a.title} securityId={a.security_id} market={a.market} ticker={a.ticker} /></span>
                     <span className="dim notif-time">{String(a.created_at).slice(11, 19)}</span>
                   </div>
-                  <div className="notif-msg">{a.message}</div>
+                  <div className="notif-msg"><SecurityText text={a.message} securityId={a.security_id} market={a.market} ticker={a.ticker} /></div>
                   <div className="notif-actions">
                     {a.security_id && <button className="ghost" onClick={() => openDossier(a)}>OPEN DOSSIER</button>}
                     <button className="ghost" onClick={() => screenSimilar(a)}>SCREEN SIMILAR</button>

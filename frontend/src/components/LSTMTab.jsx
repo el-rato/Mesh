@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { fetchJSON } from "../api.js";
 import { useApp } from "../App.jsx";
 import { RefreshStatus } from "./ui.jsx";
+import SecurityLink from "./SecurityLink.jsx";
 
 function signalClass(signal) {
   if (signal === "BULL") return "bull";
@@ -113,7 +114,7 @@ export default function LSTMTab() {
                 }
               >
                 <div className="panel-head">
-                  <div><div className="symbol">{p.ticker}</div><div className="name">{p.market}</div></div>
+                  <div><SecurityLink market={p.market} ticker={p.ticker} className="symbol">{p.ticker}</SecurityLink><div className="name">{p.market}</div></div>
                   <span className={`badge ${signalClass(p.signal)}`}>{p.signal}</span>
                 </div>
                 <div className="row"><span className="label">PRED RET</span><span className="value" style={{ color: isUp ? "var(--bull)" : "var(--bear)" }}>{num(p.predicted_return) > 0 ? "+" : ""}{(num(p.predicted_return) * 100).toFixed(2)}%</span></div>

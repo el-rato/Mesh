@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { simulate } from "../api.js";
 import { useApp } from "../App.jsx";
+import SecurityLink from "./SecurityLink.jsx";
 
 const TIMEFRAMES = ["5m", "15m", "30m", "1h", "1d"];
 const SPEEDS = [1, 2, 5, 10];
@@ -152,7 +153,7 @@ export default function SimulationTab() {
         <>
           <div className="paper-committee" style={{ margin: "10px 0" }}>
             <span className="badge neutral">HISTORICAL REPLAY</span>
-            <span>{result.security_id}</span>
+            <SecurityLink securityId={result.security_id}>{result.security_id}</SecurityLink>
             <span>{result.start_date} → {result.end_date}</span>
             <span>TIMEFRAME {result.timeframe.toUpperCase()} · DECIDE EVERY {result.decision_interval.toUpperCase()}</span>
             <span>ISOLATED — DOES NOT TOUCH YOUR PAPER PORTFOLIO</span>
@@ -237,7 +238,7 @@ export default function SimulationTab() {
                 const qty = num(d.quantity);
                 return (
                   <>
-                    <h3 className="dossier-company">{result.security_id} · {String(d.ts).replace("T", "  ")}</h3>
+                    <h3 className="dossier-company"><SecurityLink securityId={result.security_id}>{result.security_id}</SecurityLink> · {String(d.ts).replace("T", "  ")}</h3>
                     <div className="row"><span className="label">ACTION</span><span className="value" style={{ color: actionColor(d.action) }}>{d.action}{d.tag ? ` — ${d.tag}` : ""}</span></div>
                     <div className="row"><span className="label">COMMITTEE</span><span className="value">{d.verdict} · {d.conviction} conviction</span></div>
                     <div className="row"><span className="label">REFERENCE PRICE</span><span className="value">{num(d.reference_price).toFixed(4)}</span></div>

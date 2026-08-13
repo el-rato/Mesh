@@ -26,14 +26,29 @@ export function securityIdOf(market, ticker) {
   return `${m}:${t.toUpperCase()}`;
 }
 
-/** Split a security_id into { market, ticker } (splits on the LAST colon so a
- * ticker can never steal a colon from the market code). */
-export function splitSecurityId(securityId) {
+/** Split a security_id into { market, ticker }.
+ *
+ * The app's own ids are `MARKET:TICKER` (e.g. BSE:TECHM, NYSE:AAPL). The
+ * canonical Dossier form `TICKER:MARKET` (e.g. ULVR:LSE, 068270:KRX) is also
+ * accepted: when `knownMarkets` is provided and exactly one side is a known
+ * market code, that side is the market. Falls back to the app convention.
+ */
+export function splitSecurityId(securityId, knownMarkets = null) {
   const s = normalizeSecurityId(securityId);
   if (!s) return { market: "", ticker: "" };
   const idx = s.lastIndexOf(":");
   if (idx <= 0 || idx === s.length - 1) return { market: "", ticker: s };
-  return { market: s.slice(0, idx), ticker: s.slice(idx + 1) };
+  const left = s.slice(0, idx);
+  const right = s.slice(idx + 1);
+  if (knownMarkets && knownMarkets.length) {
+    const codes = new Set(knownMarkets.map((c) => String(c).toUpperCase()));
+    const leftKnown = codes.has(left.toUpperCase());
+    const rightKnown = codes.has(right.toUpperCase());
+    if (rightKnown && !leftKnown) {
+      return { market: right, ticker: left }; // TICKER:MARKET form (ULVR:LSE)
+    }
+  }
+  return { market: left, ticker: right }; // MARKET:TICKER form (BSE:TECHM)
 }
 
 /** Canonical hash path for a security's Dossier, or null if invalid. */

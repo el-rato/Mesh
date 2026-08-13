@@ -100,7 +100,7 @@ function ChartSection({ dossierData }) {
         </div>
       </div>
       <div className="chart-workspace">
-        <PriceChart url={rangeHost(range)} height={560} chartType={chartType} showVolume={showVolume} showSma50={showSma50} showSma200={showSma200} showMomentum theme={theme} refreshKey={dossierData.computed_at} />
+        <PriceChart url={rangeHost(range)} chartType={chartType} showVolume={showVolume} showSma50={showSma50} showSma200={showSma200} showMomentum theme={theme} refreshKey={dossierData.computed_at} />
       </div>
       <div className="chart-legend"><span className="legend-price">PRICE</span>{showSma50 && <span className="legend-sma50">SMA 50</span>}{showSma200 && <span className="legend-sma200">SMA 200</span>}{showVolume && <span className="legend-volume">VOLUME</span>}</div>
     </section>

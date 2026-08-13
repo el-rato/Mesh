@@ -147,13 +147,16 @@ export default function App() {
         lastOpenRef.current = null; // already opened by openDrawer with rich data
         return;
       }
-      const { market, ticker } = splitSecurityId(id);
+      const known = (markets || []).map((m) => m.code);
+      const { market, ticker } = splitSecurityId(id, known);
+      if (!market || !ticker) return; // never open a broken dossier route
       setDrawer({ type: "stock", v: { market, ticker, company: "", reason: ["DOSSIER LINK"] } });
     };
     window.addEventListener("hashchange", onHash);
     if (parseDossierHash(window.location.hash)) onHash(); // deep link on load
     return () => window.removeEventListener("hashchange", onHash);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markets]);
 
   useEffect(() => {
     const onDoc = (e) => {

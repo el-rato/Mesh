@@ -3,6 +3,7 @@ import { fetchJSON, paperPortfolio } from "../api.js";
 import { useApp } from "../App.jsx";
 import { verdictBadge, verdictClass } from "./ui.jsx";
 import AddToPortfolioButton from "./AddToPortfolioButton.jsx";
+import SecurityLink from "./SecurityLink.jsx";
 
 function num(v, d = 0) {
   const n = Number(v);
@@ -86,7 +87,7 @@ export default function PortfolioTab() {
           </div>
           {rows.map((r) => (
             <div className="paper-row" key={`${r.market}:${r.ticker}`}>
-              <span className="sym">{r.ticker}<span className="dim"> {r.market}</span></span>
+              <span className="sym"><SecurityLink market={r.market} ticker={r.ticker}>{r.ticker}</SecurityLink><span className="dim"> {r.market}</span></span>
               <span>{r.close != null ? num(r.close).toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"}</span>
               <span>{verdictBadge({ verdict: r.verdict })}</span>
               <span>{(num(r.confidence) * 100).toFixed(0)}%</span>
@@ -113,7 +114,7 @@ export default function PortfolioTab() {
           </div>
           {positions.map((p) => (
             <div className="paper-row" key={`${p.market}:${p.ticker}`}>
-              <span className="sym">{p.ticker}</span>
+              <span className="sym"><SecurityLink market={p.market} ticker={p.ticker}>{p.ticker}</SecurityLink></span>
               <span className={p.direction === "LONG" ? "up" : "down"}>{p.direction}</span>
               <span>{p.qty}</span>
               <span>{num(p.entry).toFixed(4)}</span>

@@ -37,3 +37,27 @@ export default function SecurityLink({
     </a>
   );
 }
+
+/**
+ * Render text with every occurrence of the security_id token wrapped in a
+ * SecurityLink (used for notification messages that mention a security inline).
+ * Falls back to plain text when no valid security id is present.
+ */
+export function SecurityText({ text, securityId, market, ticker, className = "" }) {
+  const id = normalizeSecurityId(securityId) || securityIdOf(market, ticker);
+  const t = String(text || "");
+  if (!id || !t.includes(id)) {
+    return <span className={className}>{t}</span>;
+  }
+  const parts = t.split(id);
+  return (
+    <span className={className}>
+      {parts.map((p, i) => (
+        <span key={i}>
+          {p}
+          {i < parts.length - 1 && <SecurityLink securityId={id}>{id}</SecurityLink>}
+        </span>
+      ))}
+    </span>
+  );
+}

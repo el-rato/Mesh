@@ -111,7 +111,7 @@ const crosshairPlugin = {
 
 export default function PriceChart({
   url,
-  height = 120,
+  height = "100%",
   color: lineColor,
   up,
   hideAxes = false,

@@ -12,6 +12,7 @@ import {
   paperEndSession,
 } from "../api.js";
 import { useApp } from "../App.jsx";
+import SecurityLink from "./SecurityLink.jsx";
 
 function money(n, digits = 2) {
   const v = Number(n || 0);
@@ -156,7 +157,7 @@ export default function PaperTab() {
             const conv = entryConviction[`${p.market}:${p.ticker}`];
             return (
               <div className="paper-row" key={`${p.market}:${p.ticker}`}>
-                <span className="sym">{p.ticker}</span>
+                <span className="sym"><SecurityLink market={p.market} ticker={p.ticker}>{p.ticker}</SecurityLink></span>
                 <span className={p.direction === "LONG" ? "up" : "down"}>{p.direction}</span>
                 <span>{p.qty}</span>
                 <span>{num(p.entry).toFixed(4)}</span>
@@ -189,7 +190,7 @@ export default function PaperTab() {
             <div className="paper-row" key={t.order_id}>
               <span>{String(t.executed_at).slice(11, 19)}</span>
               <span className={t.side === "BUY" || t.side === "COVER" ? "up" : "down"}>{t.side} {t.direction || ""}</span>
-              <span>{t.ticker}</span>
+              <span><SecurityLink market={t.market} ticker={t.ticker}>{t.ticker}</SecurityLink></span>
               <span>{t.quantity} @ {num(t.price).toFixed(4)}</span>
               <span className="dim">{t.reason || (t.decision_id ? `DEC ${t.decision_id}` : "manual")}</span>
             </div>
@@ -231,7 +232,7 @@ export default function PaperTab() {
         <div className="landing-stat"><div className="k">NET</div><div className="v">{money(risk?.net_exposure)}</div></div>
         <div className="landing-stat"><div className="k">LONG</div><div className="v">{money(risk?.long_exposure)}</div></div>
         <div className="landing-stat"><div className="k">SHORT</div><div className="v">{money(risk?.short_exposure)}</div></div>
-        <div className="landing-stat"><div className="k">LARGEST</div><div className="v">{risk?.largest_position ? `${risk.largest_position.ticker} ${risk.largest_position_pct != null ? (risk.largest_position_pct * 100).toFixed(0) + "%" : ""}` : "—"}</div></div>
+        <div className="landing-stat"><div className="k">LARGEST</div><div className="v">{risk?.largest_position ? <><SecurityLink market={risk.largest_position.market} ticker={risk.largest_position.ticker}>{risk.largest_position.ticker}</SecurityLink>{risk.largest_position_pct != null ? ` ${(risk.largest_position_pct * 100).toFixed(0)}%` : ""}</> : "—"}</div></div>
         <div className="landing-stat"><div className="k">CONCENTRATION</div><div className="v">{risk?.concentration != null ? (risk.concentration * 100).toFixed(0) + "%" : "—"}</div></div>
       </div>
 

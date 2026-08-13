@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { paperQuote, paperPortfolio, paperOrder, paperDecisions } from "../api.js";
 import { useApp } from "../App.jsx";
+import SecurityLink from "./SecurityLink.jsx";
 
 function num(v, d = 0) {
   const n = Number(v);
@@ -124,7 +125,7 @@ export default function PaperOrderTicket({ ticket, onClose }) {
         ) : (
           <>
             <div className="paper-ticket-sec">
-              <div className="symbol-lg">{ticker}</div>
+              <SecurityLink market={market} ticker={ticker} className="symbol-lg">{ticker}</SecurityLink>
               <div className="dossier-company">{company} · {market}</div>
             </div>
             <div className="row"><span className="label">CURRENT PRICE</span><span className="value">{num(price).toFixed(4)}</span></div>

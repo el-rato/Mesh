@@ -1080,6 +1080,7 @@ button.ghost {
 }
 .chart-shell {
   position: relative;
+  flex: 1 1 auto;
   min-height: 80px;
   display: flex;
   flex-direction: column;
@@ -1223,7 +1224,7 @@ button.ghost {
 }
 .dossier-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1.65fr) minmax(350px, 0.95fr);
+  grid-template-columns: minmax(0, 1.9fr) minmax(340px, 1fr);
   gap: 12px;
   height: calc(100vh - 128px);
   min-height: 520px;
@@ -1292,6 +1293,8 @@ button.ghost {
   flex: 1;
   min-height: 0;
   padding-top: 4px;
+  display: flex;
+  flex-direction: column;
 }
 .chart-legend {
   display: flex;
@@ -2060,3 +2063,31 @@ button.ghost {
   padding: 5px 10px; cursor: pointer;
 }
 .paper-trade:hover { filter: brightness(1.15); }
+
+/* ---- Security links (canonical Dossier navigation) ---- */
+.security-link {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  border-bottom: 1px dotted transparent;
+}
+.security-link:hover,
+.security-link:focus-visible {
+  border-bottom-color: var(--border-bright);
+  outline: none;
+}
+.security-link.muted {
+  color: var(--text-muted);
+  cursor: default;
+  border-bottom: none;
+}
+.security-link.muted:hover { color: var(--text-muted); }
+.link-inline { color: var(--text-muted); }
+.search-item { cursor: pointer; }
+.search-item .t {
+  color: var(--amber);
+  font-weight: 700;
+  min-width: 60px;
+  text-decoration: none;
+}
+.search-item .t:hover { color: var(--amber); text-decoration: underline; }

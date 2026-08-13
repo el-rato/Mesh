@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { notifications, notificationsAck } from "../api.js";
 import { useApp } from "../App.jsx";
+import SecurityLink, { SecurityText } from "./SecurityLink.jsx";
 
 function sevCls(s) {
   if (s === "HIGH") return "high";
@@ -72,10 +73,10 @@ export default function NotificationsBell() {
               <div key={a.event_key} className={`notification-item ${a.acked ? "acked" : ""} ${sevCls(a.severity)}`}>
                 <div className="notif-head">
                   <span className={`badge sev ${sevCls(a.severity)}`}>{a.severity}</span>
-                  <span className="notif-title">{a.title}</span>
+                  <span className="notif-title"><SecurityText text={a.title} securityId={a.security_id} market={a.market} ticker={a.ticker} /></span>
                   <span className="dim notif-time">{String(a.created_at).slice(11, 19)}</span>
                 </div>
-                <div className="notif-msg">{a.message}</div>
+                <div className="notif-msg"><SecurityText text={a.message} securityId={a.security_id} market={a.market} ticker={a.ticker} /></div>
                 <div className="notif-actions">
                   {a.security_id && <button className="ghost" onClick={() => openDossier(a)}>OPEN DOSSIER</button>}
                   <button className="ghost" onClick={() => screenSimilar(a)}>SCREEN SIMILAR</button>
