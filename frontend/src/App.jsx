@@ -8,11 +8,9 @@ import PortfolioTab from "./components/PortfolioTab.jsx";
 import ScannerTab from "./components/ScannerTab.jsx";
 import ScreenerTab from "./components/ScreenerTab.jsx";
 import FundsTab from "./components/FundsTab.jsx";
-import IndexesTab from "./components/IndexesTab.jsx";
-import LSTMTab from "./components/LSTMTab.jsx";
 import SimulationTab from "./components/SimulationTab.jsx";
 import PaperTab from "./components/PaperTab.jsx";
-import PaperOrderTicket from "./components/PaperOrderTicket.jsx";
+import PaperOrderPanel from "./components/PaperOrderPanel.jsx";
 import NotificationsBell from "./components/NotificationsBell.jsx";
 import Drawer from "./components/Drawer.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
@@ -31,9 +29,7 @@ const PRIMARY_TABS = [
 
 const SECONDARY_TABS = [
   { key: "screener", fn: "F5", label: "SCREENER" },
-  { key: "lstm", fn: "F6", label: "LSTM" },
   { key: "sim", fn: "F7", label: "SIM / BACKTEST" },
-  { key: "indexes", fn: "F8", label: "INDEXES" },
   { key: "funds", fn: "F9", label: "HEDGE FUNDS" },
 ];
 
@@ -43,9 +39,7 @@ const TAB_COMPONENTS = {
   scanner: ScannerTab,
   screener: ScreenerTab,
   paper: PaperTab,
-  lstm: LSTMTab,
   sim: SimulationTab,
-  indexes: IndexesTab,
   funds: FundsTab,
 };
 
@@ -468,8 +462,8 @@ export default function App() {
             <button className="primary" onClick={() => ctx.refreshAll()}>
               ⟳ REFRESH
             </button>
-            <button className="ghost" onClick={() => setTab("indexes")}>
-              INDEX TAPE
+            <button className="ghost" onClick={() => setTab("overview")}>
+              MARKET PULSE
             </button>
           </div>
           <main className="content">
@@ -496,7 +490,7 @@ export default function App() {
         <Drawer item={drawer} onClose={closeDrawer} />
       </ErrorBoundary>
       <ErrorBoundary key={paperTicket ? `${paperTicket.market}:${paperTicket.ticker}` : "closed"}>
-        <PaperOrderTicket ticket={paperTicket} onClose={() => setPaperTicket(null)} />
+        <PaperOrderPanel ticket={paperTicket} onClose={() => setPaperTicket(null)} />
       </ErrorBoundary>
     </AppContext.Provider>
   );

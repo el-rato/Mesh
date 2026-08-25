@@ -2040,33 +2040,75 @@ button.ghost {
   background: var(--bg-panel);
   padding: 8px 10px;
 }
-.paper-ticket {
+/* Docked paper order panel (Fincept PortfolioOrderPanel style) */
+.paper-order-panel {
   position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: min(420px, 94vw);
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(340px, 92vw);
   background: var(--bg-panel);
-  border: 1px solid var(--border-bright);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  border-left: 2px solid var(--bull);
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.5);
   padding: 14px 16px;
   z-index: 102;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  overflow: auto;
+  transform: translateX(0);
+  transition: border-color 0.15s ease;
 }
-.paper-ticket-head {
+.paper-order-panel.is-sell { border-left-color: var(--bear); }
+.paper-order-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  color: var(--amber);
-  font-size: 11px;
-  letter-spacing: 1px;
   border-bottom: 1px solid var(--border);
   padding-bottom: 6px;
 }
-.paper-ticket-sec {
-  margin-top: 6px;
+.paper-order-title { color: var(--bull); font-size: 11px; font-weight: 700; letter-spacing: 1px; }
+.paper-order-title.bear { color: var(--bear); }
+.paper-order-head .close {
+  background: transparent; border: none; color: var(--text-dim);
+  font-size: 16px; cursor: pointer;
+}
+.paper-order-head .close:hover { color: var(--amber); }
+.paper-side-tabs { display: flex; gap: 0; }
+.paper-side-tabs .side-tab {
+  flex: 1; height: 30px; border: none; cursor: pointer;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+  background: var(--bg-panel2); color: var(--text-muted);
+}
+.paper-side-tabs .side-tab.active.buy { background: var(--bull); color: #000; }
+.paper-side-tabs .side-tab.active.sell { background: var(--bear); color: #fff; }
+.paper-order-sec { margin-top: 2px; }
+.paper-order-sec .symbol-lg { font-size: 18px; font-weight: 700; color: var(--amber); }
+.paper-info-row {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 11px; padding: 3px 0; border-bottom: 1px dashed var(--border);
+}
+.paper-info-row span { color: var(--text-muted); font-size: 10px; letter-spacing: 0.5px; }
+.paper-info-row strong { color: var(--text); font-weight: 600; font-size: 12px; }
+.paper-order-panel .field { margin-top: 4px; }
+.paper-order-panel .field input, .paper-order-panel .field select { width: 100%; }
+.paper-check {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10px; letter-spacing: 0.5px; color: var(--text-muted); cursor: pointer;
+}
+.paper-check input { cursor: pointer; }
+.paper-submit {
+  margin-top: 6px; height: 34px; border: none; cursor: pointer;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.5px; color: #000;
+  background: var(--bull);
+}
+.paper-submit.sell { background: var(--bear); color: #fff; }
+.paper-submit:hover { opacity: 0.9; }
+.paper-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+.paper-committee {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 6px 8px; background: var(--bg-panel2); border: 1px solid var(--border);
+  font-size: 10px;
 }
 .paper-thesis {
   display: block;

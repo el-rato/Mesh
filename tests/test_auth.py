@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from stock_alert_app import auth, paper
@@ -65,24 +67,25 @@ def test_user_session_roundtrip(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_paper_ownership_isolation(tmp_path):
+def test_paper_ownership_isolation(tmp_path, monkeypatch):
     db = _db(tmp_path)
-    db.upsert_paper_portfolio("SESS-A", 100000.0, user_id="userA")
-    db.insert_paper_order(
-        "ORD-1", "SESS-A", "LSE", "ULVR", "BUY", 100.0, 42.0, 1.0,
-        "2024-01-01T10:00:00", None, "", user_id="userA",
+    monkeypatch.setattr(paper, "_execution_price", lambda d, sym, m, t: 42.0)
+    monkeypatch.setattr(paper, "settings", dataclasses.replace(paper.settings, paper_slippage=0.0))
+
+    # User A creates a portfolio and places an order.
+    pa = paper.pt_create_portfolio(db, "Main", 100000.0, user_id="userA")
+    paper.pt_place_order(
+        db, pa["id"], "LSE", "ULVR", "buy", "market", 100.0, user_id="userA", exchange="LSE"
     )
+    assert len(paper.pt_get_positions(db, pa["id"])) == 1
+    assert len(paper.pt_get_orders(db, pa["id"])) == 1
 
-    # User A sees their own data.
-    assert db.active_portfolio("userA") is not None
-    assert len(db.paper_orders("SESS-A", "userA")) == 1
-
-    # User B sees nothing of A's portfolio and gets their own fresh session.
-    assert db.active_portfolio("userB") is None
-    assert db.paper_orders("SESS-A", "userB") == []
-    state_b = paper.portfolio_state(db, record_equity=False, user_id="userB")
-    assert state_b["session_id"] != "SESS-A"
-    assert state_b["positions"] == []
+    # User B has no portfolios and no access to A's.
+    assert paper.pt_list_portfolios(db, "userB") == []
+    pb = paper.ensure_default_portfolio(db, user_id="userB")
+    assert pb["id"] != pa["id"]
+    assert paper.pt_get_positions(db, pb["id"]) == []
+    assert paper.pt_get_orders(db, pb["id"]) == []
 
 
 # ---------------------------------------------------------------------------

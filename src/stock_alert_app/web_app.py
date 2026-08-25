@@ -35,12 +35,29 @@ class WatchItem(BaseModel):
 
 
 class PaperOrder(BaseModel):
+    portfolio_id: str = ""
     market: str
     ticker: str
-    side: str
+    side: str                       # 'buy' | 'sell'
+    order_type: str = "market"      # 'market' | 'limit' | 'stop' | 'stop_limit'
     quantity: float
+    price: float | None = None
+    stop_price: float | None = None
+    reduce_only: bool = False
+    product: str = ""               # 'MIS' | 'CNC' | ''
+    exchange: str = ""
     decision_id: str = ""
     reason: str = ""
+
+
+class PaperPortfolioCreate(BaseModel):
+    name: str
+    balance: float = 100000.0
+    currency: str = "USD"
+    leverage: float = 1.0
+    margin_mode: str = "cross"
+    fee_rate: float = 0.001
+    exchange: str = ""
 
 
 class ReplayRequest(BaseModel):
@@ -547,101 +564,261 @@ def refresh_status() -> dict[str, object]:
 
 # ---------------------------------------------------------------------------
 # Paper research / portfolio (simulation only — no real orders)
+# Fincept-style multi-portfolio engine (pt_*). portfolio_id is optional on
+# read endpoints: when omitted, the user's default "Main" portfolio is used
+# (preserving the legacy single-session UX).
 # ---------------------------------------------------------------------------
 
 
-@app.get("/api/paper/portfolio")
-def paper_portfolio(user: dict = Depends(auth.current_user)) -> dict[str, object]:
-    from . import paper
-
+def _paper_db() -> Database:
     db = _db()
     db.init_schema()
-    return paper.portfolio_state(db, user_id=user["id"])
+    return db
+
+
+def _resolve_portfolio(db: Database, user_id: str, portfolio_id: str = "") -> str:
+    from . import paper
+
+    if portfolio_id:
+        return portfolio_id
+    return paper.ensure_default_portfolio(db, user_id)["id"]
+
+
+@app.get("/api/paper/portfolios")
+def paper_list_portfolios(user: dict = Depends(auth.current_user)) -> list[dict[str, object]]:
+    from . import paper
+
+    return paper.pt_list_portfolios(_paper_db(), user_id=user["id"])
+
+
+@app.post("/api/paper/portfolios")
+def paper_create_portfolio(
+    body: PaperPortfolioCreate, user: dict = Depends(auth.current_user)
+) -> dict[str, object]:
+    from . import paper
+
+    db = _paper_db()
+    try:
+        return paper.pt_create_portfolio(
+            db, body.name, body.balance, user_id=user["id"], currency=body.currency,
+            leverage=body.leverage, margin_mode=body.margin_mode, fee_rate=body.fee_rate,
+            exchange=body.exchange,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.delete("/api/paper/portfolios/{portfolio_id}")
+def paper_delete_portfolio(portfolio_id: str, user: dict = Depends(auth.current_user)) -> dict[str, object]:
+    from . import paper
+
+    db = _paper_db()
+    try:
+        paper.pt_delete_portfolio(db, portfolio_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"deleted": portfolio_id}
+
+
+@app.post("/api/paper/portfolios/{portfolio_id}/reset")
+def paper_reset_portfolio(portfolio_id: str, user: dict = Depends(auth.current_user)) -> dict[str, object]:
+    from . import paper
+
+    db = _paper_db()
+    try:
+        return paper.pt_reset_portfolio(db, portfolio_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/api/paper/portfolios/{portfolio_id}/balance")
+def paper_set_balance(
+    portfolio_id: str, body: dict[str, float], user: dict = Depends(auth.current_user)
+) -> dict[str, object]:
+    from . import paper
+
+    db = _paper_db()
+    try:
+        paper.pt_set_balance(db, portfolio_id, float(body.get("balance", 0.0)))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return paper.pt_get_portfolio(db, portfolio_id)
+
+
+@app.post("/api/paper/portfolios/{portfolio_id}/market-hours")
+def paper_set_market_hours(
+    portfolio_id: str, body: dict[str, bool], user: dict = Depends(auth.current_user)
+) -> dict[str, object]:
+    from . import paper
+
+    db = _paper_db()
+    paper.pt_set_enforce_market_hours(db, portfolio_id, bool(body.get("enforce", False)))
+    return paper.pt_get_portfolio(db, portfolio_id)
+
+
+@app.get("/api/paper/portfolio")
+def paper_portfolio(
+    portfolio_id: str = "", user: dict = Depends(auth.current_user)
+) -> dict[str, object]:
+    from . import paper
+
+    db = _paper_db()
+    pid = _resolve_portfolio(db, user["id"], portfolio_id)
+    return paper.pt_portfolio_state(db, pid)
 
 
 @app.get("/api/paper/quote")
 def paper_quote(market: str, ticker: str, user: dict = Depends(auth.current_user)) -> dict[str, object]:
     from . import paper
 
-    db = _db()
-    db.init_schema()
-    return paper.quote(db, market, ticker)
+    return paper.pt_quote(_paper_db(), market, ticker)
 
 
 @app.post("/api/paper/order")
 def paper_order(body: PaperOrder, user: dict = Depends(auth.current_user)) -> dict[str, object]:
     from . import paper
 
-    db = _db()
-    db.init_schema()
+    db = _paper_db()
+    pid = _resolve_portfolio(db, user["id"], body.portfolio_id)
     try:
-        order = paper.paper_order(
-            db,
-            body.market,
-            body.ticker,
-            body.side,
-            body.quantity,
-            decision_id=body.decision_id or None,
-            reason=body.reason or "",
-            user_id=user["id"],
+        order = paper.pt_place_order(
+            db, pid, body.market, body.ticker, body.side, body.order_type, body.quantity,
+            price=body.price, stop_price=body.stop_price, reduce_only=body.reduce_only,
+            product=body.product, exchange=body.exchange,
+            decision_id=body.decision_id or None, reason=body.reason or "", user_id=user["id"],
         )
     except (ValueError, LookupError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    return {"order": order, "portfolio": paper.portfolio_state(db, user_id=user["id"])}
+    return {"order": order, "portfolio": paper.pt_portfolio_state(db, pid)}
 
 
-@app.post("/api/paper/end-session")
-def paper_end_session(user: dict = Depends(auth.current_user)) -> dict[str, object]:
+@app.post("/api/paper/orders/{order_id}/cancel")
+def paper_cancel_order(order_id: str, user: dict = Depends(auth.current_user)) -> dict[str, object]:
     from . import paper
 
-    db = _db()
-    db.init_schema()
-    return paper.end_session(db, user_id=user["id"])
+    db = _paper_db()
+    try:
+        paper.pt_cancel_order(db, order_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"cancelled": order_id}
 
 
-@app.get("/api/paper/leaderboard")
-def paper_leaderboard(user: dict = Depends(auth.current_user)) -> dict[str, object]:
+@app.get("/api/paper/orders")
+def paper_orders(
+    portfolio_id: str = "", status: str = "", user: dict = Depends(auth.current_user)
+) -> list[dict[str, object]]:
     from . import paper
 
-    db = _db()
-    db.init_schema()
-    return paper.leaderboard(db, user_id=user["id"])
+    db = _paper_db()
+    pid = _resolve_portfolio(db, user["id"], portfolio_id)
+    return paper.pt_get_orders(db, pid, status)
 
 
-@app.get("/api/paper/stats")
-def paper_stats(user: dict = Depends(auth.current_user)) -> dict[str, object]:
+@app.get("/api/paper/positions")
+def paper_positions(
+    portfolio_id: str = "", user: dict = Depends(auth.current_user)
+) -> list[dict[str, object]]:
     from . import paper
 
-    db = _db()
-    db.init_schema()
-    return paper.stats(db, user_id=user["id"])
+    db = _paper_db()
+    pid = _resolve_portfolio(db, user["id"], portfolio_id)
+    return paper.pt_get_positions(db, pid)
 
 
-@app.get("/api/paper/risk")
-def paper_risk(user: dict = Depends(auth.current_user)) -> dict[str, object]:
+@app.post("/api/paper/positions/{position_id}/convert")
+def paper_convert_position(
+    position_id: str, body: dict[str, str], user: dict = Depends(auth.current_user)
+) -> dict[str, object]:
     from . import paper
 
-    db = _db()
-    db.init_schema()
-    return paper.risk(db, user_id=user["id"])
-
-
-@app.get("/api/paper/equity")
-def paper_equity(user: dict = Depends(auth.current_user)) -> list[dict[str, object]]:
-    from . import paper
-
-    db = _db()
-    db.init_schema()
-    return paper.equity_history(db, user_id=user["id"])
+    db = _paper_db()
+    try:
+        paper.pt_convert_position_product(db, position_id, str(body.get("product", "")))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    pos = db.pt_get_position(position_id)
+    return pos
 
 
 @app.get("/api/paper/trades")
-def paper_trades(user: dict = Depends(auth.current_user)) -> list[dict[str, object]]:
-    db = _db()
-    db.init_schema()
-    session = db.active_portfolio(user["id"])
-    orders = db.paper_orders(session["session_id"], user["id"]) if session else []
-    return orders
+def paper_trades(
+    portfolio_id: str = "", limit: int = 100, user: dict = Depends(auth.current_user)
+) -> list[dict[str, object]]:
+    from . import paper
+
+    db = _paper_db()
+    pid = _resolve_portfolio(db, user["id"], portfolio_id)
+    return paper.pt_get_trades(db, pid, limit)
+
+
+@app.get("/api/paper/stats")
+def paper_stats(
+    portfolio_id: str = "", user: dict = Depends(auth.current_user)
+) -> dict[str, object]:
+    from . import paper
+
+    db = _paper_db()
+    pid = _resolve_portfolio(db, user["id"], portfolio_id)
+    return paper.pt_get_stats(db, pid)
+
+
+@app.get("/api/paper/risk")
+def paper_risk(
+    portfolio_id: str = "", user: dict = Depends(auth.current_user)
+) -> dict[str, object]:
+    from . import paper
+
+    db = _paper_db()
+    pid = _resolve_portfolio(db, user["id"], portfolio_id)
+    return paper.pt_risk(db, pid)
+
+
+@app.get("/api/paper/equity")
+def paper_equity(
+    portfolio_id: str = "", user: dict = Depends(auth.current_user)
+) -> list[dict[str, object]]:
+    from . import paper
+
+    db = _paper_db()
+    pid = _resolve_portfolio(db, user["id"], portfolio_id)
+    return paper.pt_equity_history(db, pid)
+
+
+@app.post("/api/paper/end-session")
+def paper_end_session(
+    portfolio_id: str = "", user: dict = Depends(auth.current_user)
+) -> dict[str, object]:
+    from . import paper
+
+    db = _paper_db()
+    pid = _resolve_portfolio(db, user["id"], portfolio_id)
+    return paper.pt_end_session(db, pid)
+
+
+@app.post("/api/paper/settle")
+def paper_settle(
+    portfolio_id: str = "", user: dict = Depends(auth.current_user)
+) -> dict[str, object]:
+    from . import paper
+
+    db = _paper_db()
+    if portfolio_id:
+        n = paper.pt_settle_intraday(db, portfolio_id)
+    else:
+        n = paper.pt_settle_intraday_all(db)
+    return {"squared_off": n}
+
+
+@app.get("/api/paper/leaderboard")
+def paper_leaderboard(
+    portfolio_id: str = "", user: dict = Depends(auth.current_user)
+) -> dict[str, object]:
+    from . import paper
+
+    db = _paper_db()
+    pid = _resolve_portfolio(db, user["id"], portfolio_id)
+    return paper.pt_leaderboard(db, pid)
 
 
 @app.get("/api/paper/decisions")
@@ -650,8 +827,7 @@ def paper_decisions(
     ticker: str | None = None,
     user: dict = Depends(auth.current_user),
 ) -> list[dict[str, object]]:
-    db = _db()
-    db.init_schema()
+    db = _paper_db()
     return db.decision_snapshots(market=market, ticker=ticker)
 
 
@@ -659,18 +835,14 @@ def paper_decisions(
 def paper_performance(user: dict = Depends(auth.current_user)) -> dict[str, object]:
     from . import paper
 
-    db = _db()
-    db.init_schema()
-    return paper.performance(db)
+    return paper.performance(_paper_db())
 
 
 @app.post("/api/paper/evaluate")
 def paper_evaluate(force: bool = False, user: dict = Depends(auth.current_user)) -> dict[str, object]:
     from . import paper
 
-    db = _db()
-    db.init_schema()
-    return paper.refresh_evaluations(db, force=force)
+    return paper.refresh_evaluations(_paper_db(), force=force)
 
 
 @app.post("/api/simulate")

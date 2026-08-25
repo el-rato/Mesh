@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import pytest
@@ -101,160 +102,133 @@ class TestEvaluation:
         assert r["correct"] == 0  # fell after decision -> BULL wrong
 
 
-class TestPaperPortfolio:
-    def test_buy_sell_close_and_pnl(self, tmp_path, monkeypatch):
+class TestPaperEngine:
+    """Fincept-style pt_* engine: multi-portfolio, margin blocking, netting."""
+
+    def _setup(self, tmp_path, monkeypatch, price=100.0, fee_rate=0.0, leverage=1.0):
+        monkeypatch.setattr(paper, "_execution_price", lambda db, sym, m, t: price)
+        monkeypatch.setattr(paper, "settings", dataclasses.replace(paper.settings, paper_slippage=0.0))
         db = _db(tmp_path)
-        monkeypatch.setattr(paper, "_execution_price", lambda db, sym, m, t: 100.0)
-        monkeypatch.setattr(
-            "stock_alert_app.db.Database.latest_price_snapshot",
-            lambda self, m, t: {"close": 110.0, "fetched_at": "2026-01-01T12:00:00"},
-        )
-        paper.ensure_session(db)
+        p = paper.pt_create_portfolio(db, "Main", 100000.0, fee_rate=fee_rate, leverage=leverage)
+        return db, p
 
-        buy = paper.paper_order(db, "NYSE", "T", "BUY", 10, decision_id="DEC-X", reason="Committee BULL")
-        assert buy["decision_id"] == "DEC-X"  # journal link
-        assert buy["side"] == "BUY" and buy["direction"] == "LONG"
-        exec_price = buy["price"]  # 100 * (1+slippage)
-        assert exec_price > 100.0
-
-        state = paper.portfolio_state(db, record_equity=False)
-        assert state["positions"][0]["qty"] == 10
-        assert state["positions"][0]["direction"] == "LONG"
-        assert state["positions"][0]["unrealized"] > 0  # price 110 > entry
-        # cash = 100000 - qty*price - fee
-        assert state["cash"] == pytest.approx(100000.0 - 10 * exec_price - 1.0)
-        # equity = cash + long market value (short none)
+    def test_buy_market_fills_and_opens_long(self, tmp_path, monkeypatch):
+        db, p = self._setup(tmp_path, monkeypatch, price=100.0)
+        o = paper.pt_place_order(db, p["id"], "NYSE", "T", "buy", "market", 10.0, exchange="NYSE")
+        assert o["status"] == "filled" and o["filled_qty"] == 10.0
+        state = paper.pt_portfolio_state(db, p["id"], record_equity=False)
+        pos = state["positions"][0]
+        assert pos["side"] == "long" and pos["quantity"] == 10.0
+        # leverage 1x -> margin = full notional = 10*100 = 1000, blocked from cash.
+        assert state["cash"] == pytest.approx(100000.0 - 1000.0)
+        assert pos["held_margin"] == pytest.approx(1000.0)
         assert state["equity"] == pytest.approx(state["cash"] + state["long_value"])
 
-        paper.paper_order(db, "NYSE", "T", "SELL", 5)
-        state = paper.portfolio_state(db, record_equity=False)
-        assert state["positions"][0]["qty"] == 5
-        # SELL also executes at exec_price: entry basis excludes fee, so
-        # realized = (exec_price - entry)*5 - fee = -fee.
-        fee = 1.0
-        sell_realized = -fee
-        assert state["positions"][0]["realized"] == pytest.approx(sell_realized)
-
-        paper.paper_order(db, "NYSE", "T", "CLOSE", 99)  # quantity ignored -> closes all
-        state = paper.portfolio_state(db, record_equity=False)
-        assert state["positions"] == []  # fully closed
-        close_realized = -fee
-        assert state["total_pnl"] == pytest.approx(sell_realized + close_realized)
-
-    def test_cannot_sell_more_than_held(self, tmp_path, monkeypatch):
-        db = _db(tmp_path)
-        monkeypatch.setattr(paper, "_execution_price", lambda db, sym, m, t: 100.0)
-        paper.ensure_session(db)
-        with pytest.raises(ValueError):
-            paper.paper_order(db, "NYSE", "T", "SELL", 5)
-
-    def test_no_execution_price_is_no_data(self, tmp_path, monkeypatch):
-        db = _db(tmp_path)
-        monkeypatch.setattr(paper, "_execution_price", lambda db, sym, m, t: None)
-        paper.ensure_session(db)
-        with pytest.raises(LookupError):
-            paper.paper_order(db, "NYSE", "T", "BUY", 1)
-
-
-class TestShortSelling:
-    def test_short_and_cover(self, tmp_path, monkeypatch):
-        db = _db(tmp_path)
-        monkeypatch.setattr(paper, "_execution_price", lambda db, sym, m, t: 100.0)
-        monkeypatch.setattr(
-            "stock_alert_app.db.Database.latest_price_snapshot",
-            lambda self, m, t: {"close": 90.0, "fetched_at": "2026-01-01T12:00:00"},
-        )
-        paper.ensure_session(db)
-        short = paper.paper_order(db, "NYSE", "T", "SHORT", 10)
-        assert short["side"] == "SHORT" and short["direction"] == "SHORT"
-        px = short["price"]  # ~100.05
-        # short proceeds increase cash
-        state = paper.portfolio_state(db, record_equity=False)
-        assert state["cash"] == pytest.approx(100000.0 + 10 * px - 1.0)
-        assert state["positions"][0]["direction"] == "SHORT"
-        # mark price 90 -> unrealized positive for a short
-        assert state["positions"][0]["unrealized"] > 0
-
-        cover = paper.paper_order(db, "NYSE", "T", "COVER", 5)
-        state = paper.portfolio_state(db, record_equity=False)
-        assert state["positions"][0]["qty"] == 5
-        # cover realized = (entry - cover_price)*5 - fee = -fee (same exec price)
-        assert state["positions"][0]["realized"] == pytest.approx(-1.0)
-
-        paper.paper_order(db, "NYSE", "T", "COVER", 5)
-        assert paper.portfolio_state(db, record_equity=False)["positions"] == []
-
-    def test_direction_reversal_rejected(self, tmp_path, monkeypatch):
-        db = _db(tmp_path)
-        monkeypatch.setattr(paper, "_execution_price", lambda db, sym, m, t: 100.0)
-        paper.ensure_session(db)
-        paper.paper_order(db, "NYSE", "T", "BUY", 5)
-        with pytest.raises(ValueError):
-            paper.paper_order(db, "NYSE", "T", "SHORT", 5)  # cannot short while long
-        paper.paper_order(db, "NYSE", "T", "SELL", 5)  # close long
-        paper.paper_order(db, "NYSE", "T", "SHORT", 5)  # now short is valid
-        with pytest.raises(ValueError):
-            paper.paper_order(db, "NYSE", "T", "BUY", 5)  # cannot buy while short
-
-
-class TestValidation:
-    def test_insufficient_cash(self, tmp_path, monkeypatch):
-        db = _db(tmp_path)
-        monkeypatch.setattr(paper, "_execution_price", lambda db, sym, m, t: 1000.0)
-        paper.ensure_session(db)
-        with pytest.raises(ValueError):
-            paper.paper_order(db, "NYSE", "T", "BUY", 1000)  # $1M > $100k cash
-
-    def test_invalid_quantity(self, tmp_path, monkeypatch):
-        db = _db(tmp_path)
-        monkeypatch.setattr(paper, "_execution_price", lambda db, sym, m, t: 100.0)
-        paper.ensure_session(db)
-        with pytest.raises(ValueError):
-            paper.paper_order(db, "NYSE", "T", "BUY", -1)
-        with pytest.raises(ValueError):
-            paper.paper_order(db, "NYSE", "T", "BUY", float("nan"))
-
-    def test_close_nonexistent_position(self, tmp_path, monkeypatch):
-        db = _db(tmp_path)
-        monkeypatch.setattr(paper, "_execution_price", lambda db, sym, m, t: 100.0)
-        paper.ensure_session(db)
-        with pytest.raises(ValueError):
-            paper.paper_order(db, "NYSE", "T", "CLOSE", 10)
-
-    def test_multiple_fills_weighted_entry(self, tmp_path, monkeypatch):
-        prices = iter([100.0, 120.0])
+    def test_close_releases_margin_and_realizes_pnl(self, tmp_path, monkeypatch):
+        prices = iter([100.0, 110.0])
         monkeypatch.setattr(paper, "_execution_price", lambda db, sym, m, t: next(prices))
+        monkeypatch.setattr(paper, "settings", dataclasses.replace(paper.settings, paper_slippage=0.0))
         db = _db(tmp_path)
-        paper.ensure_session(db)
-        paper.paper_order(db, "NYSE", "T", "BUY", 10)
-        paper.paper_order(db, "NYSE", "T", "BUY", 5)
-        state = paper.portfolio_state(db, record_equity=False)
-        p = state["positions"][0]
-        assert p["qty"] == 15
-        # weighted entry: (10*100.05 + 5*120.06)/15
-        assert p["entry"] == pytest.approx((10 * 100.05 + 5 * 120.06) / 15)
+        p = paper.pt_create_portfolio(db, "Main", 100000.0, fee_rate=0.0)
+        paper.pt_place_order(db, p["id"], "NYSE", "T", "buy", "market", 10.0, exchange="NYSE")
+        paper.pt_place_order(db, p["id"], "NYSE", "T", "sell", "market", 10.0, exchange="NYSE")
+        state = paper.pt_portfolio_state(db, p["id"], record_equity=False)
+        assert state["positions"] == []
+        # realized = (110 - 100) * 10 = 100; cash returns the blocked margin + pnl.
+        assert state["realized_pnl"] == pytest.approx(100.0)
+        assert state["cash"] == pytest.approx(100100.0)
 
-    def test_portfolio_identity(self, tmp_path, monkeypatch):
+    def test_short_and_cover(self, tmp_path, monkeypatch):
+        db, p = self._setup(tmp_path, monkeypatch, price=100.0)
+        paper.pt_place_order(db, p["id"], "NYSE", "T", "sell", "market", 10.0, exchange="NYSE")
+        state = paper.pt_portfolio_state(db, p["id"], record_equity=False)
+        assert state["positions"][0]["side"] == "short" and state["positions"][0]["quantity"] == 10.0
+        paper.pt_place_order(db, p["id"], "NYSE", "T", "buy", "market", 10.0, exchange="NYSE")
+        assert paper.pt_portfolio_state(db, p["id"], record_equity=False)["positions"] == []
+
+    def test_netting_sell_closes_long_opens_short(self, tmp_path, monkeypatch):
+        db, p = self._setup(tmp_path, monkeypatch, price=100.0)
+        paper.pt_place_order(db, p["id"], "NYSE", "T", "buy", "market", 10.0, exchange="NYSE")
+        # Sell 15: closes the 10-long and opens a 5-short in one fill.
+        paper.pt_place_order(db, p["id"], "NYSE", "T", "sell", "market", 15.0, exchange="NYSE")
+        state = paper.pt_portfolio_state(db, p["id"], record_equity=False)
+        assert len(state["positions"]) == 1
+        pos = state["positions"][0]
+        assert pos["side"] == "short" and pos["quantity"] == 5.0
+
+    def test_insufficient_margin_is_rejected_and_recorded(self, tmp_path, monkeypatch):
+        db, p = self._setup(tmp_path, monkeypatch, price=1000.0)
+        with pytest.raises(ValueError):
+            paper.pt_place_order(db, p["id"], "NYSE", "T", "buy", "market", 1000.0, exchange="NYSE")
+        orders = db.pt_get_orders(p["id"])
+        assert any(o["status"] == "rejected" for o in orders)
+
+    def test_invalid_side_quantity_and_order_type(self, tmp_path, monkeypatch):
+        db, p = self._setup(tmp_path, monkeypatch, price=100.0)
+        with pytest.raises(ValueError):
+            paper.pt_place_order(db, p["id"], "NYSE", "T", "long", "market", 10.0)
+        with pytest.raises(ValueError):
+            paper.pt_place_order(db, p["id"], "NYSE", "T", "buy", "market", -1.0)
+        with pytest.raises(ValueError):
+            paper.pt_place_order(db, p["id"], "NYSE", "T", "buy", "banana", 10.0)
+        with pytest.raises(ValueError):
+            paper.pt_place_order(db, p["id"], "NYSE", "T", "buy", "limit", 10.0)  # no price
+
+    def test_limit_order_rests_then_fills_on_cross(self, tmp_path, monkeypatch):
+        prices = iter([100.0, 90.0, 90.0])
+        monkeypatch.setattr(paper, "_execution_price", lambda db, sym, m, t: next(prices))
+        monkeypatch.setattr(paper, "settings", dataclasses.replace(paper.settings, paper_slippage=0.0))
         db = _db(tmp_path)
-        monkeypatch.setattr(paper, "_execution_price", lambda db, sym, m, t: 100.0)
-        monkeypatch.setattr(
-            "stock_alert_app.db.Database.latest_price_snapshot",
-            lambda self, m, t: {"close": 110.0, "fetched_at": "2026-01-01T12:00:00"},
-        )
-        paper.ensure_session(db)
-        paper.paper_order(db, "NYSE", "T", "BUY", 10)
-        paper.paper_order(db, "NYSE", "U", "SHORT", 5)
-        state = paper.portfolio_state(db, record_equity=False)
-        # equity = cash + long MV - short MV
-        assert state["equity"] == pytest.approx(state["cash"] + state["long_value"] - state["short_value"])
-        assert state["gross_exposure"] == pytest.approx(state["long_value"] + state["short_value"])
-        assert state["net_exposure"] == pytest.approx(state["long_value"] - state["short_value"])
+        p = paper.pt_create_portfolio(db, "Main", 100000.0, fee_rate=0.0)
+        o = paper.pt_place_order(db, p["id"], "NYSE", "T", "buy", "limit", 10.0, price=95.0, exchange="NYSE")
+        assert o["status"] == "pending"  # market 100 > limit 95 -> not filled
+        filled = paper.pt_process_pending_orders(db, p["id"])
+        assert filled == 0
+        # price now 90 (<=95) -> trigger on the next process pass.
+        filled = paper.pt_process_pending_orders(db, p["id"])
+        assert filled == 1
+        assert db.pt_get_order(o["id"])["status"] == "filled"
+
+    def test_cancel_releases_margin(self, tmp_path, monkeypatch):
+        db, p = self._setup(tmp_path, monkeypatch, price=100.0)
+        o = paper.pt_place_order(db, p["id"], "NYSE", "T", "buy", "limit", 10.0, price=90.0, exchange="NYSE")
+        assert db.pt_get_margin_block(o["id"]) == pytest.approx(900.0)
+        cash_before = paper.pt_get_portfolio(db, p["id"])["balance"]
+        paper.pt_cancel_order(db, o["id"])
+        assert db.pt_get_order(o["id"])["status"] == "cancelled"
+        assert paper.pt_get_portfolio(db, p["id"])["balance"] == pytest.approx(cash_before + 900.0)
 
     def test_quote_no_data(self, tmp_path, monkeypatch):
-        db = _db(tmp_path)
         monkeypatch.setattr(paper, "_execution_price", lambda db, sym, m, t: None)
-        q = paper.quote(db, "NYSE", "T")
+        db = _db(tmp_path)
+        q = paper.pt_quote(db, "NYSE", "T")
         assert q["status"] == "no_data" and q["price"] is None
+
+    def test_ensure_default_portfolio_autocreates(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(paper, "_execution_price", lambda db, sym, m, t: 100.0)
+        db = _db(tmp_path)
+        p1 = paper.ensure_default_portfolio(db, user_id="u1")
+        p2 = paper.ensure_default_portfolio(db, user_id="u1")
+        assert p1["id"] == p2["id"]  # idempotent
+        assert p1["name"] == "Main"
+
+    def test_leverage_reduces_required_margin(self, tmp_path, monkeypatch):
+        db, p = self._setup(tmp_path, monkeypatch, price=100.0, leverage=5.0, fee_rate=0.0)
+        paper.pt_place_order(db, p["id"], "NYSE", "T", "buy", "market", 10.0, exchange="NYSE", product="MIS")
+        state = paper.pt_portfolio_state(db, p["id"], record_equity=False)
+        # notional 1000 / leverage 5 = 200 blocked (intraday MIS uses portfolio leverage).
+        assert state["cash"] == pytest.approx(100000.0 - 200.0)
+        assert state["positions"][0]["held_margin"] == pytest.approx(200.0)
+
+    def test_portfolio_crud(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(paper, "_execution_price", lambda db, sym, m, t: 100.0)
+        db = _db(tmp_path)
+        p = paper.pt_create_portfolio(db, "Alpha", 50000.0, user_id="u1")
+        assert len(paper.pt_list_portfolios(db, "u1")) == 1
+        paper.pt_set_balance(db, p["id"], 75000.0)
+        assert paper.pt_get_portfolio(db, p["id"])["balance"] == 75000.0
+        paper.pt_delete_portfolio(db, p["id"])
+        assert paper.pt_list_portfolios(db, "u1") == []
 
 
 class TestPerformance:

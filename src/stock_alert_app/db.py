@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -177,6 +178,101 @@ CREATE TABLE IF NOT EXISTS paper_equity_points (
 );
 CREATE INDEX IF NOT EXISTS idx_equity_session ON paper_equity_points(session_id, recorded_at);
 
+-- ============================================================================
+-- Paper trading v2 — Fincept-style multi-portfolio engine (simulation only).
+-- The legacy paper_portfolio / paper_orders tables above are retained but
+-- unused; all new state lives in the pt_* tables. Idempotent migration creates
+-- these on existing databases without touching legacy rows.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS pt_portfolios (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    user_id TEXT NOT NULL DEFAULT '',
+    initial_balance REAL NOT NULL,
+    balance REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    leverage REAL NOT NULL DEFAULT 1.0,
+    margin_mode TEXT NOT NULL DEFAULT 'cross',
+    fee_rate REAL NOT NULL DEFAULT 0.001,
+    exchange TEXT NOT NULL DEFAULT '',
+    enforce_market_hours INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pt_portfolios_user ON pt_portfolios(user_id);
+
+CREATE TABLE IF NOT EXISTS pt_orders (
+    id TEXT PRIMARY KEY,
+    portfolio_id TEXT NOT NULL,
+    user_id TEXT NOT NULL DEFAULT '',
+    security_id TEXT NOT NULL DEFAULT '',
+    market TEXT NOT NULL DEFAULT '',
+    ticker TEXT NOT NULL DEFAULT '',
+    side TEXT NOT NULL,              -- 'buy' | 'sell'
+    order_type TEXT NOT NULL,        -- 'market' | 'limit' | 'stop' | 'stop_limit'
+    quantity REAL NOT NULL,
+    price REAL,                       -- limit price (nullable)
+    stop_price REAL,                  -- stop trigger (nullable)
+    filled_qty REAL NOT NULL DEFAULT 0,
+    avg_price REAL,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending|partial|filled|cancelled|rejected
+    reduce_only INTEGER NOT NULL DEFAULT 0,
+    margin_blocked REAL NOT NULL DEFAULT 0,
+    product TEXT NOT NULL DEFAULT '',   -- 'MIS' | 'CNC' | '' (leverage hint)
+    exchange TEXT NOT NULL DEFAULT '',
+    decision_id TEXT,
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    filled_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pt_orders_portfolio ON pt_orders(portfolio_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_pt_orders_user ON pt_orders(user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS pt_positions (
+    id TEXT PRIMARY KEY,
+    portfolio_id TEXT NOT NULL,
+    user_id TEXT NOT NULL DEFAULT '',
+    security_id TEXT NOT NULL DEFAULT '',
+    market TEXT NOT NULL DEFAULT '',
+    ticker TEXT NOT NULL DEFAULT '',
+    side TEXT NOT NULL,              -- 'long' | 'short'
+    quantity REAL NOT NULL,
+    entry_price REAL NOT NULL,
+    current_price REAL NOT NULL DEFAULT 0,
+    unrealized_pnl REAL NOT NULL DEFAULT 0,
+    realized_pnl REAL NOT NULL DEFAULT 0,
+    leverage REAL NOT NULL DEFAULT 1.0,
+    product TEXT NOT NULL DEFAULT 'MIS',
+    held_margin REAL NOT NULL DEFAULT 0,
+    opened_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pt_positions_portfolio ON pt_positions(portfolio_id);
+
+CREATE TABLE IF NOT EXISTS pt_trades (
+    id TEXT PRIMARY KEY,
+    portfolio_id TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    security_id TEXT NOT NULL DEFAULT '',
+    market TEXT NOT NULL DEFAULT '',
+    ticker TEXT NOT NULL DEFAULT '',
+    side TEXT NOT NULL,
+    price REAL NOT NULL,
+    quantity REAL NOT NULL,
+    fee REAL NOT NULL DEFAULT 0,
+    pnl REAL NOT NULL DEFAULT 0,
+    timestamp TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pt_trades_portfolio ON pt_trades(portfolio_id, timestamp);
+
+CREATE TABLE IF NOT EXISTS pt_margin_blocks (
+    id TEXT PRIMARY KEY,
+    portfolio_id TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    security_id TEXT NOT NULL DEFAULT '',
+    amount REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pt_margin_blocks_order ON pt_margin_blocks(order_id);
+
 -- Backtest runs + immutable historical decision snapshots (rigorous mode only).
 CREATE TABLE IF NOT EXISTS backtest_runs (
     run_id TEXT PRIMARY KEY,
@@ -336,7 +432,27 @@ class Database:
             conn.execute("DROP TABLE IF EXISTS discovered_tickers")
             self._migrate_verdicts(conn)
             self._migrate_user_ownership(conn)
+            self._migrate_paper_v2(conn)
             return self._migrate_verdict_reasons(conn)
+
+    @contextmanager
+    def transaction(self):
+        """Yield a single connection wrapped in a BEGIN/COMMIT/ROLLBACK txn.
+
+        Use this when several writes must be atomic (e.g. the paper fill engine).
+        Inside the block, run SQL directly on the yielded connection — the per-
+        operation helpers (pt_*) open their own connections and must NOT be used.
+        """
+        conn = self.connect()
+        try:
+            conn.execute("BEGIN")
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     @staticmethod
     def _migrate_user_ownership(conn: sqlite3.Connection) -> None:
@@ -357,6 +473,17 @@ class Database:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_portfolio_user ON paper_portfolio(user_id)"
         )
+
+    @staticmethod
+    def _migrate_paper_v2(conn: sqlite3.Connection) -> None:
+        """Forward-compat hook for the Fincept-style pt_* paper engine.
+
+        The pt_* tables are created by SCHEMA (CREATE TABLE IF NOT EXISTS) which
+        init_schema has already executed. Add future additive column migrations
+        here; legacy paper_portfolio / paper_orders rows are never touched.
+        """
+        # No additive columns yet — tables are created by SCHEMA.
+        return None
 
     @staticmethod
     def _migrate_verdicts(conn: sqlite3.Connection) -> None:
@@ -939,6 +1066,257 @@ class Database:
                     (user_id,),
                 ).fetchall()
             return [dict(r) for r in rows]
+
+    # ---- Paper trading v2 (Fincept-style pt_* engine) ----
+
+    def pt_insert_portfolio(self, p: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT INTO pt_portfolios
+                   (id, name, user_id, initial_balance, balance, currency, leverage,
+                    margin_mode, fee_rate, exchange, enforce_market_hours, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    p["id"], p["name"], p.get("user_id", ""), p["initial_balance"],
+                    p["balance"], p.get("currency", "USD"), p.get("leverage", 1.0),
+                    p.get("margin_mode", "cross"), p.get("fee_rate", 0.001),
+                    p.get("exchange", ""), 1 if p.get("enforce_market_hours") else 0,
+                    p["created_at"],
+                ),
+            )
+
+    def pt_get_portfolio(self, portfolio_id: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM pt_portfolios WHERE id = ?", (portfolio_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def pt_list_portfolios(self, user_id: str = "") -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            if user_id:
+                rows = conn.execute(
+                    "SELECT * FROM pt_portfolios WHERE user_id = ? ORDER BY created_at DESC",
+                    (user_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM pt_portfolios ORDER BY created_at DESC"
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def pt_find_portfolio(self, name: str, user_id: str = "") -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM pt_portfolios WHERE name = ? AND user_id = ? LIMIT 1",
+                (name, user_id),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def pt_update_balance(self, portfolio_id: str, balance: float) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE pt_portfolios SET balance = ? WHERE id = ?",
+                (balance, portfolio_id),
+            )
+
+    def pt_set_enforce_market_hours(self, portfolio_id: str, enforce: bool) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE pt_portfolios SET enforce_market_hours = ? WHERE id = ?",
+                (1 if enforce else 0, portfolio_id),
+            )
+
+    def pt_delete_portfolio(self, portfolio_id: str) -> None:
+        with self.connect() as conn:
+            for t in ("pt_trades", "pt_margin_blocks", "pt_positions", "pt_orders"):
+                conn.execute(f"DELETE FROM {t} WHERE portfolio_id = ?", (portfolio_id,))
+            conn.execute("DELETE FROM pt_portfolios WHERE id = ?", (portfolio_id,))
+
+    def pt_insert_order(self, o: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT INTO pt_orders
+                   (id, portfolio_id, user_id, security_id, market, ticker, side,
+                    order_type, quantity, price, stop_price, filled_qty, avg_price,
+                    status, reduce_only, margin_blocked, product, exchange,
+                    decision_id, reason, created_at, filled_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    o["id"], o["portfolio_id"], o.get("user_id", ""), o.get("security_id", ""),
+                    o.get("market", ""), o.get("ticker", ""), o["side"], o["order_type"],
+                    o["quantity"], o.get("price"), o.get("stop_price"), o.get("filled_qty", 0.0),
+                    o.get("avg_price"), o.get("status", "pending"), 1 if o.get("reduce_only") else 0,
+                    o.get("margin_blocked", 0.0), o.get("product", ""), o.get("exchange", ""),
+                    o.get("decision_id"), o.get("reason", ""), o["created_at"], o.get("filled_at"),
+                ),
+            )
+
+    def pt_get_order(self, order_id: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM pt_orders WHERE id = ?", (order_id,)).fetchone()
+            return dict(row) if row else None
+
+    def pt_update_order_fill(
+        self, order_id: str, filled_qty: float, avg_price: float, status: str, filled_at: str
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE pt_orders SET filled_qty = ?, avg_price = ?, status = ?, filled_at = ? WHERE id = ?",
+                (filled_qty, avg_price, status, filled_at, order_id),
+            )
+
+    def pt_cancel_order(self, order_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE pt_orders SET status = 'cancelled' WHERE id = ?", (order_id,)
+            )
+
+    def pt_get_orders(self, portfolio_id: str, status: str = "") -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            if status:
+                rows = conn.execute(
+                    "SELECT * FROM pt_orders WHERE portfolio_id = ? AND status = ? ORDER BY created_at",
+                    (portfolio_id, status),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM pt_orders WHERE portfolio_id = ? ORDER BY created_at DESC",
+                    (portfolio_id,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def pt_get_orders_between(self, portfolio_id: str, start_iso: str, end_iso: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM pt_orders WHERE portfolio_id = ? AND created_at >= ? AND created_at < ? ORDER BY created_at",
+                (portfolio_id, start_iso, end_iso),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def pt_insert_position(self, p: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT INTO pt_positions
+                   (id, portfolio_id, user_id, security_id, market, ticker, side,
+                    quantity, entry_price, current_price, unrealized_pnl, realized_pnl,
+                    leverage, product, held_margin, opened_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    p["id"], p["portfolio_id"], p.get("user_id", ""), p.get("security_id", ""),
+                    p.get("market", ""), p.get("ticker", ""), p["side"], p["quantity"],
+                    p["entry_price"], p.get("current_price", 0.0), p.get("unrealized_pnl", 0.0),
+                    p.get("realized_pnl", 0.0), p.get("leverage", 1.0), p.get("product", "MIS"),
+                    p.get("held_margin", 0.0), p["opened_at"],
+                ),
+            )
+
+    def pt_get_position(self, position_id: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM pt_positions WHERE id = ?", (position_id,)).fetchone()
+            return dict(row) if row else None
+
+    def pt_find_position(self, portfolio_id: str, market: str, ticker: str, side: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM pt_positions WHERE portfolio_id = ? AND market = ? AND ticker = ? AND side = ? LIMIT 1",
+                (portfolio_id, market, ticker.upper(), side),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def pt_get_positions(self, portfolio_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM pt_positions WHERE portfolio_id = ? ORDER BY opened_at",
+                (portfolio_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def pt_update_position(self, position_id: str, quantity: float, entry_price: float) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE pt_positions SET quantity = ?, entry_price = ? WHERE id = ?",
+                (quantity, entry_price, position_id),
+            )
+
+    def pt_set_position_margin(self, position_id: str, held_margin: float) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE pt_positions SET held_margin = ? WHERE id = ?",
+                (held_margin, position_id),
+            )
+
+    def pt_add_realized_pnl(self, position_id: str, pnl: float) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE pt_positions SET realized_pnl = realized_pnl + ? WHERE id = ?",
+                (pnl, position_id),
+            )
+
+    def pt_set_position_product(self, position_id: str, product: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE pt_positions SET product = ? WHERE id = ?", (product, position_id)
+            )
+
+    def pt_update_position_price(self, portfolio_id: str, market: str, ticker: str, price: float) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE pt_positions SET current_price = ? WHERE portfolio_id = ? AND market = ? AND ticker = ?",
+                (price, portfolio_id, market, ticker.upper()),
+            )
+
+    def pt_delete_position(self, position_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM pt_positions WHERE id = ?", (position_id,))
+
+    def pt_insert_trade(self, t: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT INTO pt_trades
+                   (id, portfolio_id, order_id, security_id, market, ticker, side,
+                    price, quantity, fee, pnl, timestamp)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    t["id"], t["portfolio_id"], t["order_id"], t.get("security_id", ""),
+                    t.get("market", ""), t.get("ticker", ""), t["side"], t["price"],
+                    t["quantity"], t.get("fee", 0.0), t.get("pnl", 0.0), t["timestamp"],
+                ),
+            )
+
+    def pt_get_trades(self, portfolio_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM pt_trades WHERE portfolio_id = ? ORDER BY timestamp DESC LIMIT ?",
+                (portfolio_id, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def pt_get_trades_between(self, portfolio_id: str, start_iso: str, end_iso: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM pt_trades WHERE portfolio_id = ? AND timestamp >= ? AND timestamp < ? ORDER BY timestamp",
+                (portfolio_id, start_iso, end_iso),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def pt_insert_margin_block(self, block_id: str, portfolio_id: str, order_id: str, security_id: str, amount: float) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO pt_margin_blocks (id, portfolio_id, order_id, security_id, amount) VALUES (?, ?, ?, ?, ?)",
+                (block_id, portfolio_id, order_id, security_id, amount),
+            )
+
+    def pt_get_margin_block(self, order_id: str) -> float:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT amount FROM pt_margin_blocks WHERE order_id = ? LIMIT 1", (order_id,)
+            ).fetchone()
+            return float(row["amount"]) if row else 0.0
+
+    def pt_delete_margin_block(self, order_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM pt_margin_blocks WHERE order_id = ?", (order_id,))
 
     # ---- Historical decision evaluation ----
 
