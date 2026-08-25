@@ -41,7 +41,9 @@ def _news_lines(news: list[dict], limit: int = 6) -> list[str]:
     return out
 
 
-def _local_respond(text: str, ctx: dict, market: str | None, mode: str = "AUTO") -> str:
+def _local_respond(
+    text: str, ctx: dict, market: str | None, mode: str = "AUTO"
+) -> str:
     t = (text or "").lower()
     verdicts = ctx["verdicts"]
     news = ctx["news"]
@@ -134,7 +136,9 @@ def _call_ollama(prompt: str, base_url: str, model: str) -> str | None:
     return (data.get("response") or "").strip() or None
 
 
-def _try_llm(history: list[dict], context: dict, market: str | None) -> str | None:
+def _try_llm(
+    history: list[dict], context: dict, market: str | None
+) -> str | None:
     system = (
         "You are StockVerdict AI, a warm but sharp markets assistant embedded in a "
         "trading terminal. Answer concisely and in plain language. Use the supplied "
@@ -175,7 +179,9 @@ def _try_llm(history: list[dict], context: dict, market: str | None) -> str | No
     return None
 
 
-def chat(messages: list[dict], market: str | None = None, mode: str = "AUTO") -> dict:
+def chat(
+    messages: list[dict], market: str | None = None, mode: str = "AUTO"
+) -> dict:
     """Respond to a chat turn. Uses an LLM when configured, else a local
     data-driven responder so the agent always works offline."""
     db = Database(settings.db_path)
