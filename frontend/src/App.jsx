@@ -335,11 +335,29 @@ export default function App() {
     return () => clearInterval(t);
   }, [auth.status, runBackgroundRefresh]);
 
+  // Shared SecurityContext: the canonical selected security (if any). Dossier,
+  // News, Committee and Paper all read this single source of truth rather than
+  // each deriving their own market/ticker, so panels never drift apart.
+  const security = useMemo(() => {
+    if (drawer && drawer.type === "stock" && drawer.v) {
+      const id = securityIdOf(drawer.v.market, drawer.v.ticker);
+      return {
+        security_id: id || "",
+        market: drawer.v.market || "",
+        ticker: drawer.v.ticker || "",
+        symbol: drawer.v.symbol || "",
+        company: drawer.v.company || "",
+      };
+    }
+    return null;
+  }, [drawer]);
+
   const ctx = useMemo(
     () => ({
       market,
       markets,
       indexes,
+      security,
       theme,
       setTheme,
       setMarket,
@@ -359,7 +377,7 @@ export default function App() {
       screenerPrefill,
       setScreenerPrefill,
     }),
-    [market, markets, indexes, refreshToken, refreshStatus, theme, portfolioIds, addToPortfolio, removeFromPortfolio, inPortfolio, screenerPrefill, openDrawer]
+    [market, markets, indexes, security, refreshToken, refreshStatus, theme, portfolioIds, addToPortfolio, removeFromPortfolio, inPortfolio, screenerPrefill, openDrawer]
   );
 
   const ActiveTab = TAB_COMPONENTS[tab];

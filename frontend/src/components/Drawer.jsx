@@ -530,11 +530,17 @@ function StockDossier({ v, onClose }) {
     return v.ticker + (m?.yahoo_suffix || "");
   }, [v, markets]);
 
+  const reqRef = useRef(0);
   const load = useCallback((fresh = false) => {
+    const req = ++reqRef.current;
     setError("");
     dossier({ symbol, fresh })
-      .then(setData)
-      .catch((e) => setError(e.message));
+      .then((d) => {
+        if (req === reqRef.current) setData(d);
+      })
+      .catch((e) => {
+        if (req === reqRef.current) setError(e.message);
+      });
   }, [symbol]);
 
   useEffect(() => {
@@ -564,15 +570,20 @@ function StockDossier({ v, onClose }) {
   return (
     <>
       <button className="close" onClick={onClose}>✕</button>
-      {error ? (
-        <div className="error">
-          <div style={{ marginBottom: 12 }}>ERROR: {error}</div>
-          <button className="primary" onClick={load}>⟳ RETRY</button>
-        </div>
-      ) : !data ? (
-        <div className="empty">LOADING DOSSIER…</div>
+      {!data ? (
+        error ? (
+          <div className="error">
+            <div style={{ marginBottom: 12 }}>ERROR: {error}</div>
+            <button className="primary" onClick={load}>⟳ RETRY</button>
+          </div>
+        ) : (
+          <div className="empty">LOADING DOSSIER…</div>
+        )
       ) : (
         <>
+          {error && (
+            <div className="scan-warning">⚠ REFRESH FAILED · SHOWING LAST-KNOWN DATA — {error}</div>
+          )}
           <DossierHeader dossierData={data} v={v} />
           <div className="dossier-workspace">
             <ChartSection dossierData={data} />
