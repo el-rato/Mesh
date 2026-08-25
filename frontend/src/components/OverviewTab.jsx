@@ -169,7 +169,7 @@ export default function OverviewTab() {
 
           {/* RIGHT RAIL */}
           <aside className="ov-rail">
-            <div className="ov-panel">
+            <div className="ov-rail-box">
               <div className="ov-panel-label">LIVE NEWS</div>
               {news.length ? (
                 <div className="ov-news-list">
@@ -189,7 +189,7 @@ export default function OverviewTab() {
               )}
             </div>
 
-            <div className="ov-panel">
+            <div className="ov-rail-box">
               <div className="ov-panel-label">WATCHLIST</div>
               {watch.length ? (
                 <div className="ov-watch-list">
