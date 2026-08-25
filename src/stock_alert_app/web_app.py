@@ -394,13 +394,13 @@ def stock_dossier(
     except Exception:
         stale = False
 
-    # Re-derive the committee so available-but-outdated signals are marked
-    # STALE rather than presented as fresh (a stale signal is still used, but
-    # flagged — never coerced to neutral or dropped).
+    # Re-derive the structured decision with STALE awareness. Keep the committee
+    # in its canonical signals shape (committee_signals, a list of signals) —
+    # the UI renders it as a list, so it must never be replaced by the
+    # committee_decision dict (whose "signals" is a key->signal map).
     from .dossier import committee_decision
 
-    committee = committee_decision(verdict_dict, stale=stale)
-    verdict_dict["committee"] = committee
+    verdict_dict["decision"] = committee_decision(verdict_dict, stale=stale)
 
     from .markets import load_markets
 
@@ -412,7 +412,7 @@ def stock_dossier(
     return {
         "instrument": item,
         "verdict": verdict_dict,
-        "committee": committee,
+        "committee": verdict_dict["committee"],
         "factors": verdict_dict["factors"],
         "institutional": institutional_data,
         "news": db.recent_news(mkt, tkr, limit=50),
