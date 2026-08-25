@@ -753,7 +753,10 @@ class Database:
         """Most recent news across the whole universe with their latest sentiment.
 
         Used by the live event feed; the join picks the newest sentiment score per
-        article so a multi-model article never appears twice.
+        article so a multi-model article never appears twice. Sorts by fetched_at
+        (always ISO, reliable) then published_at as a secondary signal so the
+        newest articles truly come first even when published_at is empty or in
+        a legacy non-ISO format.
         """
         with self.connect() as conn:
             rows = conn.execute(
@@ -767,7 +770,8 @@ class Database:
                         SELECT MAX(s2.scored_at) FROM sentiment_scores s2
                         WHERE s2.news_item_id = n.id
                     )
-                   ORDER BY CASE WHEN n.published_at = '' THEN n.fetched_at ELSE n.published_at END DESC
+                   ORDER BY n.fetched_at DESC,
+                            CASE WHEN n.published_at = '' THEN n.fetched_at ELSE n.published_at END DESC
                    LIMIT ?""",
                 (limit,),
             ).fetchall()

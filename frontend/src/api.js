@@ -202,6 +202,10 @@ export async function events(limit = 40) {
   return fetchJSON(`/api/events?limit=${limit}`);
 }
 
+export async function newsFeed(limit = 100) {
+  return fetchJSON(`/api/news/feed?limit=${limit}`);
+}
+
 export async function notificationsAck(keys) {
   return fetchJSON("/api/notifications/ack", {
     method: "POST",

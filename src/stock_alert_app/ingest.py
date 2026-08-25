@@ -44,12 +44,14 @@ class MarketIngestor:
         use_google: bool = True,
         use_yahoo: bool = False,
         use_financial_feeds: bool = True,
+        use_global_feeds: bool = True,
     ) -> None:
         self.market = market
         self.db = db
         self.use_google = use_google
         self.use_yahoo = use_yahoo
         self.use_financial_feeds = use_financial_feeds
+        self.use_global_feeds = use_global_feeds
         self.country_code = market.country
 
     def _ticker_queries(self, ticker: Ticker) -> list[str]:
@@ -69,6 +71,10 @@ class MarketIngestor:
 
         if self.use_financial_feeds and self.market.financial_feeds:
             for art in sources.fetch_financial_feeds(self.market.financial_feeds):
+                grouped.append((None, art))
+
+        if self.use_global_feeds:
+            for art in sources.fetch_global_feeds():
                 grouped.append((None, art))
 
         if self.use_yahoo:

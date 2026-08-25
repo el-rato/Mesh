@@ -11,6 +11,7 @@ import FundsTab from "./components/FundsTab.jsx";
 import SimulationTab from "./components/SimulationTab.jsx";
 import PaperTab from "./components/PaperTab.jsx";
 import PaperOrderPanel from "./components/PaperOrderPanel.jsx";
+import NewsTab from "./components/NewsTab.jsx";
 import NotificationsBell from "./components/NotificationsBell.jsx";
 import Drawer from "./components/Drawer.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
@@ -25,12 +26,13 @@ const PRIMARY_TABS = [
   { key: "scanner", fn: "F2", label: "SCANNER" },
   { key: "portfolio", fn: "F3", label: "PORTFOLIO" },
   { key: "paper", fn: "F4", label: "PAPER" },
+  { key: "news", fn: "F5", label: "NEWS" },
 ];
 
 const SECONDARY_TABS = [
-  { key: "screener", fn: "F5", label: "SCREENER" },
+  { key: "screener", fn: "F6", label: "SCREENER" },
   { key: "sim", fn: "F7", label: "SIM / BACKTEST" },
-  { key: "funds", fn: "F9", label: "HEDGE FUNDS" },
+  { key: "funds", fn: "F8", label: "HEDGE FUNDS" },
 ];
 
 const TAB_COMPONENTS = {
@@ -39,6 +41,7 @@ const TAB_COMPONENTS = {
   scanner: ScannerTab,
   screener: ScreenerTab,
   paper: PaperTab,
+  news: NewsTab,
   sim: SimulationTab,
   funds: FundsTab,
 };

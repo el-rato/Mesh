@@ -1,8 +1,11 @@
 import { useEffect, useState, useCallback } from "react";
-import { fetchJSON, notifications, notificationsScan } from "../api.js";
+import { fetchJSON, notifications, notificationsScan, screener } from "../api.js";
 import { useApp } from "../App.jsx";
 import { verdictBadge, verdictClass, SectionHeader, Metric, StatusIndicator } from "./ui.jsx";
 import SecurityLink, { SecurityText } from "./SecurityLink.jsx";
+import FearGreedGauge from "./FearGreedGauge.jsx";
+import BreadthStrip from "./BreadthStrip.jsx";
+import MoversPanel from "./MoversPanel.jsx";
 
 function num(v, d = 0) {
   const n = Number(v);
@@ -23,6 +26,7 @@ export default function OverviewTab() {
   const { market, markets, indexes, refreshToken, setTab, openDrawer, setScreenerPrefill } = useApp();
   const [verdicts, setVerdicts] = useState([]);
   const [alerts, setAlerts] = useState([]);
+  const [screenerRows, setScreenerRows] = useState([]);
   const [error, setError] = useState("");
 
   const loadVerdicts = useCallback(() => {
@@ -38,6 +42,12 @@ export default function OverviewTab() {
       .catch(() => {});
   }, []);
 
+  const loadScreener = useCallback(() => {
+    screener({ market: market || "", sort: "combined", limit: 200 })
+      .then((data) => setScreenerRows(data || []))
+      .catch(() => {});
+  }, [market]);
+
   useEffect(() => {
     // Bootstrap the event detectors once, then poll. Repeated scans are
     // idempotent (deterministic event keys).
@@ -49,16 +59,18 @@ export default function OverviewTab() {
 
   useEffect(() => {
     loadVerdicts();
+    loadScreener();
     const t = setInterval(loadVerdicts, 30000);
     return () => clearInterval(t);
-  }, [loadVerdicts]);
+  }, [loadVerdicts, loadScreener]);
 
   useEffect(() => {
     if (refreshToken) {
       loadVerdicts();
       loadAlerts();
+      loadScreener();
     }
-  }, [refreshToken, loadVerdicts, loadAlerts]);
+  }, [refreshToken, loadVerdicts, loadAlerts, loadScreener]);
 
   const bulls = verdicts.filter((v) => verdictClass(v.verdict) === "bull").length;
   const bears = verdicts.filter((v) => verdictClass(v.verdict) === "bear").length;
@@ -130,15 +142,25 @@ export default function OverviewTab() {
         <Metric label="ALERTS" value={alerts.length} tone={significant.length ? "bear" : ""} />
       </div>
 
+      <div className="overview-pulse-row">
+        <FearGreedGauge verdicts={verdicts} />
+        <div className="overview-breadth-wrap">
+          <SectionHeader title="MARKET BREADTH" />
+          <BreadthStrip rows={screenerRows} />
+        </div>
+      </div>
+
+      <MoversPanel title="TOP MOVERS" />
+
       <div className="landing-cols">
         {/* Major movement */}
         <div className="landing-col">
-          <SectionHeader title="MAJOR MARKET MOVEMENT" />
+          <SectionHeader title="MAJOR INDEX LEVELS" />
           <div className="grid landing-index-grid">
             {topMovers.map((s) => {
               const up = (s.change_pct || 0) >= 0;
               return (
-                <div key={s.symbol} className={`panel ${up ? "bull" : "bear"}`} onClick={() => setTab("indexes")}>
+                <div key={s.symbol} className={`panel ${up ? "bull" : "bear"}`}>
                   <div className="panel-head">
                     <div>
                       <div className="symbol" style={{ fontSize: 13 }}>{s.name}</div>

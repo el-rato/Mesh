@@ -1,6 +1,8 @@
 ﻿import { useEffect, useState } from "react";
-import { events, fetchJSON } from "../api.js";
+import { events, fetchJSON, screener, scanner } from "../api.js";
 import { Row, StatusIndicator } from "./ui.jsx";
+import FearGreedGauge from "./FearGreedGauge.jsx";
+import BreadthStrip from "./BreadthStrip.jsx";
 
 const ILLUSTRATIVE = <span className="lp-illus">ILLUSTRATIVE</span>;
 
@@ -257,11 +259,20 @@ const STEPS = [
 export default function Landing({ onLogin, onRegister }) {
   const [pulse, setPulse] = useState(null);
   const [feed, setFeed] = useState(null);
+  const [verdicts, setVerdicts] = useState([]);
+  const [screenerRows, setScreenerRows] = useState([]);
 
   useEffect(() => {
     fetchJSON("/api/indexes").then(setPulse).catch(() => setPulse([]));
     events(30).then(setFeed).catch(() => setFeed([]));
+    fetchJSON("/api/verdicts").then((d) => setVerdicts(Object.values(d || {}))).catch(() => setVerdicts([]));
+    screener({ sort: "combined", limit: 100 }).then(setScreenerRows).catch(() => setScreenerRows([]));
   }, []);
+
+  const liveMovers = [...screenerRows]
+    .sort((a, b) => (num(b.price_move) || 0) - (num(a.price_move) || 0));
+  const liveGainers = liveMovers.slice(0, 4);
+  const liveLosers = liveMovers.slice(-4).reverse();
 
   return (
     <div className="lp">
@@ -293,10 +304,55 @@ export default function Landing({ onLogin, onRegister }) {
           </div>
           <div className="lp-hero-meta">Simulated trading · No broker · No real money</div>
         </div>
-        <TerminalPreview />
+        <div className="lp-hero-side">
+          <TerminalPreview />
+          {verdicts.length > 0 && (
+            <div className="lp-hero-gauge">
+              <FearGreedGauge verdicts={verdicts} compact />
+            </div>
+          )}
+        </div>
       </section>
 
       <MarketPulse pulse={pulse} />
+
+      {/* Fincept-style live market pulse: Fear & Greed + breadth + movers */}
+      {verdicts.length > 0 && (
+        <section className="lp-section" id="pulse-live">
+          <div className="lp-kicker">Live market pulse</div>
+          <h2 className="lp-h2">Fear, greed and breadth — right now.</h2>
+          <div className="lp-pulse-live">
+            <FearGreedGauge verdicts={verdicts} />
+            <div className="lp-pulse-breadth">
+              <div className="lp-stage-title">MARKET BREADTH</div>
+              <BreadthStrip rows={screenerRows} />
+            </div>
+          </div>
+          {liveMovers.length > 0 && (
+            <div className="lp-movers-live">
+              <div className="lp-stage-title">TOP GAINERS {ILLUSTRATIVE}</div>
+              <div className="lp-movers-col">
+                {liveGainers.map((r) => (
+                  <div className="row" key={`g-${r.market}:${r.ticker}`}>
+                    <span className="label"><span className="t" style={{ color: "var(--amber)" }}>{r.market}:{r.ticker}</span></span>
+                    <span className="value"><span className="up">{pct(r.price_move)}</span></span>
+                  </div>
+                ))}
+              </div>
+              <div className="lp-movers-col">
+                <div className="lp-stage-title">TOP LOSERS {ILLUSTRATIVE}</div>
+                {liveLosers.map((r) => (
+                  <div className="row" key={`l-${r.market}:${r.ticker}`}>
+                    <span className="label"><span className="t" style={{ color: "var(--amber)" }}>{r.market}:{r.ticker}</span></span>
+                    <span className="value"><span className="down">{pct(r.price_move)}</span></span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
       <LiveEvents feed={feed} />
 
       {/* Product preview */}

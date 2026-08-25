@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { scanner } from "../api.js";
 import { useApp } from "../App.jsx";
 import AddToPortfolioButton from "./AddToPortfolioButton.jsx";
@@ -36,35 +36,37 @@ function status(r) {
   return r.data_status === "no_data" ? "NO DATA" : "OK";
 }
 
+const VERDICT_PILLS = [
+  { key: "", label: "ALL" },
+  { key: "BULL", label: "BULL" },
+  { key: "BEAR", label: "BEAR" },
+  { key: "NEUTRAL", label: "NEUTRAL" },
+];
+
+const SORTS = [
+  { key: "combined", label: "COMBINED" },
+  { key: "confidence", label: "CONFIDENCE" },
+  { key: "momentum", label: "MOMENTUM" },
+  { key: "prop_up", label: "P(UP)" },
+];
+
 export default function ScannerTab() {
-  const { market, markets, refreshToken, refreshStatus, openDrawer, openPaperTicket } = useApp();
+  const { market, refreshToken, refreshStatus, openDrawer, openPaperTicket } = useApp();
   const [rows, setRows] = useState(null);
   const [error, setError] = useState("");
-  const [filters, setFilters] = useState({
-    verdict: "",
-    signal_lstm: "",
-    min_confidence: 0,
-    min_momentum: "",
-    min_technical: "",
-    min_news: "",
-    sort: "combined",
-  });
-
-  const set = (k, v) => setFilters((f) => ({ ...f, [k]: v }));
+  const [verdict, setVerdict] = useState("");
+  const [sort, setSort] = useState("combined");
+  const [query, setQuery] = useState("");
 
   const load = useCallback(() => {
-    const params = { market: market || "", limit: 150, ...filters };
-    if (!filters.min_momentum) delete params.min_momentum;
-    if (!filters.min_technical) delete params.min_technical;
-    if (!filters.min_news) delete params.min_news;
-    if (!filters.min_confidence) delete params.min_confidence;
+    const params = { market: market || "", limit: 150, verdict, sort };
     scanner(params)
       .then((next) => {
         setRows(next);
         setError("");
       })
       .catch((e) => setError(e.message));
-  }, [market, filters]);
+  }, [market, verdict, sort]);
 
   useEffect(() => {
     load();
@@ -76,6 +78,19 @@ export default function ScannerTab() {
     if (refreshToken) load();
   }, [refreshToken]);
 
+  const filtered = useMemo(() => {
+    if (!rows) return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(
+      (r) =>
+        (r.ticker || "").toLowerCase().includes(q) ||
+        (r.company || "").toLowerCase().includes(q) ||
+        (r.market || "").toLowerCase().includes(q) ||
+        (r.symbol || "").toLowerCase().includes(q)
+    );
+  }, [rows, query]);
+
   if (!rows && error)
     return (
       <div className="error">
@@ -86,83 +101,46 @@ export default function ScannerTab() {
   if (!rows) return <div className="empty">LOADING SCANNER…</div>;
 
   return (
-    <>
-      <div className="controls">
+    <div className="scanner-tab">
+      {/* Clean command bar (Fincept screener style) */}
+      <div className="scanner-commandbar">
+        <div className="scanner-titlebox">
+          <div className="scanner-title">SCANNER</div>
+          <div className="scanner-subtitle dim">{market || "ALL MARKETS"} · {filtered.length} RESULTS</div>
+        </div>
+        <input
+          className="scanner-search"
+          placeholder="Search ticker, company…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <div className="scanner-pills">
+          {VERDICT_PILLS.map((p) => (
+            <button
+              key={p.key}
+              className={`scanner-pill ${verdict === p.key ? "active" : ""}`}
+              onClick={() => setVerdict(p.key)}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <select className="scanner-sort" value={sort} onChange={(e) => setSort(e.target.value)} title="Sort by">
+          {SORTS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+        </select>
         <RefreshStatus status={refreshStatus} />
-        <div className="field">
-          <label>Market</label>
-          <select value={market} onChange={(e) => {}} disabled>
-            {market ? <option>{market}</option> : <option>ALL</option>}
-          </select>
-        </div>
-        <div className="field">
-          <label>Verdict</label>
-          <select value={filters.verdict} onChange={(e) => set("verdict", e.target.value)}>
-            <option value="">ANY</option>
-            <option value="BULL">BULL</option>
-            <option value="BEAR">BEAR</option>
-            <option value="NEUTRAL">NEUTRAL</option>
-          </select>
-        </div>
-        <div className="field">
-          <label>LSTM</label>
-          <select value={filters.signal_lstm} onChange={(e) => set("signal_lstm", e.target.value)}>
-            <option value="">ANY</option>
-            <option value="BULL">BULL</option>
-            <option value="BEAR">BEAR</option>
-          </select>
-        </div>
-        <div className="field">
-          <label>Momentum ≥</label>
-          <input
-            type="number"
-            step="0.05"
-            value={filters.min_momentum}
-            placeholder="0.00"
-            onChange={(e) => set("min_momentum", e.target.value)}
-          />
-        </div>
-        <div className="field">
-          <label>Technical ≥</label>
-          <input
-            type="number"
-            step="0.05"
-            value={filters.min_technical}
-            placeholder="0.00"
-            onChange={(e) => set("min_technical", e.target.value)}
-          />
-        </div>
-        <div className="field">
-          <label>News ≥</label>
-          <input
-            type="number"
-            step="0.05"
-            value={filters.min_news}
-            placeholder="0.00"
-            onChange={(e) => set("min_news", e.target.value)}
-          />
-        </div>
-        <div className="field">
-          <label>Sort</label>
-          <select value={filters.sort} onChange={(e) => set("sort", e.target.value)}>
-            <option value="combined">COMBINED</option>
-            <option value="confidence">CONFIDENCE</option>
-            <option value="momentum">MOMENTUM</option>
-            <option value="prop_up">P(UP)</option>
-          </select>
-        </div>
-        <button className="primary" onClick={load}>⟳ SCAN</button>
+        <button className="primary scanner-refresh" onClick={load}>⟳</button>
       </div>
 
       {error && rows && (
         <div className="scan-warning">⚠ SCAN FAILED · SHOWING LAST KNOWN DATA — {error}</div>
       )}
 
-      {!rows.length ? (
-        <div className="empty">NO MATCHES — ADJUST FILTERS OR RUN A PRICE FETCH / SEARCH TO EXPAND THE UNIVERSE.</div>
+      {!filtered.length ? (
+        <div className="empty">NO MATCHES — ADJUST SEARCH OR RUN A PRICE FETCH TO EXPAND THE UNIVERSE.</div>
       ) : (
         <div className="grid">
-          {rows.map((r) => (
+          {filtered.map((r) => (
             <div
               key={`${r.market}:${r.ticker}`}
               className={`panel ${verdictClass(r.verdict)}`}
@@ -205,13 +183,13 @@ export default function ScannerTab() {
               </div>
               <div className="row paper-actions" onClick={(e) => e.stopPropagation()}>
                 <AddToPortfolioButton market={r.market} ticker={r.ticker} company={r.company} />
-                <button className="paper-buy" onClick={() => openPaperTicket({ market: r.market, ticker: r.ticker, symbol: r.symbol, company: r.company, action: "BUY" })}>BUY</button>
-                <button className="paper-short" onClick={() => openPaperTicket({ market: r.market, ticker: r.ticker, symbol: r.symbol, company: r.company, action: "SHORT" })}>SHORT</button>
+                <button className="paper-buy" onClick={() => openPaperTicket({ market: r.market, ticker: r.ticker, symbol: r.symbol, company: r.company, action: "buy" })}>BUY</button>
+                <button className="paper-short" onClick={() => openPaperTicket({ market: r.market, ticker: r.ticker, symbol: r.symbol, company: r.company, action: "sell" })}>SELL</button>
               </div>
             </div>
           ))}
         </div>
       )}
-    </>
+    </div>
   );
 }

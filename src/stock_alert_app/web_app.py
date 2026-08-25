@@ -1043,6 +1043,17 @@ def get_news(market: str, ticker: str, limit: int = 50) -> list[dict[str, object
     return db.recent_news(market, ticker, limit=limit)
 
 
+@app.get("/api/news/feed")
+def get_news_feed(limit: int = 100) -> list[dict[str, object]]:
+    """Global news feed across all tickers, with article URLs + sentiment.
+
+    Returns the most recent articles (never fabricated) so the NEWS tab can
+    render a clickable feed that opens the source article.
+    """
+    db = _db()
+    return db.recent_news_feed(limit=limit)
+
+
 @app.get("/api/watchlist")
 def get_watchlist() -> list[dict[str, object]]:
     from .analysis import stock_analysis
