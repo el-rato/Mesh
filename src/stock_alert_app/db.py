@@ -622,6 +622,35 @@ class Database:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def recent_news_feed(self, limit: int = 40) -> list[dict[str, Any]]:
+        """Most recent news across the whole universe with their latest sentiment.
+
+        Used by the live event feed; the join picks the newest sentiment score per
+        article so a multi-model article never appears twice.
+        """
+        with self.connect() as conn:
+            rows = conn.execute(
+                """SELECT n.market, n.ticker, n.source, n.title, n.url, n.summary,
+                          n.published_at, n.fetched_at,
+                          s.score AS sentiment_score, s.label AS sentiment_label
+                   FROM news_items n
+                   LEFT JOIN sentiment_scores s
+                     ON s.news_item_id = n.id
+                    AND s.scored_at = (
+                        SELECT MAX(s2.scored_at) FROM sentiment_scores s2
+                        WHERE s2.news_item_id = n.id
+                    )
+                   ORDER BY CASE WHEN n.published_at = '' THEN n.fetched_at ELSE n.published_at END DESC
+                   LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            d["security_id"] = f"{d['market']}:{d['ticker']}"
+            out.append(d)
+        return out
+
     def latest_verdicts(self, market: str | None = None) -> list[dict[str, Any]]:
         with self.connect() as conn:
             if market:

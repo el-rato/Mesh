@@ -87,7 +87,7 @@ def _parse_time(value: str | None) -> datetime | None:
         from email.utils import parsedate_to_datetime
 
         return parsedate_to_datetime(value)
-    except ValueError, TypeError:
+    except (ValueError, TypeError):
         return None
 
 

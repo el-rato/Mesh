@@ -734,6 +734,63 @@ def ack_notifications(body: AckRequest) -> dict[str, object]:
     return notifications.ack(_db(), body.keys)
 
 
+def _news_importance(score: Any, label: Any) -> str:
+    """Map a news sentiment score to a coarse importance band (real data only)."""
+    try:
+        magnitude = abs(float(score))
+    except (TypeError, ValueError):
+        magnitude = 0.0
+    if magnitude >= 0.5:
+        return "HIGH"
+    if magnitude >= 0.25:
+        return "IMPORTANT"
+    return "INFO"
+
+
+@app.get("/api/events")
+def get_events(limit: int = 40) -> list[dict[str, object]]:
+    """Live market event feed: real news headlines + terminal events, ranked.
+
+    News items come straight from stored articles (never fabricated); terminal
+    events reuse the existing notification stream (market open, committee change,
+    significant trade). Ranked by importance then recency.
+    """
+    from . import notifications
+
+    db = _db()
+    events: list[dict[str, object]] = []
+    for n in db.recent_news_feed(limit=limit):
+        events.append({
+            "id": f"news:{n['market']}:{n['ticker']}:{n.get('published_at') or n.get('fetched_at')}",
+            "timestamp": n.get("published_at") or n.get("fetched_at") or "",
+            "security_id": n["security_id"],
+            "market": n["market"],
+            "ticker": n["ticker"],
+            "headline": n["title"],
+            "source": n.get("source") or "NEWS",
+            "type": "news",
+            "sentiment": n.get("sentiment_label") or "",
+            "importance": _news_importance(n.get("sentiment_score"), n.get("sentiment_label")),
+        })
+    for a in notifications.recent(db, limit=limit):
+        events.append({
+            "id": a["event_key"],
+            "timestamp": a.get("created_at") or "",
+            "security_id": a.get("security_id") or "",
+            "market": a.get("market") or "",
+            "ticker": a.get("ticker") or "",
+            "headline": a.get("title") or a.get("message") or "",
+            "source": "TERMINAL",
+            "type": a.get("type") or "event",
+            "sentiment": "",
+            "importance": a.get("severity") or "INFO",
+        })
+
+    rank = {"HIGH": 3, "IMPORTANT": 2, "INFO": 1, "": 0}
+    events.sort(key=lambda e: (rank.get(str(e["importance"]), 0), e["timestamp"]), reverse=True)
+    return events[:limit]
+
+
 @app.get("/api/screener")
 def screener(
     market: str | None = None,

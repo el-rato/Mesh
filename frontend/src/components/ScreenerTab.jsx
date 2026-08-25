@@ -39,6 +39,11 @@ function pct(v) {
   return `${v > 0 ? "+" : ""}${(v * 100).toFixed(1)}%`;
 }
 
+function fmtTime(iso) {
+  if (!iso) return "";
+  return String(iso).slice(11, 19);
+}
+
 function Dir({ d }) {
   if (d === "BULL") return <span className="up">BULL</span>;
   if (d === "BEAR") return <span className="down">BEAR</span>;
@@ -46,7 +51,7 @@ function Dir({ d }) {
 }
 
 export default function ScreenerTab() {
-  const { market, markets, openDrawer, screenerPrefill, setScreenerPrefill } = useApp();
+  const { market, markets, openDrawer, screenerPrefill, setScreenerPrefill, refreshToken } = useApp();
   const [filters, setFilters] = useState({
     market: market || "",
     verdict: "",
@@ -103,6 +108,13 @@ export default function ScreenerTab() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Re-screen when the background refresh completes (reuses the terminal's
+  // existing refresh loop — no competing polling).
+  useEffect(() => {
+    if (refreshToken) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshToken]);
 
   useEffect(() => {
     if (market) set("market", market);
@@ -266,6 +278,7 @@ export default function ScreenerTab() {
       {rows && rows.length > 0 && (
         <div className="team-note" style={{ marginTop: 8 }}>
           CLICK A ROW TO OPEN ITS DOSSIER. {rows.length} SECURITIES FROM THE DYNAMIC UNIVERSE — NOT A FIXED LIST.
+          {rows[0].scanner_updated_at && <span style={{ marginLeft: 12 }}>UPDATED {fmtTime(rows[0].scanner_updated_at)}</span>}
         </div>
       )}
     </div>

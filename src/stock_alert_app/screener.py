@@ -18,7 +18,7 @@ import math
 from typing import Any
 
 from .config import settings
-from .db import Database
+from .db import Database, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +145,7 @@ def run(
     from .analysis import stock_analysis
     from .universe import universe
 
+    scanned_at = utc_now()
     query = (q or "").strip().lower()
     sector_query = (sector or "").strip().lower()
     mkt = market or None
@@ -187,6 +188,9 @@ def run(
             analysis = stock_analysis(row, snap, markets)
             analysis["data_status"] = "ok"
             analysis["security"] = sec
+            analysis["security_id"] = f"{sec_market}:{sec_ticker}"
+            analysis["last_price_update"] = (snap or {}).get("fetched_at")
+            analysis["scanner_updated_at"] = scanned_at
         else:
             if no_data_only:
                 analysis = {
@@ -198,6 +202,9 @@ def run(
                     "quantitative": {}, "market_regime": {}, "social": {},
                     "technical": {}, "news": None, "data_status": "no_data",
                     "security": sec,
+                    "security_id": f"{sec_market}:{sec_ticker}",
+                    "last_price_update": (snap or {}).get("fetched_at"),
+                    "scanner_updated_at": scanned_at,
                 }
                 analysis = _enrich(analysis, prev_snap)
                 out.append(analysis)

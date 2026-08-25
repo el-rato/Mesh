@@ -13,3 +13,4 @@ frontend/dist/
 
 # Database
 data/*.db
+data/stock_verdict.db

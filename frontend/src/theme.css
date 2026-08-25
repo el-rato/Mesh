@@ -818,6 +818,46 @@ body,
 }
 .lp-foot .lp-brand { font-size: 12px; }
 
+/* Market pulse + live events (landing) */
+.lp-pulse {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+  margin-top: 20px;
+}
+.lp-pulse-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  border-radius: 6px;
+}
+.lp-pulse-item .t { color: var(--text); font-family: var(--mono); font-weight: 600; }
+.lp-pulse-item .m { font-size: 11px; }
+.lp-pulse-item .v { font-size: 18px; color: var(--text); font-variant-numeric: tabular-nums; }
+.lp-events {
+  display: flex;
+  flex-direction: column;
+  margin-top: 20px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.lp-event {
+  display: grid;
+  grid-template-columns: 64px 130px 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.lp-event:last-child { border-bottom: none; }
+.lp-event .t { font-variant-numeric: tabular-nums; font-size: 12px; }
+.lp-event .sec { color: var(--amber); font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lp-event .h { color: var(--text); font-size: 13px; }
+.lp-event .src { font-size: 11px; }
+
 /* Responsive */
 @media (max-width: 980px) {
   .lp-hero { grid-template-columns: 1fr; gap: 32px; padding: 48px 0; }

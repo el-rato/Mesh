@@ -1,6 +1,79 @@
-﻿import { Row, StatusIndicator } from "./ui.jsx";
+﻿import { useEffect, useState } from "react";
+import { events, fetchJSON } from "../api.js";
+import { Row, StatusIndicator } from "./ui.jsx";
 
 const ILLUSTRATIVE = <span className="lp-illus">ILLUSTRATIVE</span>;
+
+function num(v, d = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : d;
+}
+
+function pct(v) {
+  if (v == null) return "—";
+  return `${v > 0 ? "+" : ""}${(v * 100).toFixed(2)}%`;
+}
+
+function time(iso) {
+  return iso ? String(iso).slice(11, 19) : "";
+}
+
+function MarketPulse({ pulse }) {
+  return (
+    <section className="lp-section" id="pulse">
+      <div className="lp-kicker">Market pulse</div>
+      <h2 className="lp-h2">What is moving.</h2>
+      <p className="lp-lead">
+        Major supported markets — live index levels and change, straight from the terminal's own data.
+      </p>
+      {pulse == null ? (
+        <div className="empty">LOADING MARKET PULSE…</div>
+      ) : pulse.length === 0 ? (
+        <div className="empty">NO_DATA — index data has not been fetched yet. It appears automatically after the first refresh.</div>
+      ) : (
+        <div className="lp-pulse">
+          {pulse.slice(0, 12).map((p) => (
+            <div className="lp-pulse-item" key={`${p.market}:${p.symbol}`}>
+              <span className="t">{p.name || p.symbol}</span>
+              <span className="m dim">{p.market}</span>
+              <span className="v">{p.close != null ? num(p.close).toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"}</span>
+              <span className={num(p.change_pct) >= 0 ? "up" : "down"}>{pct(p.change_pct)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function LiveEvents({ feed }) {
+  return (
+    <section className="lp-section" id="events">
+      <div className="lp-kicker">Live events</div>
+      <h2 className="lp-h2">What happened.</h2>
+      <p className="lp-lead">
+        Real news and terminal events, ranked by importance and recency. Open the terminal to inspect any security.
+      </p>
+      {feed == null ? (
+        <div className="empty">LOADING EVENTS…</div>
+      ) : feed.length === 0 ? (
+        <div className="empty">NO_DATA — no events yet. They appear as news is ingested and signals change.</div>
+      ) : (
+        <div className="lp-events">
+          {feed.slice(0, 12).map((e) => (
+            <div className="lp-event" key={e.id}>
+              <span className="t dim">{time(e.timestamp)}</span>
+              <span className="sec" title={e.security_id}>{e.security_id || "—"}</span>
+              <span className="h">{e.headline}</span>
+              <span className="src dim">{e.source}</span>
+              <span className={`badge ${e.importance === "HIGH" ? "bear" : e.importance === "IMPORTANT" ? "bull" : ""}`}>{e.importance}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
 
 function Candles({ bars, height = 132 }) {
   const min = Math.min(...bars.map((b) => b.l));
@@ -182,6 +255,14 @@ const STEPS = [
 ];
 
 export default function Landing({ onLogin, onRegister }) {
+  const [pulse, setPulse] = useState(null);
+  const [feed, setFeed] = useState(null);
+
+  useEffect(() => {
+    fetchJSON("/api/indexes").then(setPulse).catch(() => setPulse([]));
+    events(30).then(setFeed).catch(() => setFeed([]));
+  }, []);
+
   return (
     <div className="lp">
       {/* Navigation */}
@@ -214,6 +295,9 @@ export default function Landing({ onLogin, onRegister }) {
         </div>
         <TerminalPreview />
       </section>
+
+      <MarketPulse pulse={pulse} />
+      <LiveEvents feed={feed} />
 
       {/* Product preview */}
       <section className="lp-section" id="product">

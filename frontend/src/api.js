@@ -116,6 +116,10 @@ export async function notificationsScan() {
   return fetchJSON("/api/notifications/scan", { method: "POST" });
 }
 
+export async function events(limit = 40) {
+  return fetchJSON(`/api/events?limit=${limit}`);
+}
+
 export async function notificationsAck(keys) {
   return fetchJSON("/api/notifications/ack", {
     method: "POST",
