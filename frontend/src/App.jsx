@@ -359,6 +359,7 @@ export default function App() {
       setTheme,
       setMarket,
       setTab,
+      userEmail: auth.user?.email || "",
       refreshAll: () => {
         setRefreshToken((t) => t + 1);
         setLastUpdated(new Date());
@@ -374,7 +375,7 @@ export default function App() {
       screenerPrefill,
       setScreenerPrefill,
     }),
-    [market, markets, indexes, security, refreshToken, refreshStatus, theme, portfolioIds, addToPortfolio, removeFromPortfolio, inPortfolio, screenerPrefill, openDrawer]
+    [market, markets, indexes, security, refreshToken, refreshStatus, theme, portfolioIds, addToPortfolio, removeFromPortfolio, inPortfolio, screenerPrefill, openDrawer, auth]
   );
 
   const ActiveTab = TAB_COMPONENTS[tab];

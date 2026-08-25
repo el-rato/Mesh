@@ -215,6 +215,14 @@ export async function newsForTicker(market, ticker, { limit = 200, refresh = tru
   return fetchJSON(`/api/news?${qs.toString()}`);
 }
 
+export async function agentChat(messages, market = "", mode = "AUTO") {
+  return fetchJSON("/api/agent/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages, market: market || null, mode }),
+  });
+}
+
 export async function notificationsAck(keys) {
   return fetchJSON("/api/notifications/ack", {
     method: "POST",
@@ -225,6 +233,10 @@ export async function notificationsAck(keys) {
 
 export async function tickerStrip() {
   return fetchJSON("/api/ticker-strip");
+}
+
+export async function watchlist() {
+  return fetchJSON("/api/watchlist");
 }
 
 export async function authRegister(email, password) {

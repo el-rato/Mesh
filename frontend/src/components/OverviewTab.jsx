@@ -1,11 +1,9 @@
 import { useEffect, useState, useCallback } from "react";
-import { fetchJSON, notifications, notificationsScan, screener } from "../api.js";
+import { fetchJSON, newsFeed, watchlist, tickerStrip } from "../api.js";
 import { useApp } from "../App.jsx";
-import { verdictBadge, verdictClass, SectionHeader, Metric, StatusIndicator } from "./ui.jsx";
-import SecurityLink, { SecurityText } from "./SecurityLink.jsx";
-import FearGreedGauge from "./FearGreedGauge.jsx";
-import BreadthStrip from "./BreadthStrip.jsx";
-import MoversPanel from "./MoversPanel.jsx";
+import { verdictBadge, verdictClass, SectionHeader, StatusIndicator } from "./ui.jsx";
+import SecurityLink from "./SecurityLink.jsx";
+import AgentPanel from "./AgentPanel.jsx";
 
 function num(v, d = 0) {
   const n = Number(v);
@@ -13,20 +11,35 @@ function num(v, d = 0) {
 }
 
 function pct(v) {
-  return `${v > 0 ? "+" : ""}${(num(v) * 100).toFixed(2)}%`;
+  const n = num(v);
+  return `${n > 0 ? "+" : ""}${(n * 100).toFixed(2)}%`;
 }
 
-function sevClass(sev) {
-  if (sev === "HIGH") return "high";
-  if (sev === "IMPORTANT") return "important";
-  return "";
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 6) return { icon: "🌙", label: "Night owl mode" };
+  if (h < 12) return { icon: "🌅", label: "Good morning" };
+  if (h < 18) return { icon: "☀️", label: "Good afternoon" };
+  return { icon: "🌆", label: "Good evening" };
 }
+
+const SHORTCUTS = [
+  { key: "stock", label: "stocks" },
+  { key: "crypto", label: "crypto" },
+  { key: "etf", label: "ETFs & funds" },
+  { key: "index", label: "indices" },
+  { key: "bond", label: "bonds" },
+  { key: "forex", label: "Forex pairs" },
+  { key: "portfolio", label: "portfolio" },
+  { key: "watchlist", label: "watchlist" },
+];
 
 export default function OverviewTab() {
-  const { market, markets, indexes, refreshToken, setTab, openDrawer, setScreenerPrefill } = useApp();
+  const { market, markets, indexes, refreshToken, openDrawer, userEmail } = useApp();
   const [verdicts, setVerdicts] = useState([]);
-  const [alerts, setAlerts] = useState([]);
-  const [screenerRows, setScreenerRows] = useState([]);
+  const [news, setNews] = useState([]);
+  const [watch, setWatch] = useState([]);
+  const [active, setActive] = useState([]);
   const [error, setError] = useState("");
 
   const loadVerdicts = useCallback(() => {
@@ -36,223 +49,186 @@ export default function OverviewTab() {
       .catch((e) => setError(e.message));
   }, []);
 
-  const loadAlerts = useCallback(() => {
-    notifications(40)
-      .then(setAlerts)
+  const loadRails = useCallback(() => {
+    newsFeed(6).then(setNews).catch(() => {});
+    watchlist().then(setWatch).catch(() => {});
+    tickerStrip()
+      .then((rows) =>
+        setActive(
+          [...(rows || [])]
+            .filter((r) => r.change_pct != null)
+            .sort((a, b) => (b.change_pct || 0) - (a.change_pct || 0))
+            .slice(0, 6)
+        )
+      )
       .catch(() => {});
   }, []);
 
-  const loadScreener = useCallback(() => {
-    screener({ market: market || "", sort: "combined", limit: 200 })
-      .then((data) => setScreenerRows(data || []))
-      .catch(() => {});
-  }, [market]);
-
-  useEffect(() => {
-    // Bootstrap the event detectors once, then poll. Repeated scans are
-    // idempotent (deterministic event keys).
-    notificationsScan().catch(() => {});
-    loadAlerts();
-    const t = setInterval(loadAlerts, 20000);
-    return () => clearInterval(t);
-  }, [loadAlerts]);
-
   useEffect(() => {
     loadVerdicts();
-    loadScreener();
+    loadRails();
     const t = setInterval(loadVerdicts, 30000);
     return () => clearInterval(t);
-  }, [loadVerdicts, loadScreener]);
+  }, [loadVerdicts, loadRails]);
 
   useEffect(() => {
     if (refreshToken) {
       loadVerdicts();
-      loadAlerts();
-      loadScreener();
+      loadRails();
     }
-  }, [refreshToken, loadVerdicts, loadAlerts, loadScreener]);
-
-  const bulls = verdicts.filter((v) => verdictClass(v.verdict) === "bull").length;
-  const bears = verdicts.filter((v) => verdictClass(v.verdict) === "bear").length;
-  const neut = verdicts.length - bulls - bears;
-  const avgConf = verdicts.length
-    ? ((verdicts.reduce((s, v) => s + (v.confidence || 0), 0) / verdicts.length) * 100).toFixed(1)
-    : "--";
-  const marketsOpen = (markets || []).filter((m) => m.status?.status === "open").length;
-
-  const topMovers = [...(indexes || [])]
-    .sort((a, b) => (b.change_pct || 0) - (a.change_pct || 0))
-    .slice(0, 5);
+  }, [refreshToken, loadVerdicts, loadRails]);
 
   const topVerdicts = [...verdicts]
     .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
     .slice(0, 6);
 
-  const important = alerts.filter((a) => a.severity === "HIGH" || a.severity === "IMPORTANT").slice(0, 6);
-  const significant = alerts.filter((a) => a.severity === "HIGH").slice(0, 6);
+  const strip = [...(indexes || [])].slice(0, 14);
+  const openCount = (markets || []).filter((m) => m.status?.status === "open").length;
+  const greet = greeting();
 
-  const openDossier = (a) =>
+  const openDossier = (v) =>
     openDrawer({
       type: "stock",
-      v: { market: a.market || "", ticker: a.ticker || "", company: "", reason: ["NOTIFICATION"] },
+      v: { market: v.market, ticker: v.ticker, company: v.company || "", reason: ["OVERVIEW"] },
     });
 
-  const screenSimilar = (a) => {
-    const prefill = { market: a.market || "" };
-    if (a.type === "significant_trade" || a.type === "position_reversed") prefill.market = a.market || "";
-    if (a.payload?.notional) prefill.min_conviction = "0.60";
-    setScreenerPrefill(prefill);
-    setTab("screener");
-  };
-
   return (
-    <div className="landing">
-      <SectionHeader title="OVERVIEW" sub={market || "ALL MARKETS"} right={<StatusIndicator state={error ? "error" : "live"} label={error ? "ERROR" : "LIVE"} />} />
-
-      {error && (
-        <div className="error">
-          <div style={{ marginBottom: 10 }}>ERROR: {error}</div>
-          <button className="primary" onClick={loadVerdicts}>⟳ RETRY</button>
+    <div className="overview">
+      <div className="ov-frame">
+        {/* Top index strip */}
+        <div className="ov-strip">
+          {strip.map((s) => {
+            const up = (s.change_pct || 0) >= 0;
+            return (
+              <span key={`${s.market}:${s.symbol}`} className="ov-strip-item" onClick={() => openDrawer({ type: "stock", v: { market: s.market, ticker: s.symbol, company: s.name || "", reason: ["OVERVIEW"] } })}>
+                <span className="ov-strip-sym">{s.symbol}</span>
+                <span className="ov-strip-px">{num(s.close).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className={`ov-strip-chg ${up ? "up" : "down"}`}>{pct(s.change_pct)}</span>
+              </span>
+            );
+          })}
         </div>
-      )}
 
-      {/* Market status */}
-      <div className="market-status-strip">
-        <span className="dim">MARKET STATUS</span>
-        {(markets || []).map((m) => {
-          const st = m.status || {};
-          const open = st.status === "open";
-          return (
-            <span key={m.code} className={`market-chip ${open ? "open" : "closed"}`} title={`${m.name} · ${st.timezone || m.timezone || ""} local ${st.local_time || ""}`}>
-              <span className="dot" />
-              {m.code}
-              {open ? <span className="chip-time">OPEN {st.opened_at}</span> : <span className="chip-time">{st.opening_soon ? "SOON" : st.local_time || "CLOSED"}</span>}
-            </span>
-          );
-        })}
-        <span className="dim" style={{ marginLeft: "auto" }}>{marketsOpen}/{markets?.length || 0} MARKETS OPEN</span>
-      </div>
+        <div className="ov-body">
+          {/* LEFT MAIN */}
+          <main className="ov-main">
+            {/* Greeting */}
+            <header className="ov-greet">
+              <span className="ov-greet-mark">{greet.icon}</span>
+              <span className="ov-greet-text">
+                <strong>{greet.label}</strong>, {userEmail?.split("@")[0] || "you"}.{" "}
+                {market ? `${market} markets await.` : "Markets await."}
+              </span>
+              <span className="ov-greet-status dim">
+                <span className="dot" /> {openCount}/{markets?.length || 0} OPEN
+              </span>
+            </header>
 
-      <div className="landing-stats">
-        <Metric label="STOCKS SCORED" value={verdicts.length || "—"} />
-        <Metric label="BULL" value={bulls} tone="bull" />
-        <Metric label="BEAR" value={bears} tone="bear" />
-        <Metric label="NEUTRAL" value={neut} />
-        <Metric label="AVG CONFIDENCE" value={verdicts.length ? `${avgConf}%` : "--"} />
-        <Metric label="ALERTS" value={alerts.length} tone={significant.length ? "bear" : ""} />
-      </div>
+            {/* Shortcuts */}
+            <div className="ov-card ov-shortcuts">
+              <div className="ov-panel-label">SHORTCUTS</div>
+              <div className="ov-shortcut-grid">
+                {SHORTCUTS.map((s) => (
+                  <span key={s.key} className="ov-shortcut">
+                    <span className="ov-shortcut-token">/{s.key}</span>
+                    <span className="ov-shortcut-label">{s.label}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
 
-      <div className="overview-pulse-row">
-        <FearGreedGauge verdicts={verdicts} />
-        <div className="overview-breadth-wrap">
-          <SectionHeader title="MARKET BREADTH" />
-          <BreadthStrip rows={screenerRows} />
-        </div>
-      </div>
+            {/* Agent */}
+            <AgentPanel />
 
-      <MoversPanel title="TOP MOVERS" />
-
-      <div className="landing-cols">
-        {/* Major movement */}
-        <div className="landing-col">
-          <SectionHeader title="MAJOR INDEX LEVELS" />
-          <div className="grid landing-index-grid">
-            {topMovers.map((s) => {
-              const up = (s.change_pct || 0) >= 0;
-              return (
-                <div key={s.symbol} className={`panel ${up ? "bull" : "bear"}`}>
-                  <div className="panel-head">
-                    <div>
-                      <div className="symbol" style={{ fontSize: 13 }}>{s.name}</div>
-                      <div className="name">{s.market} · {s.symbol}</div>
+            {/* Committee views */}
+            <div className="ov-card">
+              <SectionHeader title="TOP COMMITTEE VIEWS" />
+              {topVerdicts.length ? (
+                <div className="ov-verdict-grid">
+                  {topVerdicts.map((v) => (
+                    <div key={`${v.market}:${v.ticker}`} className={`ov-panel ${verdictClass(v.verdict)}`} onClick={() => openDossier(v)}>
+                      <div className="ov-panel-head">
+                        <div>
+                          <SecurityLink market={v.market} ticker={v.ticker} className="symbol" style={{ fontSize: 13 }}>{v.ticker}</SecurityLink>
+                          <div className="name">{v.market}</div>
+                        </div>
+                        {verdictBadge(v)}
+                      </div>
+                      <div className="conf-bar">
+                        <span style={{ width: (v.confidence * 100).toFixed(0) + "%", background: v.verdict === "BULL" ? "var(--bull)" : v.verdict === "BEAR" ? "var(--bear)" : "var(--neutral)" }} />
+                      </div>
+                      <div className="row"><span className="label">CONFIDENCE</span><span className="value">{(v.confidence * 100).toFixed(0)}%</span></div>
                     </div>
-                    <span className={`badge ${up ? "bull" : "bear"}`}>{up ? "+" : ""}{(s.change_pct * 100).toFixed(2)}%</span>
-                  </div>
-                  <div className="row">
-                    <span className="label">CLOSE</span>
-                    <span className="value">{Number(s.close).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </div>
+                  ))}
                 </div>
-              );
-            })}
-            {!topMovers.length && <div className="empty">NO INDEX DATA — RUN A REFRESH.</div>}
-          </div>
+              ) : (
+                <div className="empty">NO VERDICTS YET — RUN A REFRESH.</div>
+              )}
+            </div>
+          </main>
 
-          <SectionHeader title="TOP COMMITTEE VIEWS" style={{ marginTop: 12 }} />
-          {topVerdicts.length ? (
-            <div className="grid landing-verdict-grid">
-              {topVerdicts.map((v) => (
-                <div key={`${v.market}:${v.ticker}`} className={`panel ${verdictClass(v.verdict)}`} onClick={() => openDrawer({ type: "stock", v: { market: v.market, ticker: v.ticker, company: v.company || "", reason: ["OVERVIEW"] } })}>
-                  <div className="panel-head">
-                    <div>
-                      <SecurityLink market={v.market} ticker={v.ticker} className="symbol" style={{ fontSize: 13 }}>{v.ticker}</SecurityLink>
-                      <div className="name">{v.market}</div>
+          {/* RIGHT RAIL */}
+          <aside className="ov-rail">
+            <div className="ov-panel">
+              <div className="ov-panel-label">LIVE NEWS</div>
+              {news.length ? (
+                <div className="ov-news-list">
+                  {news.map((n, i) => (
+                    <a key={`${n.url}-${i}`} className="ov-news-item" href={n.url} target="_blank" rel="noopener noreferrer">
+                      <div className="ov-news-title">{n.title}</div>
+                      <div className="ov-news-meta dim">
+                        {n.source}
+                        {(n.ticker || n.security_id) && <span className="ov-news-tk">{n.ticker || n.security_id}</span>}
+                        <span>{String(n.published_at || n.fetched_at || "").slice(0, 10)}</span>
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty">LOADING NEWS…</div>
+              )}
+            </div>
+
+            <div className="ov-panel">
+              <div className="ov-panel-label">WATCHLIST</div>
+              {watch.length ? (
+                <div className="ov-watch-list">
+                  {watch.slice(0, 6).map((w) => (
+                    <div key={`${w.market}:${w.ticker}`} className="ov-watch-item" onClick={() => openDossier(w)}>
+                      <span className="ov-watch-tk">{w.ticker}</span>
+                      <span className="ov-watch-name dim">{w.market}</span>
+                      {w.verdict && (
+                        <span className={`ov-watch-verdict ${verdictClass(w.verdict)}`}>{w.verdict}</span>
+                      )}
                     </div>
-                    {verdictBadge(v)}
-                  </div>
-                  <div className="conf-bar">
-                    <span style={{ width: (v.confidence * 100).toFixed(0) + "%", background: v.verdict === "BULL" ? "var(--bull)" : v.verdict === "BEAR" ? "var(--bear)" : "var(--neutral)" }} />
-                  </div>
-                  <div className="row"><span className="label">CONFIDENCE</span><span className="value">{(v.confidence * 100).toFixed(0)}%</span></div>
+                  ))}
                 </div>
-              ))}
+              ) : (
+                <div className="empty">NO WATCHLIST ITEMS.</div>
+              )}
             </div>
-          ) : (
-            <div className="empty">NO VERDICTS YET — RUN A REFRESH.</div>
-          )}
+
+            <div className="ov-panel">
+              <div className="ov-panel-label">MOST ACTIVE</div>
+              {active.length ? (
+                <div className="ov-active-list">
+                  {active.map((a, i) => {
+                    const up = (a.change_pct || 0) >= 0;
+                    return (
+                      <div key={a.security_id || i} className="ov-active-item" onClick={() => openDossier(a)}>
+                        <span className="ov-active-tk">{a.ticker}</span>
+                        <span className="ov-active-px">{num(a.close).toLocaleString()}</span>
+                        <span className={`ov-active-chg ${up ? "up" : "down"}`}>{pct(a.change_pct)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="empty">LOADING…</div>
+              )}
+            </div>
+          </aside>
         </div>
-
-        {/* Alerts */}
-        <div className="landing-col">
-          <SectionHeader title="IMPORTANT ALERTS" />
-          {important.length ? (
-            <div className="notification-list">
-              {important.map((a) => (
-                <div key={a.event_key} className={`notification-item ${sevClass(a.severity)}`}>
-                  <div className="notif-head">
-                    <span className={`badge sev ${sevClass(a.severity)}`}>{a.severity}</span>
-                    <span className="notif-title"><SecurityText text={a.title} securityId={a.security_id} market={a.market} ticker={a.ticker} /></span>
-                    <span className="dim notif-time">{String(a.created_at).slice(11, 19)}</span>
-                  </div>
-                  <div className="notif-msg"><SecurityText text={a.message} securityId={a.security_id} market={a.market} ticker={a.ticker} /></div>
-                  <div className="notif-actions">
-                    {a.security_id && <button className="ghost" onClick={() => openDossier(a)}>OPEN DOSSIER</button>}
-                    <button className="ghost" onClick={() => screenSimilar(a)}>SCREEN SIMILAR</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="empty">NO IMPORTANT ALERTS — THE TERMINAL IS QUIET RIGHT NOW.</div>
-          )}
-
-          <SectionHeader title="SIGNIFICANT EVENTS" style={{ marginTop: 12 }} />
-          {significant.length ? (
-            <div className="notification-list">
-              {significant.map((a) => (
-                <div key={a.event_key} className={`notification-item high`}>
-                  <div className="notif-head">
-                    <span className="badge sev high">{a.severity}</span>
-                    <span className="notif-title"><SecurityText text={a.title} securityId={a.security_id} market={a.market} ticker={a.ticker} /></span>
-                    <span className="dim notif-time">{String(a.created_at).slice(11, 19)}</span>
-                  </div>
-                  <div className="notif-msg"><SecurityText text={a.message} securityId={a.security_id} market={a.market} ticker={a.ticker} /></div>
-                  <div className="notif-actions">
-                    {a.security_id && <button className="ghost" onClick={() => openDossier(a)}>OPEN DOSSIER</button>}
-                    <button className="ghost" onClick={() => screenSimilar(a)}>SCREEN SIMILAR</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="empty">NO SIGNIFICANT EVENTS DETECTED.</div>
-          )}
-        </div>
-      </div>
-
-      <div className="team-note" style={{ marginTop: 12 }}>
-        WORKFLOW: EVENT → SCREENER (F5) → DOSSIER (click a security) → PAPER TRADE (PAPER tab / dossier button).
-        NOTIFICATIONS ARE DETERMINISTIC — A MARKET OPEN OR SIGNIFICANT EVENT FIRES ONCE PER SESSION, NOT PER REFRESH.
       </div>
     </div>
   );

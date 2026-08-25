@@ -1186,6 +1186,24 @@ def agent_recommendations(
     }
 
 
+class AgentChatRequest(BaseModel):
+    messages: list[dict] = []
+    market: str | None = None
+    mode: str = "AUTO"
+
+
+@app.post("/api/agent/chat")
+def agent_chat(body: AgentChatRequest) -> dict[str, object]:
+    """Conversational markets assistant.
+
+    Uses a configured LLM (Gemini / Ollama) when available, otherwise a local
+    data-driven responder so the agent works with zero API keys.
+    """
+    from .agent_chat import chat as agent_chat_fn
+
+    return agent_chat_fn(body.messages, market=body.market, mode=body.mode)
+
+
 @app.get("/api/analyze")
 def analyze_ticker(
     market: str,
