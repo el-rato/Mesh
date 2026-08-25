@@ -208,7 +208,7 @@ export default function OverviewTab() {
               )}
             </div>
 
-            <div className="ov-panel">
+            <div className="ov-rail-box">
               <div className="ov-panel-label">MOST ACTIVE</div>
               {active.length ? (
                 <div className="ov-active-list">
