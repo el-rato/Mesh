@@ -105,11 +105,10 @@ class MarketIngestor:
                 hits.append(symbol)
         return hits
 
-    def ingest(self) -> IngestResult:
+    def _store(self, grouped: list[tuple[str | None, sources.Article]]) -> IngestResult:
         result = IngestResult()
-        all_articles = self._collect()
         seen: set[str] = set()
-        for hint, article in all_articles:
+        for hint, article in grouped:
             seen_url = _normalize_url(article.url)
             if seen_url in seen:
                 continue
@@ -137,6 +136,29 @@ class MarketIngestor:
                     result.duplicate += 1
         return result
 
+    def collect_ticker(self, ticker: Ticker) -> list[tuple[str | None, sources.Article]]:
+        """Collect only the articles that target a single ticker (for on-demand lookup)."""
+        grouped: list[tuple[str | None, sources.Article]] = []
+        if self.use_google:
+            for q in self._ticker_queries(ticker):
+                for art in sources.fetch_google_news(q, self.country_code):
+                    grouped.append((ticker.symbol, art))
+        if self.use_yahoo:
+            symbol = ticker.symbol + self.market.yahoo_suffix
+            region = "US" if self.market.country == "US" else ""
+            for art in sources.fetch_yahoo_finance(
+                symbol, region=region, query=ticker.symbol
+            ):
+                grouped.append((ticker.symbol, art))
+        return grouped
+
+    def ingest_ticker(self, ticker: Ticker) -> IngestResult:
+        """Fetch + store fresh news for a single ticker, classified only to it."""
+        return self._store(self.collect_ticker(ticker))
+
+    def ingest(self) -> IngestResult:
+        return self._store(self._collect())
+
 
 def run_ingest(
     market_codes: Iterable[str] | None = None, db_path: str | None = None
@@ -155,3 +177,34 @@ def run_ingest(
         ingestor = MarketIngestor(market, db)
         results[code] = ingestor.ingest()
     return results
+
+
+def run_ticker_ingest(
+    market_code: str,
+    ticker_symbol: str,
+    db_path: str | None = None,
+    *,
+    use_google: bool = True,
+    use_yahoo: bool = True,
+) -> IngestResult | None:
+    """Fetch + store fresh news for a single ticker (on-demand stock lookup)."""
+    markets = _load_markets()
+    market = markets.get(market_code)
+    if not market:
+        logger.warning("Unknown market %s", market_code)
+        return None
+    ticker = market.get_ticker(ticker_symbol)
+    if not ticker:
+        logger.warning("Unknown ticker %s:%s", market_code, ticker_symbol)
+        return None
+    db = Database(db_path or settings.db_path)
+    db.init_schema()
+    ingestor = MarketIngestor(
+        market,
+        db,
+        use_google=use_google,
+        use_yahoo=use_yahoo,
+        use_financial_feeds=False,
+        use_global_feeds=False,
+    )
+    return ingestor.ingest_ticker(ticker)

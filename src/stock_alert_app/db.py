@@ -1,13 +1,64 @@
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from html import unescape
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# --- News text cleaning -----------------------------------------------------
+# RSS feeds frequently ship either raw HTML (Google News wraps the headline in
+# <a>/<font> tags) or a junk "summary" that is just the headline repeated with
+# the source name appended. We clean on read so the UI never shows markup or
+# echoed-title noise, regardless of what was stored at ingest time.
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+
+
+def _clean_text(value: str | None) -> str:
+    if not value:
+        return ""
+    no_tags = _TAG_RE.sub("", value)
+    decoded = unescape(no_tags)
+    return _WS_RE.sub(" ", decoded).strip()
+
+
+def _strip_source_suffix(value: str, source: str | None) -> str:
+    """Remove a trailing ' <source>' / ' - <source>' tag from a headline."""
+    s = _clean_text(source)
+    if not s:
+        return value
+    for pat in (f" - {s}", f" — {s}", f" – {s}", f" · {s}", f" {s}"):
+        if value.endswith(pat):
+            return value[: -len(pat)].strip()
+    return value
+
+
+def _clean_headline(raw: str | None, source: str | None) -> str:
+    """Clean a headline: strip HTML and any trailing source tag."""
+    return _strip_source_suffix(_clean_text(raw), source)
+
+
+def _clean_summary(raw: str | None, title_clean: str, source: str | None) -> str:
+    """Return a meaningful summary, or '' when the feed supplied junk.
+
+    Many RSS feeds ship either raw HTML or a "summary" that is just the
+    headline with the source appended (e.g. "Nestle slides Thursday
+    MarketWatch"). After stripping the source tag, if what remains equals the
+    headline it carries no extra information, so we drop it. A genuine summary
+    that continues the headline with a real sentence is kept.
+    """
+    s = _strip_source_suffix(_clean_text(raw), source)
+    if not s:
+        return ""
+    if title_clean and s.lower() == title_clean.lower():
+        return ""
+    return s
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -744,10 +795,18 @@ class Database:
                    LEFT JOIN sentiment_scores s ON s.news_item_id = n.id
                    WHERE n.market = ? AND n.ticker = ?
                    ORDER BY n.published_at DESC
-                   LIMIT ?""",
+                    LIMIT ?""",
                 (market, ticker.upper(), limit),
             ).fetchall()
-            return [dict(r) for r in rows]
+            out = []
+            for r in rows:
+                d = dict(r)
+                d["title"] = _clean_headline(d.get("title"), d.get("source"))
+                d["summary"] = _clean_summary(
+                    d.get("summary"), d["title"], d.get("source")
+                )
+                out.append(d)
+            return out
 
     def recent_news_feed(self, limit: int = 40) -> list[dict[str, Any]]:
         """Most recent news across the whole universe with their latest sentiment.
@@ -779,6 +838,10 @@ class Database:
         for r in rows:
             d = dict(r)
             d["security_id"] = f"{d['market']}:{d['ticker']}"
+            d["title"] = _clean_headline(d.get("title"), d.get("source"))
+            d["summary"] = _clean_summary(
+                d.get("summary"), d["title"], d.get("source")
+            )
             out.append(d)
         return out
 

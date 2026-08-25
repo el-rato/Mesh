@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { newsFeed } from "../api.js";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { newsFeed, newsForTicker } from "../api.js";
 import { useApp } from "../App.jsx";
 import SecurityLink from "./SecurityLink.jsx";
 import { RefreshStatus } from "./ui.jsx";
@@ -38,6 +38,35 @@ const SENTIMENT_FILTERS = [
   { key: "neutral", label: "NEUTRAL" },
 ];
 
+// Markets the app tracks, with the ticker-suffix heuristic used to auto-pick
+// the right market when a user pastes e.g. "2382.HK" or "RELIANCE.NS".
+const MARKETS = [
+  { code: "NYSE", label: "NYSE / NASDAQ", suffix: "" },
+  { code: "BSE", label: "BSE (India)", suffix: ".NS" },
+  { code: "LSE", label: "LSE (UK)", suffix: ".L" },
+  { code: "HKEX", label: "HKEX (HK)", suffix: ".HK" },
+  { code: "TSE", label: "TSE (Japan)", suffix: ".T" },
+  { code: "KRX", label: "KRX (Korea)", suffix: ".KS" },
+  { code: "ASX", label: "ASX (Australia)", suffix: ".AX" },
+  { code: "XETRA", label: "XETRA (Germany)", suffix: ".DE" },
+  { code: "TSX", label: "TSX (Canada)", suffix: ".TO" },
+  { code: "SGX", label: "SGX (Singapore)", suffix: ".SI" },
+];
+
+function inferMarket(ticker) {
+  const t = String(ticker || "").toUpperCase();
+  if (t.endsWith(".HK")) return "HKEX";
+  if (t.endsWith(".NS") || t.endsWith(".BO")) return "BSE";
+  if (t.endsWith(".L")) return "LSE";
+  if (t.endsWith(".T")) return "TSE";
+  if (t.endsWith(".KS") || t.endsWith(".KQ")) return "KRX";
+  if (t.endsWith(".AX")) return "ASX";
+  if (t.endsWith(".DE")) return "XETRA";
+  if (t.endsWith(".TO")) return "TSX";
+  if (t.endsWith(".SI")) return "SGX";
+  return "NYSE";
+}
+
 export default function NewsTab() {
   const { refreshToken, refreshStatus, openDrawer } = useApp();
   const [items, setItems] = useState(null);
@@ -47,22 +76,60 @@ export default function NewsTab() {
   const [sentFilter, setSentFilter] = useState("all");
   const [selected, setSelected] = useState(null);
 
+  // Stock-lookup mode: when set, the feed shows one ticker's live news.
+  const [mode, setMode] = useState("feed"); // "feed" | "ticker"
+  const [lookupMarket, setLookupMarket] = useState("NYSE");
+  const [lookupTicker, setLookupTicker] = useState("");
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupLabel, setLookupLabel] = useState("");
+
   const load = useCallback(() => {
     setError("");
-    newsFeed(150)
+    setMode("feed");
+    newsFeed(300)
       .then((data) => setItems(data || []))
       .catch((e) => setError(e.message));
   }, []);
 
-  useEffect(() => {
-    load();
-    const t = setInterval(load, 60000);
-    return () => clearInterval(t);
-  }, [load]);
+  const loadTicker = useCallback((market, ticker) => {
+    const tk = String(ticker || "").trim();
+    if (!tk) return;
+    setError("");
+    setLookupLoading(true);
+    setMode("ticker");
+    setLookupLabel(`${market}:${tk.toUpperCase()}`);
+    newsForTicker(market, tk, { limit: 300, refresh: true })
+      .then((data) => setItems(data || []))
+      .catch((e) => setError(e.message))
+      .finally(() => setLookupLoading(false));
+  }, []);
+
+  // Keep latest lookup state in refs so the 60s auto-refresh uses the current
+  // view without re-creating the interval on every keystroke.
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const mktRef = useRef(lookupMarket);
+  mktRef.current = lookupMarket;
+  const tkrRef = useRef(lookupTicker);
+  tkrRef.current = lookupTicker;
+
+  const refresh = useCallback(() => {
+    if (modeRef.current === "ticker") {
+      loadTicker(mktRef.current, tkrRef.current);
+    } else {
+      load();
+    }
+  }, [load, loadTicker]);
 
   useEffect(() => {
-    if (refreshToken) load();
-  }, [refreshToken, load]);
+    refresh();
+    const t = setInterval(refresh, 60000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  useEffect(() => {
+    if (refreshToken) refresh();
+  }, [refreshToken, refresh]);
 
   const filtered = useMemo(() => {
     if (!items) return [];
@@ -120,6 +187,43 @@ export default function NewsTab() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
+
+        {/* Single-stock lookup */}
+        <div className="news-lookup">
+          <select
+            className="news-market-select"
+            value={lookupMarket}
+            onChange={(e) => setLookupMarket(e.target.value)}
+            title="Market"
+          >
+            {MARKETS.map((m) => (
+              <option key={m.code} value={m.code}>
+                {m.code}
+              </option>
+            ))}
+          </select>
+          <input
+            className="news-ticker-input"
+            placeholder="TICKER e.g. 2382.HK"
+            value={lookupTicker}
+            onChange={(e) => {
+              const v = e.target.value.toUpperCase();
+              setLookupTicker(v);
+              setLookupMarket(inferMarket(v));
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") loadTicker(lookupMarket, lookupTicker);
+            }}
+          />
+          <button
+            className="news-pill"
+            onClick={() => loadTicker(lookupMarket, lookupTicker)}
+            disabled={lookupLoading}
+          >
+            {lookupLoading ? "FETCHING…" : "GET NEWS ⟶"}
+          </button>
+        </div>
+
         <div className="news-pills">
           {SORTS.map((s) => (
             <button
@@ -144,6 +248,16 @@ export default function NewsTab() {
         <RefreshStatus status={refreshStatus} />
         <span className="news-count dim">{filtered.length} ARTICLES</span>
       </div>
+
+      {mode === "ticker" && (
+        <div className="news-mode-banner">
+          <span className="dim">SHOWING LIVE NEWS FOR</span>{" "}
+          <strong>{lookupLabel}</strong>
+          <button className="news-pill ghost" onClick={load}>
+            ← BACK TO GLOBAL FEED
+          </button>
+        </div>
+      )}
 
       {error && <div className="scan-warning">⚠ {error}</div>}
 
@@ -205,8 +319,13 @@ export default function NewsTab() {
                 </div>
               </div>
 
-              {selected.summary && (
+              {selected.summary ? (
                 <div className="news-detail-summary">{selected.summary}</div>
+              ) : (
+                <div className="news-detail-summary dim">
+                  No preview text from this source — open the article for the full
+                  report.
+                </div>
               )}
 
               <div className="news-detail-actions">

@@ -206,6 +206,15 @@ export async function newsFeed(limit = 100) {
   return fetchJSON(`/api/news/feed?limit=${limit}`);
 }
 
+export async function newsForTicker(market, ticker, { limit = 200, refresh = true } = {}) {
+  const qs = new URLSearchParams();
+  qs.set("market", market);
+  qs.set("ticker", ticker);
+  qs.set("limit", String(limit));
+  if (refresh) qs.set("refresh", "true");
+  return fetchJSON(`/api/news?${qs.toString()}`);
+}
+
 export async function notificationsAck(keys) {
   return fetchJSON("/api/notifications/ack", {
     method: "POST",

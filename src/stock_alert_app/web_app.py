@@ -1038,20 +1038,35 @@ def get_verdicts(
 
 
 @app.get("/api/news")
-def get_news(market: str, ticker: str, limit: int = 50) -> list[dict[str, object]]:
+def get_news(
+    market: str, ticker: str, limit: int = 100, refresh: bool = False
+) -> list[dict[str, object]]:
+    """News for a single stock.
+
+    With ``refresh=true`` the backend performs a live Google News / Yahoo fetch
+    for that ticker, stores any new articles, then returns the combined, most
+    recent coverage for the stock (never fabricated).
+    """
     db = _db()
-    return db.recent_news(market, ticker, limit=limit)
+    if refresh:
+        try:
+            from .ingest import run_ticker_ingest
+
+            run_ticker_ingest(market, ticker)
+        except Exception as exc:  # pragma: no cover - network/parse safety
+            logger.warning("Live ticker ingest failed for %s:%s: %s", market, ticker, exc)
+    return db.recent_news(market, ticker, limit=min(limit, 500))
 
 
 @app.get("/api/news/feed")
-def get_news_feed(limit: int = 100) -> list[dict[str, object]]:
+def get_news_feed(limit: int = 200) -> list[dict[str, object]]:
     """Global news feed across all tickers, with article URLs + sentiment.
 
     Returns the most recent articles (never fabricated) so the NEWS tab can
     render a clickable feed that opens the source article.
     """
     db = _db()
-    return db.recent_news_feed(limit=limit)
+    return db.recent_news_feed(limit=min(limit, 1000))
 
 
 @app.get("/api/watchlist")
