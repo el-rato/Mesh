@@ -172,8 +172,18 @@ export default function AgentChat({
             placeholder="model"
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            title="Model id (leave blank to use the configured default)"
+            list="agent-models"
+            title="Model id (blank = configured default)"
           />
+          <datalist id="agent-models">
+            <option value="deepseek-v4-flash-vision-exp" />
+            <option value="deepseek-v4-flash" />
+            <option value="deepseek-v4-pro" />
+            <option value="kimi-k3" />
+            <option value="qwen3.7-max" />
+            <option value="glm-5.3" />
+            <option value="gpt-5.6-luna" />
+          </datalist>
         </div>
         <button className="agent-send" onClick={() => send()} disabled={sending}>
           →

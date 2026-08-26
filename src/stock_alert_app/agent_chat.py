@@ -184,6 +184,14 @@ def _call_ollama(prompt: str, base_url: str, model: str) -> str | None:
     return (data.get("response") or "").strip() or None
 
 
+def _bare_model(model: str) -> str:
+    """OpenCode GO expects a bare slug (no ``opencode-go/`` prefix)."""
+    m = (model or "").strip()
+    if "/" in m and m.split("/", 1)[0] in ("opencode", "opencode-go"):
+        return m.split("/", 1)[1]
+    return m
+
+
 def _call_openode_chat(prompt: str, base_url: str, api_key: str, model: str) -> str | None:
     """OpenCode GO is an OpenAI-compatible chat endpoint. POST to /chat/completions."""
     import httpx
@@ -192,7 +200,7 @@ def _call_openode_chat(prompt: str, base_url: str, api_key: str, model: str) -> 
     if not url.endswith("/chat/completions"):
         url = url + "/chat/completions"
     body = {
-        "model": model,
+        "model": _bare_model(model),
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 2048,
     }
@@ -208,7 +216,12 @@ def _call_openode_chat(prompt: str, base_url: str, api_key: str, model: str) -> 
         resp.raise_for_status()
         data = resp.json()
     try:
-        return (data["choices"][0]["message"]["content"] or "").strip() or None
+        content = (data["choices"][0]["message"]["content"] or "").strip()
+        if content:
+            return content
+        # Reasoning models may emit reasoning before content; fall back if empty.
+        reasoning = (data["choices"][0]["message"].get("reasoning_content") or "").strip()
+        return reasoning or None
     except (KeyError, IndexError, TypeError):
         logger.warning("OpenCode GO returned an unexpected shape: %s", data)
         return None
