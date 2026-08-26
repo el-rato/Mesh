@@ -59,7 +59,7 @@ export default function ScannerTab() {
   const [query, setQuery] = useState("");
 
   const load = useCallback(() => {
-    const params = { market: market || "", limit: 150, verdict, sort };
+    const params = { market: market || "", limit: 1000, verdict, sort };
     scanner(params)
       .then((next) => {
         setRows(next);

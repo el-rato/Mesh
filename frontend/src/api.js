@@ -239,11 +239,11 @@ export async function watchlist() {
   return fetchJSON("/api/watchlist");
 }
 
-export async function authRegister(email, password) {
+export async function authRegister(email, password, username = "") {
   return fetchJSON("/api/auth/register", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, username }),
   });
 }
 

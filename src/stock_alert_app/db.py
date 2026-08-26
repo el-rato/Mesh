@@ -66,6 +66,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
+    username TEXT NOT NULL DEFAULT '',
     password_hash TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -483,6 +484,7 @@ class Database:
             conn.execute("DROP TABLE IF EXISTS discovered_tickers")
             self._migrate_verdicts(conn)
             self._migrate_user_ownership(conn)
+            self._migrate_user_username(conn)
             self._migrate_paper_v2(conn)
             return self._migrate_verdict_reasons(conn)
 
@@ -524,6 +526,19 @@ class Database:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_portfolio_user ON paper_portfolio(user_id)"
         )
+
+    @staticmethod
+    def _migrate_user_username(conn: sqlite3.Connection) -> None:
+        """Safe, idempotent migration: add ``username`` to the users table.
+
+        Existing users get an empty username (the greeting falls back to the
+        email prefix) until they register anew with one.
+        """
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+        if "username" not in cols:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN username TEXT NOT NULL DEFAULT ''"
+            )
 
     @staticmethod
     def _migrate_paper_v2(conn: sqlite3.Connection) -> None:
@@ -606,11 +621,13 @@ class Database:
 
     # ---- Authentication ----
 
-    def create_user(self, user_id: str, email: str, password_hash: str) -> None:
+    def create_user(
+        self, user_id: str, email: str, password_hash: str, username: str = ""
+    ) -> None:
         with self.connect() as conn:
             conn.execute(
-                "INSERT INTO users (id, email, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (user_id, email.lower().strip(), password_hash, utc_now(), utc_now()),
+                "INSERT INTO users (id, email, username, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, email.lower().strip(), username.strip(), password_hash, utc_now(), utc_now()),
             )
 
     def get_user_by_email(self, email: str) -> dict[str, Any] | None:

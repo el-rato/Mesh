@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import pandas as pd
@@ -139,28 +140,52 @@ def store_price_state(db: Database, state: PriceState) -> None:
     )
 
 
-def fetch_market_prices(market: Market, db: Database) -> dict[str, PriceState]:
+def _fetch_one(market: Market, db: Database, symbol: str) -> tuple[str, PriceState] | None:
     from .resolve import resolve_for_fetch
 
+    tkr = market.tickers[symbol]
+    yahoo_symbol = resolve_for_fetch(market.code, symbol, tkr.name)
+    if not yahoo_symbol:
+        # Unavailable/invalid symbols are skipped quietly; the resolver caches
+        # the outcome so they are not re-requested every cycle.
+        return None
+    try:
+        df = fetch_history(yahoo_symbol, period="6mo")
+    except Exception as exc:
+        logger.warning("Failed to fetch %s: %s", yahoo_symbol, exc)
+        return None
+    state = build_price_state(market.code, symbol, df)
+    if state is None:
+        logger.warning("No price data for %s", yahoo_symbol)
+        return None
+    return symbol, state
+
+
+def fetch_market_prices(
+    market: Market, db: Database, max_workers: int = 12
+) -> dict[str, PriceState]:
+    """Fetch prices for every ticker in a market concurrently (Fincept-style).
+
+    Sequential per-symbol network calls were the bottleneck that made the
+    scanner "stick" on a large universe; a bounded thread pool fetches the
+    whole universe at once. A short-lived pool is created per market so its
+    lifecycle is tied to the fetch and no thread lingers between cycles.
+    """
     states: dict[str, PriceState] = {}
-    for symbol in market.tickers:
-        tkr = market.tickers[symbol]
-        yahoo_symbol = resolve_for_fetch(market.code, symbol, tkr.name)
-        if not yahoo_symbol:
-            # Unavailable/invalid symbols are skipped quietly; the resolver caches
-            # the outcome so they are not re-requested every cycle.
-            continue
-        try:
-            df = fetch_history(yahoo_symbol, period="6mo")
-        except Exception as exc:
-            logger.warning("Failed to fetch %s: %s", yahoo_symbol, exc)
-            continue
-        state = build_price_state(market.code, symbol, df)
-        if state is None:
-            logger.warning("No price data for %s", yahoo_symbol)
-            continue
-        store_price_state(db, state)
-        states[symbol] = state
+    symbols = list(market.tickers.keys())
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(_fetch_one, market, db, s) for s in symbols]
+        for fut in as_completed(futures):
+            try:
+                res = fut.result()
+            except Exception as exc:  # noqa: BLE001 - one ticker never aborts the batch
+                logger.warning("Price worker failed: %s", exc)
+                continue
+            if res is None:
+                continue
+            symbol, state = res
+            store_price_state(db, state)
+            states[symbol] = state
     return states
 
 

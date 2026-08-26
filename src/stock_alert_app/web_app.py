@@ -81,6 +81,7 @@ class AckRequest(BaseModel):
 class RegisterRequest(BaseModel):
     email: str
     password: str
+    username: str = ""
 
 
 class LoginRequest(BaseModel):
@@ -134,10 +135,15 @@ def auth_register(body: RegisterRequest):
         raise HTTPException(status_code=422, detail=f"password must be at least {_MIN_PASSWORD} characters")
     if db.get_user_by_email(email):
         raise HTTPException(status_code=409, detail="an account with this email already exists")
+    username = (body.username or "").strip()[:40]
+    if not username:
+        # Derive a friendly handle from the email local-part so the greeting
+        # always has a name to address, even when the user skips the field.
+        username = email.split("@")[0]
     user_id = secrets.token_hex(16)
-    db.create_user(user_id, email, auth.hash_password(body.password))
+    db.create_user(user_id, email, auth.hash_password(body.password), username)
     token = auth.new_session(db, user_id)
-    resp = JSONResponse({"user": {"id": user_id, "email": email}})
+    resp = JSONResponse({"user": {"id": user_id, "email": email, "username": username}})
     _set_session_cookie(resp, token)
     return resp
 
@@ -151,7 +157,9 @@ def auth_login(body: LoginRequest):
     if not user or not auth.verify_password(body.password or "", user["password_hash"]):
         raise HTTPException(status_code=401, detail="invalid email or password")
     token = auth.new_session(db, user["id"])
-    resp = JSONResponse({"user": {"id": user["id"], "email": user["email"]}})
+    resp = JSONResponse(
+        {"user": {"id": user["id"], "email": user["email"], "username": user.get("username", "")}}
+    )
     _set_session_cookie(resp, token)
     return resp
 
@@ -168,7 +176,13 @@ def auth_logout(sv_session: str | None = Cookie(default=None)):
 
 @app.get("/api/auth/me")
 def auth_me(user: dict = Depends(auth.current_user)):
-    return {"user": {"id": user["id"], "email": user["email"]}}
+    return {
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "username": user.get("username", ""),
+        }
+    }
 
 
 def _analysis_context(
@@ -458,14 +472,18 @@ def scanner(
     min_technical: float = -1.0,
     min_news: float = -1.0,
     sort: str = "combined",
-    limit: int = 100,
+    limit: int = 500,
 ) -> list[dict[str, object]]:
     """Scan the analyzed universe (stored verdicts + price snapshots) by signal.
 
     The universe is whatever has actually been scored by the pipeline — configured
     markets plus any dynamically searched/analyzed symbols — so it grows over time
-    instead of being a hardcoded list.
+    instead of being a hardcoded list, and there is no artificial ticker cap.
+    Analysis is computed across the whole universe concurrently (Fincept-style),
+    so large universes scan fast instead of stalling on a sequential loop.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     from .analysis import stock_analysis
     from .universe import universe
 
@@ -473,8 +491,7 @@ def scanner(
     rows, snaps, markets = _analysis_context(db, market or None)
     latest = {(r["market"], r["ticker"].upper()): r for r in rows}
 
-    out: list[dict[str, object]] = []
-    for sec in universe(db, market or None):
+    def _analyze(sec: dict[str, object]) -> dict[str, object]:
         row = latest.get((sec["market"], sec["ticker"].upper()))
         if row:
             analysis = stock_analysis(
@@ -486,6 +503,20 @@ def scanner(
             # Security is known but has no analysis yet: keep it discoverable as
             # NO_DATA instead of silently dropping it from the universe.
             analysis = _no_data_analysis(sec)
+        return analysis
+
+    analyzed: list[dict[str, object]] = []
+    secs = universe(db, market or None)
+    with ThreadPoolExecutor(max_workers=min(32, max(8, len(secs)))) as pool:
+        futures = [pool.submit(_analyze, sec) for sec in secs]
+        for fut in as_completed(futures):
+            try:
+                analyzed.append(fut.result())
+            except Exception as exc:  # noqa: BLE001 - one security never aborts the scan
+                logger.warning("Scanner worker failed: %s", exc)
+
+    out: list[dict[str, object]] = []
+    for analysis in analyzed:
         if verdict and analysis["verdict"] != verdict.upper():
             continue
         if signal_lstm and analysis["lstm"]["signal"] != signal_lstm.upper():

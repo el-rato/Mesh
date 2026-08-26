@@ -3,6 +3,7 @@ import { authLogin, authRegister } from "../api.js";
 
 export default function AuthScreen({ mode, onSwitch, onSuccess }) {
   const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
@@ -19,7 +20,7 @@ export default function AuthScreen({ mode, onSwitch, onSuccess }) {
     }
     setBusy(true);
     try {
-      if (isRegister) await authRegister(email, password);
+      if (isRegister) await authRegister(email, password, username);
       else await authLogin(email, password);
       onSuccess();
     } catch (err) {
@@ -41,6 +42,19 @@ export default function AuthScreen({ mode, onSwitch, onSuccess }) {
         </div>
 
         <form className="auth-form" onSubmit={submit}>
+          {isRegister && (
+            <label>
+              USERNAME
+              <input
+                type="text"
+                autoComplete="username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="e.g. Laz"
+                maxLength={40}
+              />
+            </label>
+          )}
           <label>
             EMAIL
             <input

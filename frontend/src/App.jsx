@@ -360,6 +360,7 @@ export default function App() {
       setMarket,
       setTab,
       userEmail: auth.user?.email || "",
+      username: auth.user?.username || "",
       refreshAll: () => {
         setRefreshToken((t) => t + 1);
         setLastUpdated(new Date());

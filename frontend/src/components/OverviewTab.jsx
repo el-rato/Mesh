@@ -16,27 +16,38 @@ function pct(v) {
   return `${n > 0 ? "+" : ""}${(n * 100).toFixed(2)}%`;
 }
 
+// Clever, rotating greeting lines (grouped with a matching emoji). One is picked
+// every few minutes so it feels alive instead of a static time-of-day phrase.
+const GREETINGS = [
+  { icon: "🧗", opener: "Rise and grind", question: "What's the play?" },
+  { icon: "🕵️", opener: "Still watching", question: "Where's the edge?" },
+  { icon: "⚡", opener: "Market's restless", question: "What's the move?" },
+  { icon: "☕", opener: "Coffee's cold", question: "But the tape never sleeps." },
+  { icon: "📈", opener: "Overnight printed", question: "Let's read the tape." },
+  { icon: "🔍", opener: "Scanning the board", question: "What lights up?" },
+  { icon: "🌅", opener: "Alright", question: "Let's see what the market cooked up." },
+  { icon: "🎯", opener: "The gods of alpha smile on you", question: "What's next?" },
+];
+
 function greeting() {
-  const h = new Date().getHours();
-  if (h < 6) return { icon: "🌙", label: "Night owl mode" };
-  if (h < 12) return { icon: "🌅", label: "Good morning" };
-  if (h < 18) return { icon: "☀️", label: "Good afternoon" };
-  return { icon: "🌆", label: "Good evening" };
+  const idx = Math.floor(Date.now() / 60000 / 5) % GREETINGS.length;
+  return GREETINGS[idx];
 }
 
 const SHORTCUTS = [
   { key: "stock", label: "stocks" },
   { key: "crypto", label: "crypto" },
+  { key: "forex", label: "Forex pairs" },
   { key: "etf", label: "ETFs & funds" },
   { key: "index", label: "indices" },
+  { key: "futures", label: "futures" },
   { key: "bond", label: "bonds" },
-  { key: "forex", label: "Forex pairs" },
   { key: "portfolio", label: "portfolio" },
   { key: "watchlist", label: "watchlist" },
 ];
 
 export default function OverviewTab() {
-  const { market, markets, indexes, refreshToken, openDrawer, userEmail } = useApp();
+  const { indexes, refreshToken, openDrawer, userEmail, username } = useApp();
   const [verdicts, setVerdicts] = useState([]);
   const [news, setNews] = useState([]);
   const [watch, setWatch] = useState([]);
@@ -99,7 +110,6 @@ export default function OverviewTab() {
     .slice(0, 6);
 
   const strip = [...(indexes || [])].slice(0, 14);
-  const openCount = (markets || []).filter((m) => m.status?.status === "open").length;
   const greet = greeting();
 
   const openDossier = (v) =>
@@ -128,21 +138,11 @@ export default function OverviewTab() {
         <div className="ov-body">
           {/* LEFT MAIN */}
           <main className="ov-main">
-            {/* Greeting */}
-            <header className="ov-greet">
-              <span className="ov-greet-mark">{greet.icon}</span>
-              <span className="ov-greet-text">
-                <strong>{greet.label}</strong>, {userEmail?.split("@")[0] || "you"}.{" "}
-                {market ? `${market} markets await.` : "Markets await."}
-              </span>
-              <span className="ov-greet-status dim">
-                <span className="dot" /> {openCount}/{markets?.length || 0} OPEN
-              </span>
-            </header>
-
             {/* Shortcuts */}
-            <div className="ov-card ov-shortcuts">
-              <div className="ov-panel-label">SHORTCUTS</div>
+            <div className="ov-shortcuts">
+              <div className="ov-panel-label ov-label-chev">
+                SHORTCUTS <span className="ov-chev">❯</span>
+              </div>
               <div className="ov-shortcut-grid">
                 {SHORTCUTS.map((s) => (
                   <span key={s.key} className="ov-shortcut">
@@ -152,6 +152,16 @@ export default function OverviewTab() {
                 ))}
               </div>
             </div>
+
+            {/* Greeting */}
+            <header className="ov-greet">
+              <span className="ov-greet-mark">{greet.icon}</span>
+              <span className="ov-greet-text">
+                <strong>{greet.opener}</strong>, {username || userEmail?.split("@")[0] || "you"}.{" "}
+                {greet.question}
+              </span>
+              <button className="ov-setup">⛶ Set Up Profile</button>
+            </header>
 
             {/* Agent */}
             <AgentPanel onOpen={openChat} onAsk={askChat} />

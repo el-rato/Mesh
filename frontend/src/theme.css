@@ -3601,47 +3601,54 @@ button.ghost {
 .ov-rail { flex: 0 0 300px; display: flex; flex-direction: column; gap: var(--sp-3); }
 
 /* Greeting header */
+/* Greeting — image-1 style: emoji + bold line, no card box, button on right */
 .ov-greet {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 16px;
-  margin-bottom: var(--sp-4);
-  background:
-    radial-gradient(120% 140% at 0% 0%, rgba(217, 119, 6, 0.07), transparent 55%),
-    var(--bg-panel2);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--amber);
-  border-radius: var(--r);
+  gap: 12px;
+  padding: 10px 4px;
+  margin-bottom: 22px;
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: 15px;
 }
-.ov-greet-mark { font-size: 20px; line-height: 1; }
-.ov-greet-text strong { color: var(--amber); letter-spacing: 0.5px; }
-.ov-greet-status { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; }
-.ov-greet-status .dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--bull); box-shadow: 0 0 6px var(--bull);
+.ov-greet-mark { font-size: 22px; line-height: 1; }
+.ov-greet-text { color: var(--text); letter-spacing: 0.2px; }
+.ov-greet-text strong { color: var(--text); font-weight: 700; }
+.ov-setup {
+  margin-left: auto;
+  padding: 7px 14px;
+  background: transparent;
+  border: 1px solid var(--border-bright);
+  border-radius: var(--r);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  cursor: pointer;
 }
+.ov-setup:hover { border-color: var(--amber-dim); color: var(--amber); }
 
 /* Shortcuts */
-.ov-shortcuts { margin-bottom: var(--sp-4); }
+.ov-shortcuts { margin-bottom: 22px; }
 .ov-panel-label {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 700;
   letter-spacing: 1px;
   text-transform: uppercase;
-  color: var(--text-dim);
-  margin-bottom: 10px;
+  color: var(--text);
+  margin-bottom: 12px;
 }
 .ov-panel-label .dim { color: var(--text-muted); }
+.ov-label-chev { display: inline-flex; align-items: center; gap: 6px; }
+.ov-chev { color: var(--amber); font-size: 10px; }
 .ov-shortcut-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 6px 18px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 26px;
 }
-.ov-shortcut { display: inline-flex; align-items: baseline; gap: 8px; font-family: var(--mono); font-size: 12px; padding: 3px 0; }
-.ov-shortcut-token { color: var(--amber-dim); }
+.ov-shortcut { display: inline-flex; align-items: baseline; gap: 9px; font-family: var(--mono); font-size: 12px; padding: 2px 0; }
+.ov-shortcut-token { color: var(--amber); font-weight: 700; }
 .ov-shortcut-label { color: var(--text-dim); }
 
 /* Right rail panels */
