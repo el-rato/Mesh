@@ -4,6 +4,11 @@ import { useApp } from "../App.jsx";
 import SecurityLink from "./SecurityLink.jsx";
 import { RefreshStatus } from "./ui.jsx";
 
+// General headlines (world/tech/crypto/macro) are stored without a ticker.
+function isGlobal(n) {
+  return n && (n.market === "GLOBAL" || n.ticker === "NEWS");
+}
+
 function timeLabel(iso) {
   if (!iso) return "";
   const s = String(iso);
@@ -171,11 +176,13 @@ export default function NewsTab() {
     if (filtered.length && !selected) setSelected(filtered[0]);
   }, [filtered, selected]);
 
-  const openDossier = (n) =>
+  const openDossier = (n) => {
+    if (isGlobal(n)) return;
     openDrawer({
       type: "stock",
       v: { market: n.market || "", ticker: n.ticker || "", company: "", reason: ["NEWS FEED"] },
     });
+  };
 
   return (
     <div className="news-tab">
@@ -281,9 +288,13 @@ export default function NewsTab() {
                   <div className="news-feed-main">
                     <div className="news-feed-headline">{n.title}</div>
                     <div className="news-feed-meta">
-                      <SecurityLink market={n.market} ticker={n.ticker} className="news-feed-tk">
-                        {n.security_id || `${n.market}:${n.ticker}`}
-                      </SecurityLink>
+                      {isGlobal(n) ? (
+                        <span className="news-feed-tk dim">{n.source}</span>
+                      ) : (
+                        <SecurityLink market={n.market} ticker={n.ticker} className="news-feed-tk">
+                          {n.security_id || `${n.market}:${n.ticker}`}
+                        </SecurityLink>
+                      )}
                       <span className="dim">· {n.source}</span>
                       {n.sentiment_label && (
                         <span className={`news-sent ${sentClass(n.sentiment_label)}`}>
@@ -307,9 +318,13 @@ export default function NewsTab() {
               <div className="news-detail-head">
                 <div className="news-detail-title">{selected.title}</div>
                 <div className="news-detail-meta">
-                  <SecurityLink market={selected.market} ticker={selected.ticker}>
-                    {selected.security_id || `${selected.market}:${selected.ticker}`}
-                  </SecurityLink>
+                  {isGlobal(selected) ? (
+                    <span className="dim">{selected.source}</span>
+                  ) : (
+                    <SecurityLink market={selected.market} ticker={selected.ticker}>
+                      {selected.security_id || `${selected.market}:${selected.ticker}`}
+                    </SecurityLink>
+                  )}
                   <span className="dim">· {selected.source} · {dateLabel(selected.published_at || selected.fetched_at)} {timeLabel(selected.published_at || selected.fetched_at)}</span>
                   {selected.sentiment_label && (
                     <span className={`news-sent ${sentClass(selected.sentiment_label)}`}>
@@ -339,7 +354,9 @@ export default function NewsTab() {
                     OPEN ARTICLE ⟶
                   </a>
                 )}
-                <button className="ghost" onClick={() => openDossier(selected)}>OPEN DOSSIER</button>
+                {!isGlobal(selected) && (
+                  <button className="ghost" onClick={() => openDossier(selected)}>OPEN DOSSIER</button>
+                )}
               </div>
             </>
           )}

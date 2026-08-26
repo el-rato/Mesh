@@ -208,3 +208,39 @@ def run_ticker_ingest(
         use_global_feeds=False,
     )
     return ingestor.ingest_ticker(ticker)
+
+
+def ingest_global_news(db_path: str | None = None) -> dict[str, int]:
+    """Fetch + store general (non-ticker) headlines from the global RSS feeds.
+
+    Stored as ``market='GLOBAL'`` / ``ticker='NEWS'`` so the live news feed shows
+    every new headline — world, tech, crypto, macro — not just those that match a
+    tracked stock. Feeds are fetched concurrently and deduped by URL.
+    """
+    db = Database(db_path or settings.db_path)
+    db.init_schema()
+    articles = sources.fetch_global_feeds()
+    inserted = duplicate = skipped = 0
+    seen: set[str] = set()
+    for a in articles:
+        seen_url = _normalize_url(a.url)
+        if seen_url in seen:
+            continue
+        seen.add(seen_url)
+        if not a.title:
+            skipped += 1
+            continue
+        iid = db.insert_news_item(
+            market="GLOBAL",
+            ticker="NEWS",
+            title=a.title,
+            url=a.url,
+            source=a.source,
+            summary=a.summary,
+            published_at=a.published_at,
+        )
+        if iid is not None:
+            inserted += 1
+        else:
+            duplicate += 1
+    return {"fetched": len(articles), "inserted": inserted, "duplicate": duplicate, "skipped": skipped}

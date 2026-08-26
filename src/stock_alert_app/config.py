@@ -7,7 +7,11 @@ from pathlib import Path
 try:
     from dotenv import load_dotenv  # type: ignore
 
-    load_dotenv()
+    # Always load .env from the project root (repo root), regardless of the
+    # directory uvicorn was launched from, so GEMINI_API_KEY etc. resolve.
+    _env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+    if _env_file.exists():
+        load_dotenv(dotenv_path=_env_file, override=False)
 except ImportError:
     pass
 

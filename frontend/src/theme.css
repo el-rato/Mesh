@@ -3862,3 +3862,114 @@ button.ghost {
   .ov-body { flex-direction: column; }
   .ov-rail { flex: 1 1 auto; width: 100%; }
 }
+
+/* ── Full-screen Agent chat (Fincept Chat Mode) ──────────────────────────── */
+.agent-chat {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-base, #080808);
+  background-color: var(--bg);
+  color: var(--text);
+}
+.agent-chat-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  background: var(--bg-panel2);
+  border-bottom: 1px solid var(--border);
+}
+.agent-chat-mark { font-size: 24px; color: var(--amber); line-height: 1; }
+.agent-chat-title {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--text);
+}
+.agent-chat-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  margin-left: auto;
+}
+.agent-chat-status .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--bull); box-shadow: 0 0 6px var(--bull);
+}
+.agent-chat-prov { color: var(--amber-dim); font-style: normal; }
+.agent-chat-close {
+  width: 34px; height: 34px;
+  background: transparent;
+  border: 1px solid var(--border-bright);
+  border-radius: var(--r);
+  color: var(--text-dim);
+  font-size: 15px;
+  cursor: pointer;
+  line-height: 1;
+}
+.agent-chat-close:hover { color: var(--bear); border-color: var(--bear); }
+
+.agent-chat-tabs {
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel2);
+}
+
+.agent-chat-msgs {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 28px 24px;
+  max-width: 860px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.agent-chat-inputbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  background: var(--bg-panel2);
+  border-top: 1px solid var(--border);
+  max-width: 860px;
+  width: 100%;
+  margin: 0 auto;
+}
+.agent-chat-inputbar .agent-input { padding: 11px 14px; font-size: 13px; }
+.agent-chat-inputbar .agent-send { padding: 11px 16px; }
+
+/* Embedded launcher styles */
+.agent-launcher {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.agent-launcher:hover { background: var(--bg-hover); }
+.agent-input-static {
+  flex: 1 1 auto;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.agent-input-static:hover { border-color: var(--amber-dim); color: var(--text-dim); }

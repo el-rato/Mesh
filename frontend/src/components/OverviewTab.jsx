@@ -4,6 +4,7 @@ import { useApp } from "../App.jsx";
 import { verdictBadge, verdictClass, SectionHeader, StatusIndicator } from "./ui.jsx";
 import SecurityLink from "./SecurityLink.jsx";
 import AgentPanel from "./AgentPanel.jsx";
+import AgentChat from "./AgentChat.jsx";
 
 function num(v, d = 0) {
   const n = Number(v);
@@ -41,6 +42,21 @@ export default function OverviewTab() {
   const [watch, setWatch] = useState([]);
   const [active, setActive] = useState([]);
   const [error, setError] = useState("");
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMode, setChatMode] = useState("AUTO");
+  const [seed, setSeed] = useState("");
+  const [seedId, setSeedId] = useState(0);
+
+  const openChat = (mode) => {
+    setChatMode(mode || "AUTO");
+    setChatOpen(true);
+  };
+  const askChat = (prompt, mode) => {
+    setChatMode(mode || "AUTO");
+    setSeed(prompt);
+    setSeedId((n) => n + 1);
+    setChatOpen(true);
+  };
 
   const loadVerdicts = useCallback(() => {
     setError("");
@@ -50,7 +66,7 @@ export default function OverviewTab() {
   }, []);
 
   const loadRails = useCallback(() => {
-    newsFeed(6).then(setNews).catch(() => {});
+    newsFeed(10).then(setNews).catch(() => {});
     watchlist().then(setWatch).catch(() => {});
     tickerStrip()
       .then((rows) =>
@@ -138,7 +154,7 @@ export default function OverviewTab() {
             </div>
 
             {/* Agent */}
-            <AgentPanel />
+            <AgentPanel onOpen={openChat} onAsk={askChat} />
 
             {/* Committee views */}
             <div className="ov-card">
@@ -173,16 +189,21 @@ export default function OverviewTab() {
               <div className="ov-panel-label">LIVE NEWS</div>
               {news.length ? (
                 <div className="ov-news-list">
-                  {news.map((n, i) => (
-                    <a key={`${n.url}-${i}`} className="ov-news-item" href={n.url} target="_blank" rel="noopener noreferrer">
-                      <div className="ov-news-title">{n.title}</div>
-                      <div className="ov-news-meta dim">
-                        {n.source}
-                        {(n.ticker || n.security_id) && <span className="ov-news-tk">{n.ticker || n.security_id}</span>}
-                        <span>{String(n.published_at || n.fetched_at || "").slice(0, 10)}</span>
-                      </div>
-                    </a>
-                  ))}
+                  {news.map((n, i) => {
+                    const isGlobal = n.market === "GLOBAL" || n.ticker === "NEWS";
+                    return (
+                      <a key={`${n.url}-${i}`} className="ov-news-item" href={n.url} target="_blank" rel="noopener noreferrer">
+                        <div className="ov-news-title">{n.title}</div>
+                        <div className="ov-news-meta dim">
+                          {n.source}
+                          {!isGlobal && (n.ticker || n.security_id) && (
+                            <span className="ov-news-tk">{n.ticker || n.security_id}</span>
+                          )}
+                          <span>{String(n.published_at || n.fetched_at || "").slice(0, 10)}</span>
+                        </div>
+                      </a>
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="empty">LOADING NEWS…</div>
@@ -230,6 +251,14 @@ export default function OverviewTab() {
           </aside>
         </div>
       </div>
+
+      <AgentChat
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        seed={seed}
+        seedId={seedId}
+        initialMode={chatMode}
+      />
     </div>
   );
 }

@@ -93,45 +93,70 @@ def _is_within_age_limit(published_iso: str) -> bool:
 # ingestor can fan them out across the universe.
 
 GLOBAL_RSS_FEEDS: list[dict[str, str]] = [
-    # Tier 1 — Wire Services & Regulators
+    # Tier 1 — Wire services & regulators
     {"url": "https://www.sec.gov/news/pressreleases.rss", "source": "SEC", "category": "REGULATORY"},
     {"url": "https://www.federalreserve.gov/feeds/press_all.xml", "source": "FEDERAL RESERVE", "category": "REGULATORY"},
     {"url": "https://news.un.org/feed/subscribe/en/news/all/rss.xml", "source": "UN", "category": "GEOPOLITICS"},
-
-    # Tier 2 — Major Financial Media
-    {"url": "https://feeds.marketwatch.com/marketwatch/topstories/", "source": "MARKETWATCH", "category": "MARKETS"},
-    {"url": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114", "source": "CNBC", "category": "MARKETS"},
-    {"url": "https://seekingalpha.com/market_currents.xml", "source": "SEEKING ALPHA", "category": "MARKETS"},
-    {"url": "https://www.investing.com/rss/news.rss", "source": "INVESTING.COM", "category": "MARKETS"},
-
-    # Tier 2 — Global News
-    {"url": "http://feeds.bbci.co.uk/news/world/rss.xml", "source": "BBC", "category": "GEOPOLITICS"},
-    {"url": "http://feeds.bbci.co.uk/news/business/rss.xml", "source": "BBC", "category": "MARKETS"},
-    {"url": "https://www.aljazeera.com/xml/rss/all.xml", "source": "AL JAZEERA", "category": "GEOPOLITICS"},
-    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", "source": "NYT", "category": "GEOPOLITICS"},
-    {"url": "https://www.theguardian.com/world/rss", "source": "GUARDIAN", "category": "GEOPOLITICS"},
-
-    # Tier 2 — Tech
-    {"url": "https://techcrunch.com/feed/", "source": "TECHCRUNCH", "category": "TECH"},
-    {"url": "https://www.wired.com/feed/rss", "source": "WIRED", "category": "TECH"},
-
-    # Tier 2 — Asia
-    {"url": "https://www.scmp.com/rss/91/feed", "source": "SCMP", "category": "ASIA"},
-    {"url": "https://www.thehindu.com/business/feeder/default.rss", "source": "THE HINDU", "category": "MARKETS"},
-
-    # Tier 2 — Central Banks
     {"url": "https://www.ecb.europa.eu/rss/press.html", "source": "ECB", "category": "REGULATORY"},
     {"url": "https://www.bankofengland.co.uk/rss/news", "source": "BOE", "category": "REGULATORY"},
 
-    # Tier 3 — Economic / Macro
-    {"url": "https://feeds.feedburner.com/zerohedge/feed", "source": "ZEROHEDGE", "category": "ECONOMIC"},
+    # Major financial media
+    {"url": "https://feeds.marketwatch.com/marketwatch/topstories/", "source": "MARKETWATCH", "category": "MARKETS"},
+    {"url": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114", "source": "CNBC", "category": "MARKETS"},
+    {"url": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100727362", "source": "CNBC", "category": "MARKETS"},
+    {"url": "https://seekingalpha.com/market_currents.xml", "source": "SEEKING ALPHA", "category": "MARKETS"},
+    {"url": "https://www.investing.com/rss/news.rss", "source": "INVESTING.COM", "category": "MARKETS"},
+    {"url": "https://www.economist.com/finance-and-economics/rss.xml", "source": "ECONOMIST", "category": "ECONOMIC"},
+    {"url": "http://feeds.bbci.co.uk/news/business/rss.xml", "source": "BBC", "category": "MARKETS"},
 
-    # Tier 3 — Tech (additional)
-    {"url": "https://feeds.arstechnica.com/arstechnica/index", "source": "ARS TECHNICA", "category": "TECH"},
+    # Global news / geopolitics
+    {"url": "http://feeds.bbci.co.uk/news/world/rss.xml", "source": "BBC", "category": "GEOPOLITICS"},
+    {"url": "https://www.aljazeera.com/xml/rss/all.xml", "source": "AL JAZEERA", "category": "GEOPOLITICS"},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", "source": "NYT", "category": "GEOPOLITICS"},
+    {"url": "https://www.theguardian.com/world/rss", "source": "GUARDIAN", "category": "GEOPOLITICS"},
+    {"url": "https://www.france24.com/en/rss", "source": "FRANCE24", "category": "GEOPOLITICS"},
+    {"url": "https://rss.dw.com/rdf/rss-en-all", "source": "DW", "category": "GEOPOLITICS"},
+    {"url": "https://foreignpolicy.com/feed/", "source": "FOREIGN POLICY", "category": "GEOPOLITICS"},
+    {"url": "https://www.middleeasteye.net/rss", "source": "MIDDLE EAST EYE", "category": "MENA"},
+
+    # Tech
+    {"url": "https://techcrunch.com/feed/", "source": "TECHCRUNCH", "category": "TECH"},
+    {"url": "https://www.wired.com/feed/rss", "source": "WIRED", "category": "TECH"},
     {"url": "https://www.theverge.com/rss/index.xml", "source": "THE VERGE", "category": "TECH"},
+    {"url": "https://feeds.arstechnica.com/arstechnica/index", "source": "ARS TECHNICA", "category": "TECH"},
+    {"url": "https://www.technologyreview.com/feed/", "source": "MIT TECH REVIEW", "category": "TECH"},
 
-    # Tier 2 — Commodities
+    # Crypto
+    {"url": "https://www.coindesk.com/arc/outboundfeeds/rss/", "source": "COINDESK", "category": "CRYPTO"},
+    {"url": "https://cointelegraph.com/rss", "source": "COINTELEGRAPH", "category": "CRYPTO"},
+    {"url": "https://www.theblock.co/rss.xml", "source": "THE BLOCK", "category": "CRYPTO"},
+    {"url": "https://decrypt.co/feed", "source": "DECRYPT", "category": "CRYPTO"},
+
+    # Economic / macro
+    {"url": "https://feeds.feedburner.com/zerohedge/feed", "source": "ZEROHEDGE", "category": "ECONOMIC"},
+    {"url": "https://feeds.feedburner.com/CalculatedRisk", "source": "CALCULATED RISK", "category": "ECONOMIC"},
+    {"url": "https://wolfstreet.com/feed/", "source": "WOLF STREET", "category": "ECONOMIC"},
+
+    # Energy / commodities
     {"url": "https://oilprice.com/rss/main", "source": "OILPRICE", "category": "ENERGY"},
+    {"url": "https://www.mining.com/feed/", "source": "MINING.COM", "category": "ENERGY"},
+    {"url": "https://www.carbonbrief.org/feed/", "source": "CARBON BRIEF", "category": "ENERGY"},
+
+    # Asia / India
+    {"url": "https://www.scmp.com/rss/91/feed", "source": "SCMP", "category": "ASIA"},
+    {"url": "https://asia.nikkei.com/rss/feed/nar", "source": "NIKKEI ASIA", "category": "ASIA"},
+    {"url": "https://www.channelnewsasia.com/rssfeeds/8395986", "source": "CNA", "category": "ASIA"},
+    {"url": "https://www.thehindu.com/business/feeder/default.rss", "source": "THE HINDU", "category": "MARKETS"},
+    {"url": "https://www.livemint.com/rss/markets", "source": "LIVEMINT", "category": "MARKETS"},
+    {"url": "https://economictimes.indiatimes.com/rssfeedstopstories.cms", "source": "ECONOMIC TIMES", "category": "MARKETS"},
+    {"url": "https://www.moneycontrol.com/rss/latestnews.xml", "source": "MONEYCONTROL", "category": "MARKETS"},
+    {"url": "https://www.fxstreet.com/rss/news", "source": "FXSTREET", "category": "MARKETS"},
+
+    # Deep dive / OPINION & aggregators
+    {"url": "https://www.finextra.com/rss/headlines.aspx", "source": "FINEXTRA", "category": "TECH"},
+    {"url": "https://hnrss.org/frontpage", "source": "HACKER NEWS", "category": "TECH"},
+    {"url": "https://abnormalreturns.com/feed/", "source": "ABNORMAL RETURNS", "category": "MARKETS"},
+    {"url": "https://marginalrevolution.com/feed", "source": "MARGINAL REVOLUTION", "category": "ECONOMIC"},
 ]
 
 
@@ -254,21 +279,31 @@ def fetch_financial_feeds(
     return articles
 
 
-def fetch_global_feeds() -> list[Article]:
-    """Fetch all Fincept-style global RSS feeds (no API key required).
-
-    Returns articles with an empty ``query`` (they are not ticker-specific).
-    The ingestor's ``classify`` step matches them to tickers by name.
+def fetch_global_feeds(
+    max_workers: int = 16, max_per_feed: int = 30
+) -> list[Article]:
+    """Fetch all global RSS feeds concurrently, so many feeds load at once
+    the way Fincept does. Each feed is fetched via the RSS cache (10-min TTL),
+    so repeated refresh cycles stay cheap. Dead feeds fail silently and are
+    skipped rather than blocking the rest.
     """
-    articles: list[Article] = []
-    for feed in GLOBAL_RSS_FEEDS:
-        feed_articles = _fetch_rss_cached(feed["url"], feed["url"])
-        # Override the source name with the curated one when the feed itself
-        # doesn't provide a <source> element.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _fetch(feed: dict[str, str]) -> list[Article]:
+        feed_articles = _fetch_rss_cached(feed["url"], feed["url"] or feed["source"])
         for a in feed_articles:
             if not a.source:
-                a.source = feed["source"]
-        articles.extend(feed_articles)
+                a.source = feed.get("source", "")
+        return feed_articles[:max_per_feed]
+
+    articles: list[Article] = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(_fetch, feed) for feed in GLOBAL_RSS_FEEDS]
+        for fut in as_completed(futures):
+            try:
+                articles.extend(fut.result())
+            except Exception as exc:  # noqa: BLE001 - one bad feed shouldn't abort the batch
+                logger.warning("Global feed worker failed: %s", exc)
     return articles
 
 

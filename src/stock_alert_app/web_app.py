@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
+import time
 from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, HTTPException
@@ -88,6 +89,12 @@ class LoginRequest(BaseModel):
 
 
 _initialized_dbs: set[str] = set()
+
+#: Throttle for the broad "global news" (non-ticker) RSS top-up so the many
+#: feeds are not re-fetched on every 15s refresh tick. The in-process RSS
+#: cache already dedups network calls; this prevents redundant ingest work.
+_GLOBAL_NEWS_INTERVAL = 600
+_last_global_news_at: float = 0.0
 
 
 def _db() -> Database:
@@ -551,7 +558,23 @@ def refresh_data() -> dict[str, object]:
 
     db = _db()
     db.init_schema()
-    return refresh.run_refresh(db)
+    result = refresh.run_refresh(db)
+
+    # Top up the broad LIVE NEWS feed with the latest non-ticker headlines
+    # (world / tech / crypto / macro). Throttled to the RSS cache TTL; all
+    # feed fetches share an in-memory cache, so within 10 minutes this is a
+    # cheap cache-hit pass over already-fetched articles.
+    global _last_global_news_at
+    if time.time() - _last_global_news_at >= _GLOBAL_NEWS_INTERVAL:
+        try:
+            from .ingest import ingest_global_news
+
+            ingest_global_news(str(db.path))
+            _last_global_news_at = time.time()
+        except Exception as exc:  # never let a news failure fail the refresh
+            logger.warning("Global news top-up failed: %s", exc)
+
+    return result
 
 
 @app.get("/api/refresh/status")
