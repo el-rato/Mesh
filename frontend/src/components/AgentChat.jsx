@@ -52,15 +52,18 @@ export default function AgentChat({
     if (initialModel) setModel(initialModel);
   }, [initialMode, initialProvider, initialModel]);
 
+  // Focus the chat input only when the chat opens. Depending on `open` (not
+  // `onClose`) means parent re-renders (new closure identity) never steal focus
+  // from the model box while the user is typing in it.
   useEffect(() => {
     if (!open) return;
     inputRef.current?.focus();
     const onKey = (e) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open]);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
