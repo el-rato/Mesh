@@ -3,9 +3,16 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import urllib.request
 from pathlib import Path
 
+from .agent_tools import (
+    parse_tool_call,
+    run_tool,
+    tool_result_block,
+    tools_system_text,
+)
 from .config import settings
 from .db import Database
 
@@ -172,6 +179,67 @@ def _local_respond(
     )
 
 
+def _extract_security(text: str) -> tuple[str, str] | None:
+    """Find a known (market, ticker) referenced in the user's message, if any."""
+    from .db import Database as _DB
+
+    try:
+        secs = _DB(settings.db_path).all_securities()
+    except Exception:
+        return None
+    tickers = {(s["market"], s["ticker"].upper()) for s in secs}
+    if not tickers:
+        return None
+    words = re.findall(r"[A-Za-z]{1,6}", text or "")
+    for w in words:
+        wu = w.upper()
+        hit = next(((m, t) for (m, t) in tickers if t == wu), None)
+        if hit:
+            return hit
+    return None
+
+
+def _local_respond_with_tools(
+    text: str, ctx: dict, market: str | None, mode: str = "AUTO"
+) -> str:
+    """Local responder that can call terminal tools for a referenced ticker.
+
+    When the user names a specific security and asks about news / a verdict /
+    analysis, this refreshes and pulls the real data from the terminal itself,
+    then formats it — so the offline agent also never has to bluff.
+    """
+    t = (text or "").lower()
+
+    if any(k in t for k in ("news", "headline", "article", "happening", "latest", "report")):
+        sec = _extract_security(text)
+        if sec:
+            res = run_tool("refresh_news", {"market": sec[0], "ticker": sec[1], "limit": 6})
+            items = (res.get("result") or {}).get("news", [])
+            if items:
+                lines = [
+                    f"• {n.get('title','')}" + (f" — {n.get('source','')}" if n.get("source") else "")
+                    for n in items
+                ]
+                return f"Latest news for {sec[1]} ({sec[0]}):\n\n" + "\n".join(lines)
+            return f"No fresh news found for {sec[1]} ({sec[0]}) right now — try again after a refresh."
+
+    if any(k in t for k in ("verdict", "analy", "rating", "recommend", "bull", "bear", "neutral")):
+        sec = _extract_security(text)
+        if sec:
+            res = run_tool("get_verdict", {"market": sec[0], "ticker": sec[1]})
+            v = res.get("result") or {}
+            if v.get("verdict"):
+                conf = int(round(float(v.get("confidence", 0) or 0) * 100))
+                return (
+                    f"{sec[1]} ({sec[0]}): **{v['verdict']}** (conf {conf}%) — "
+                    f"{(v.get('reason') or '')[:300]}"
+                )
+            if v.get("note"):
+                return f"{sec[1]} ({sec[0]}): {v['note']}."
+
+    return _local_respond(text, ctx, market, mode or "AUTO")
+
+
 def _call_ollama(prompt: str, base_url: str, model: str) -> str | None:
     payload = json.dumps({"model": model, "prompt": prompt, "stream": False}).encode()
     req = urllib.request.Request(
@@ -232,7 +300,17 @@ def _prompt(history: list[dict], context: dict) -> str:
         "You are StockVerdict AI, a warm but sharp markets assistant embedded in a "
         "trading terminal. Answer concisely and in plain language. Use the supplied "
         "CONTEXT (verdicts + recent news) to ground your replies; never invent prices "
-        "or headlines that aren't in the context. Keep it cozy and helpful."
+        "or headlines that aren't in the context. Keep it cozy and helpful.\n\n"
+        "TOOL USE — you can reach into the terminal's OWN data when the CONTEXT is "
+        "insufficient. If you need data not present in CONTEXT (e.g. the latest news "
+        "for a specific ticker, a fresh analysis, a price chart, index levels, hedge-fund "
+        "filings, Reddit sentiment, or a universe search), emit EXACTLY one line:\n"
+        "TOOL_CALL: <tool_name> {json arguments}\n"
+        "then stop. You will receive TOOL_RESULT(name): <json>. Read it, call another "
+        "tool if still missing data, or give the final answer once you have enough. "
+        "Only call a tool when genuinely needed; if CONTEXT already answers the "
+        "question, answer directly without a TOOL_CALL.\n\n"
+        + tools_system_text()
     )
     ctx_blob = (
         "VERDICTS (market, ticker, verdict, confidence):\n"
@@ -268,44 +346,87 @@ def _try_gemini(prompt: str, api_key: str, model: str) -> str | None:
     return None
 
 
+def _select_provider(p: str, c: dict) -> str | None:
+    """Pick a single concrete provider to drive the tool loop (auto = first available)."""
+    if p in ("auto", "gemini") and c["gemini_key"]:
+        return "gemini"
+    if p in ("auto", "ollama") and c["ollama_base"]:
+        return "ollama"
+    if p in ("auto", "opencode") and c["opencode_base"] and c["opencode_key"]:
+        return "opencode"
+    return None
+
+
+def _call_provider(prompt: str, name: str, c: dict, model: str) -> str | None:
+    """Invoke one concrete provider and return its raw text (or None on failure)."""
+    try:
+        if name == "gemini":
+            return _try_gemini(prompt, c["gemini_key"], model or c["gemini_model"])
+        if name == "ollama":
+            return _call_ollama(prompt, c["ollama_base"], model or c["ollama_model"])
+        if name == "opencode":
+            return _call_openode_chat(
+                prompt, c["opencode_base"], c["opencode_key"], model or c["opencode_model"]
+            )
+    except Exception as exc:  # pragma: no cover - import/network/deps
+        logger.warning("Provider %s failed: %s", name, exc)
+    return None
+
+
+def _run_with_tools(
+    history: list[dict],
+    context: dict,
+    provider: str = "auto",
+    model: str = "",
+    max_iterations: int = 5,
+) -> tuple[str, str] | None:
+    """Drive an LLM with the terminal's tool-calling loop.
+
+    The model may emit ``TOOL_CALL:`` lines; each is executed against the live
+    terminal and the result is fed back, so the agent can fetch (and reason over)
+    real data it didn't already have in CONTEXT. Returns ``(reply, provider_name)``.
+    """
+    p = (provider or "auto").lower()
+    c = _load_env()
+    name = _select_provider(p, c)
+    if name is None:
+        return None
+
+    base = _prompt(history, context)
+    tool_notes: list[str] = []
+    reply_text: str | None = None
+    for _ in range(max_iterations):
+        prompt = (
+            base
+            if not tool_notes
+            else base + "\n\nTOOL RESULTS SO FAR:\n" + "\n".join(tool_notes)
+        )
+        reply_text = _call_provider(prompt, name, c, model)
+        if not reply_text:
+            return None
+        call = parse_tool_call(reply_text)
+        if call is None:
+            return reply_text.strip(), name
+        tool_name, tool_args = call
+        result = run_tool(tool_name, tool_args)
+        tool_notes.append(tool_result_block(tool_name, result))
+    # Iteration budget exhausted (e.g. model kept calling tools): surface the
+    # last response so the user still gets something grounded in the tool data.
+    return (reply_text.strip(), name) if reply_text else None
+
+
 def _try_llm(
     history: list[dict],
     context: dict,
     provider: str = "auto",
     model: str = "",
 ) -> tuple[str, str] | None:
-    """Try the requested provider(s) and return ``(reply, provider_name)``."""
-    p = (provider or "auto").lower()
-    c = _load_env()
-    prompt = _prompt(history, context)
+    """Try the requested provider(s) and return ``(reply, provider_name)``.
 
-    if p in ("auto", "gemini") and c["gemini_key"]:
-        try:
-            reply = _try_gemini(prompt, c["gemini_key"], model or c["gemini_model"])
-            if reply:
-                return reply, "gemini"
-        except Exception as exc:  # pragma: no cover - import/deps
-            logger.warning("Gemini path failed: %s", exc)
-
-    if p in ("auto", "ollama") and c["ollama_base"]:
-        try:
-            reply = _call_ollama(prompt, c["ollama_base"], model or c["ollama_model"])
-            if reply:
-                return reply, "ollama"
-        except Exception as exc:  # pragma: no cover - local server
-            logger.warning("Ollama path failed: %s", exc)
-
-    if p in ("auto", "opencode") and c["opencode_base"] and c["opencode_key"]:
-        try:
-            reply = _call_openode_chat(
-                prompt, c["opencode_base"], c["opencode_key"], model or c["opencode_model"]
-            )
-            if reply:
-                return reply, "opencode"
-        except Exception as exc:  # pragma: no cover - network/creds
-            logger.warning("OpenCode GO path failed: %s", exc)
-
-    return None
+    Delegates to the tool-calling loop so the agent can fetch missing data from
+    the terminal's own tools (NEWS RSS, search, verdicts, …) when needed.
+    """
+    return _run_with_tools(history, context, provider=provider, model=model)
 
 
 def chat(
@@ -338,7 +459,7 @@ def chat(
             reply, used = llm
 
     if not reply:
-        reply = _local_respond(last_user, ctx, market, mode or "AUTO")
+        reply = _local_respond_with_tools(last_user, ctx, market, mode or "AUTO")
 
     return {
         "role": "assistant",
