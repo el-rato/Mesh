@@ -87,6 +87,14 @@ class Settings:
     ollama_model: str = field(
         default_factory=lambda: os.getenv("OLLAMA_MODEL", "gemma4:latest")
     )
+    # OpenCode GO — an OpenAI-compatible chat endpoint (base URL + key + model).
+    opencode_base_url: str = field(default_factory=lambda: os.getenv("OPENCODE_BASE_URL", ""))
+    opencode_api_key: str = field(default_factory=lambda: os.getenv("OPENCODE_API_KEY", ""))
+    opencode_model: str = field(
+        default_factory=lambda: os.getenv(
+            "OPENCODE_MODEL", "opencode-go/deepseek-v4-flash-vision-exp"
+        )
+    )
     reddit_client_id: str = field(
         default_factory=lambda: os.getenv("REDDIT_CLIENT_ID", "")
     )

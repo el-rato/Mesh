@@ -13,22 +13,44 @@ function renderRich(text) {
 }
 
 const TABS = ["AUTO", "EQUITY", "MACRO", "NEWS"];
+const PROVIDERS = [
+  { id: "auto", label: "Auto" },
+  { id: "gemini", label: "Gemini" },
+  { id: "ollama", label: "Ollama" },
+  { id: "local", label: "Local" },
+];
 const INTRO =
   "I'm **StockVerdict AI**. Markets are moving and I'm watching. What should I dig into?";
 
-export default function AgentChat({ open, onClose, seed = "", seedId = 0, initialMode = "AUTO" }) {
+export default function AgentChat({
+  open,
+  onClose,
+  seed = "",
+  seedId = 0,
+  initialMode = "AUTO",
+  initialProvider = "auto",
+  initialModel = "",
+  onProviderChange,
+}) {
   const { market } = useApp();
   const [tab, setTab] = useState(initialMode || "AUTO");
+  const [provider, setProvider] = useState(initialProvider || "auto");
+  const [model, setModel] = useState(initialModel || "");
   const [messages, setMessages] = useState([{ role: "assistant", content: INTRO }]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [provider, setProvider] = useState("");
+  const [used, setUsed] = useState("");
+  const [provOpen, setProvOpen] = useState(false);
   const inputRef = useRef(null);
   const scrollRef = useRef(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (initialMode && TABS.includes(initialMode.toUpperCase())) setTab(initialMode.toUpperCase());
-  }, [initialMode]);
+    if (initialProvider) setProvider(initialProvider);
+    if (initialModel) setModel(initialModel);
+  }, [initialMode, initialProvider, initialModel]);
 
   useEffect(() => {
     if (!open) return;
@@ -53,9 +75,9 @@ export default function AgentChat({ open, onClose, seed = "", seedId = 0, initia
       setInput("");
       setSending(true);
       try {
-        const res = await agentChat(next, market, tab);
+        const res = await agentChat(next, market, tab, provider, model);
         setMessages([...next, { role: "assistant", content: res.content || "" }]);
-        setProvider(res.provider || "");
+        setUsed(res.provider || "");
       } catch (e) {
         setMessages([
           ...next,
@@ -65,7 +87,7 @@ export default function AgentChat({ open, onClose, seed = "", seedId = 0, initia
         setSending(false);
       }
     },
-    [input, messages, sending, market, tab]
+    [input, messages, sending, market, tab, provider, model]
   );
 
   useEffect(() => {
@@ -76,6 +98,11 @@ export default function AgentChat({ open, onClose, seed = "", seedId = 0, initia
   if (!open) return null;
 
   const started = messages.some((m) => m.role === "user");
+  const setProv = (id) => {
+    setProvider(id);
+    setProvOpen(false);
+    onProviderChange?.(id);
+  };
 
   return (
     <div className="agent-chat">
@@ -84,7 +111,7 @@ export default function AgentChat({ open, onClose, seed = "", seedId = 0, initia
         <div className="agent-chat-title">STOCKVERDICT AI</div>
         <span className="agent-chat-status">
           <span className="dot" /> {sending ? "WORKING" : "READY"}
-          {provider && <em className="agent-chat-prov">· {provider.toUpperCase()}</em>}
+          {used && <em className="agent-chat-prov">· {used.toUpperCase()}</em>}
         </span>
         <button className="agent-chat-close" onClick={onClose} title="Close (Esc)">
           ✕
@@ -114,8 +141,8 @@ export default function AgentChat({ open, onClose, seed = "", seedId = 0, initia
             </div>
           </div>
         )}
-        {started && provider && (
-          <div className="agent-provider-foot dim">AGENT · {provider.toUpperCase()} · {tab}</div>
+        {started && used && (
+          <div className="agent-provider-foot dim">AGENT · {used.toUpperCase()} · {tab}</div>
         )}
       </div>
 
@@ -130,10 +157,45 @@ export default function AgentChat({ open, onClose, seed = "", seedId = 0, initia
             if (e.key === "Enter") send();
           }}
         />
+        <div className="agent-chat-controls">
+          <button
+            className={`agent-mode ${provOpen ? "open" : ""}`}
+            onClick={() => setProvOpen((o) => !o)}
+          >
+            LLM : <em>{PROVIDERS.find((p) => p.id === provider)?.label}</em> <span className="agent-mode-caret">▾</span>
+          </button>
+          <input
+            className="agent-model"
+            placeholder="model"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            title="Model id (leave blank to use the configured default)"
+          />
+        </div>
         <button className="agent-send" onClick={() => send()} disabled={sending}>
           →
         </button>
       </div>
+
+      {provOpen && (
+        <div className="agent-mode-menu agent-chat-menu">
+          <div className="ov-panel-label">SELECT LLM</div>
+          {PROVIDERS.map((p) => (
+            <button key={p.id} className={`agent-mode-opt ${provider === p.id ? "selected" : ""}`} onClick={() => setProv(p.id)}>
+              <span className={`agent-mode-dot ${p.id === "gemini" ? "cyan" : p.id === "ollama" ? "green" : "amber"} ${provider === p.id ? "on" : ""}`} />
+              <span className="agent-mode-info">
+                <span className="agent-mode-label">{p.label}</span>
+                <span className="agent-mode-desc">
+                  {p.id === "gemini" && "Google Gemini (needs API key)"}
+                  {p.id === "ollama" && "Local model server (no key)"}
+                  {p.id === "local" && "Built-in data-driven responder"}
+                  {p.id === "auto" && "Use any configured LLM, else local"}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

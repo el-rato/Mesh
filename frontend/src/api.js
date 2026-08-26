@@ -215,12 +215,16 @@ export async function newsForTicker(market, ticker, { limit = 200, refresh = tru
   return fetchJSON(`/api/news?${qs.toString()}`);
 }
 
-export async function agentChat(messages, market = "", mode = "AUTO") {
+export async function agentChat(messages, market = "", mode = "AUTO", provider = "auto", model = "") {
   return fetchJSON("/api/agent/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages, market: market || null, mode }),
+    body: JSON.stringify({ messages, market: market || null, mode, provider, model }),
   });
+}
+
+export async function agentConfig() {
+  return fetchJSON("/api/agent/config");
 }
 
 export async function notificationsAck(keys) {

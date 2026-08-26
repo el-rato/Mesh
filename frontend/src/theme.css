@@ -3806,8 +3806,75 @@ button.ghost {
   font-family: var(--mono);
   font-size: 10px;
   white-space: nowrap;
+  cursor: pointer;
 }
 .agent-mode em { color: var(--bull); font-style: normal; font-weight: 700; }
+.agent-mode .agent-mode-caret { color: var(--text-muted); font-size: 9px; }
+.agent-mode.open { border-color: var(--amber-dim); color: var(--text); }
+
+/* LLM provider / agent-mode dropdown (SELECT LLM) */
+.agent { position: relative; }
+.agent-mode-menu {
+  position: absolute;
+  right: 12px;
+  bottom: 60px;
+  width: 290px;
+  background: var(--bg-panel2);
+  border: 1px solid var(--border-bright);
+  border-radius: var(--r);
+  padding: 10px 12px;
+  z-index: 30;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55);
+}
+.agent-mode-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 8px;
+  margin-top: 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  cursor: pointer;
+}
+.agent-mode-opt:hover { background: var(--bg-hover); border-color: var(--border); }
+.agent-mode-dot {
+  flex: 0 0 auto;
+  width: 10px; height: 10px;
+  margin-top: 3px;
+  border-radius: 2px;
+  background: transparent;
+  border: 1px solid var(--text-muted);
+}
+.agent-mode-dot.green { border-color: #16a34a; }
+.agent-mode-dot.green.on { background: #16a34a; box-shadow: 0 0 6px rgba(22, 163, 74, 0.6); }
+.agent-mode-dot.cyan { border-color: #0891b2; }
+.agent-mode-dot.cyan.on { background: #0891b2; box-shadow: 0 0 6px rgba(8, 145, 178, 0.6); }
+.agent-mode-dot.amber { border-color: #d97706; }
+.agent-mode-dot.amber.on { background: #d97706; box-shadow: 0 0 6px rgba(217, 119, 6, 0.6); }
+.agent-mode-info { display: flex; flex-direction: column; gap: 1px; }
+.agent-mode-label { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--text); }
+.agent-mode-opt.selected .agent-mode-label { color: var(--amber); }
+.agent-mode-desc { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+.agent-mode-off { color: var(--text-muted); font-weight: 400; font-size: 10px; }
+
+/* Full-screen chat provider controls */
+.agent-chat-controls { display: flex; align-items: center; gap: 6px; }
+.agent-chat-controls .agent-mode { padding: 8px 12px; font-size: 11px; }
+.agent-model {
+  width: 140px;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.agent-model:focus { border-color: var(--amber-dim); outline: none; }
+.agent-chat-menu { bottom: 60px; right: 12px; }
 
 .agent-send {
   padding: 8px 12px;

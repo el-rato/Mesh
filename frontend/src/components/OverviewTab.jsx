@@ -55,15 +55,21 @@ export default function OverviewTab() {
   const [error, setError] = useState("");
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMode, setChatMode] = useState("AUTO");
+  const [chatProvider, setChatProvider] = useState("auto");
+  const [chatModel, setChatModel] = useState("");
   const [seed, setSeed] = useState("");
   const [seedId, setSeedId] = useState(0);
 
-  const openChat = (mode) => {
+  const openChat = (mode, provider, model) => {
     setChatMode(mode || "AUTO");
+    setChatProvider(provider || "auto");
+    setChatModel(model || "");
     setChatOpen(true);
   };
-  const askChat = (prompt, mode) => {
+  const askChat = (prompt, mode, provider, model) => {
     setChatMode(mode || "AUTO");
+    setChatProvider(provider || "auto");
+    setChatModel(model || "");
     setSeed(prompt);
     setSeedId((n) => n + 1);
     setChatOpen(true);
@@ -268,6 +274,9 @@ export default function OverviewTab() {
         seed={seed}
         seedId={seedId}
         initialMode={chatMode}
+        initialProvider={chatProvider}
+        initialModel={chatModel}
+        onProviderChange={setChatProvider}
       />
     </div>
   );

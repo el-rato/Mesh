@@ -1244,18 +1244,36 @@ class AgentChatRequest(BaseModel):
     messages: list[dict] = []
     market: str | None = None
     mode: str = "AUTO"
+    provider: str = "auto"
+    model: str = ""
 
 
 @app.post("/api/agent/chat")
 def agent_chat(body: AgentChatRequest) -> dict[str, object]:
     """Conversational markets assistant.
 
-    Uses a configured LLM (Gemini / Ollama) when available, otherwise a local
-    data-driven responder so the agent works with zero API keys.
+    Routes to the requested LLM provider (auto / gemini / ollama / local).
+    ``local`` always uses the built-in data-driven responder; ``auto`` uses any
+    configured LLM and falls back to local on failure. The used provider and
+    live provider availability are returned so the UI can show status.
     """
     from .agent_chat import chat as agent_chat_fn
 
-    return agent_chat_fn(body.messages, market=body.market, mode=body.mode)
+    return agent_chat_fn(
+        body.messages,
+        market=body.market,
+        mode=body.mode,
+        provider=body.provider,
+        model=body.model,
+    )
+
+
+@app.get("/api/agent/config")
+def agent_config() -> dict[str, object]:
+    """Available agent providers + whether their keys/servers are configured."""
+    from .agent_chat import config as agent_config
+
+    return agent_config()
 
 
 @app.get("/api/analyze")

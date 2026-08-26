@@ -2,12 +2,60 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import urllib.request
+from pathlib import Path
 
 from .config import settings
 from .db import Database
 
 logger = logging.getLogger(__name__)
+
+#: Known-good Gemini model ids tried in order as a fallback if the configured
+#: (or user-selected) model name is no longer valid.
+_GEMINI_FALLBACK_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+]
+
+_ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
+
+
+def _load_env() -> dict[str, str]:
+    """Re-read the project `.env` on every call so a key added while the server
+    is running is detected without a restart. Falls back to the frozen settings.
+    """
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(dotenv_path=_ENV_FILE, override=True)
+    except Exception:  # dotenv optional; env vars still work
+        pass
+    return {
+        "gemini_key": os.getenv("GEMINI_API_KEY") or settings.gemini_api_key or "",
+        "gemini_model": os.getenv("GEMINI_MODEL") or settings.gemini_model,
+        "ollama_base": os.getenv("OLLAMA_BASE_URL") or settings.ollama_base_url,
+        "ollama_model": os.getenv("OLLAMA_MODEL") or settings.ollama_model,
+        "opencode_base": os.getenv("OPENCODE_BASE_URL") or settings.opencode_base_url or "",
+        "opencode_key": os.getenv("OPENCODE_API_KEY") or settings.opencode_api_key or "",
+        "opencode_model": os.getenv("OPENCODE_MODEL") or settings.opencode_model,
+    }
+
+
+def config() -> dict[str, object]:
+    """What the agent can currently use, for the UI's provider selector."""
+    c = _load_env()
+    return {
+        "providers": ["auto", "gemini", "ollama", "opencode", "local"],
+        "default_provider": "auto",
+        "gemini_configured": bool(c["gemini_key"]),
+        "gemini_model": c["gemini_model"],
+        "ollama_configured": bool(c["ollama_base"]),
+        "ollama_model": c["ollama_model"],
+        "opencode_configured": bool(c["opencode_base"] and c["opencode_key"]),
+        "opencode_model": c["opencode_model"],
+    }
 
 
 def _gather_context(db: Database, market: str | None) -> dict:
@@ -136,9 +184,37 @@ def _call_ollama(prompt: str, base_url: str, model: str) -> str | None:
     return (data.get("response") or "").strip() or None
 
 
-def _try_llm(
-    history: list[dict], context: dict, market: str | None
-) -> str | None:
+def _call_openode_chat(prompt: str, base_url: str, api_key: str, model: str) -> str | None:
+    """OpenCode GO is an OpenAI-compatible chat endpoint. POST to /chat/completions."""
+    import httpx
+
+    url = base_url.rstrip("/")
+    if not url.endswith("/chat/completions"):
+        url = url + "/chat/completions"
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 2048,
+    }
+    with httpx.Client(timeout=60, follow_redirects=True) as client:
+        resp = client.post(
+            url,
+            json=body,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    try:
+        return (data["choices"][0]["message"]["content"] or "").strip() or None
+    except (KeyError, IndexError, TypeError):
+        logger.warning("OpenCode GO returned an unexpected shape: %s", data)
+        return None
+
+
+def _prompt(history: list[dict], context: dict) -> str:
     system = (
         "You are StockVerdict AI, a warm but sharp markets assistant embedded in a "
         "trading terminal. Answer concisely and in plain language. Use the supplied "
@@ -156,34 +232,83 @@ def _try_llm(
         + "\n".join(f"- {n.get('title','')}" for n in context["news"][:10])
     )
     convo = "\n".join(f"{m['role']}: {m['content']}" for m in history)
-    prompt = f"{system}\n\nCONTEXT:\n{ctx_blob}\n\nCONVERSATION:\n{convo}\nassistant:"
+    return f"{system}\n\nCONTEXT:\n{ctx_blob}\n\nCONVERSATION:\n{convo}\nassistant:"
 
-    if settings.gemini_api_key:
+
+def _try_gemini(prompt: str, api_key: str, model: str) -> str | None:
+    from google import genai
+
+    client = genai.Client(api_key=api_key)
+    candidates = [m for m in [model, *_GEMINI_FALLBACK_MODELS] if m]
+    last_err: Exception | None = None
+    for m in candidates:
         try:
-            from google import genai
+            resp = client.models.generate_content(model=m, contents=prompt)
+            text = (resp.text or "").strip()
+            if text:
+                return text
+        except Exception as exc:  # noqa: BLE001 - try the next candidate model
+            last_err = exc
+            logger.debug("Gemini model %s failed: %s", m, exc)
+    if last_err is not None:
+        logger.warning("Gemini chat failed on all models: %s", last_err)
+    return None
 
-            client = genai.Client(api_key=settings.gemini_api_key)
-            resp = client.models.generate_content(
-                model=settings.gemini_model, contents=prompt
+
+def _try_llm(
+    history: list[dict],
+    context: dict,
+    provider: str = "auto",
+    model: str = "",
+) -> tuple[str, str] | None:
+    """Try the requested provider(s) and return ``(reply, provider_name)``."""
+    p = (provider or "auto").lower()
+    c = _load_env()
+    prompt = _prompt(history, context)
+
+    if p in ("auto", "gemini") and c["gemini_key"]:
+        try:
+            reply = _try_gemini(prompt, c["gemini_key"], model or c["gemini_model"])
+            if reply:
+                return reply, "gemini"
+        except Exception as exc:  # pragma: no cover - import/deps
+            logger.warning("Gemini path failed: %s", exc)
+
+    if p in ("auto", "ollama") and c["ollama_base"]:
+        try:
+            reply = _call_ollama(prompt, c["ollama_base"], model or c["ollama_model"])
+            if reply:
+                return reply, "ollama"
+        except Exception as exc:  # pragma: no cover - local server
+            logger.warning("Ollama path failed: %s", exc)
+
+    if p in ("auto", "opencode") and c["opencode_base"] and c["opencode_key"]:
+        try:
+            reply = _call_openode_chat(
+                prompt, c["opencode_base"], c["opencode_key"], model or c["opencode_model"]
             )
-            return (resp.text or "").strip() or None
-        except Exception as exc:  # pragma: no cover - depends on creds/network
-            logger.warning("Gemini chat failed, falling back: %s", exc)
-
-    if settings.ollama_base_url:
-        try:
-            return _call_ollama(prompt, settings.ollama_base_url, settings.ollama_model)
-        except Exception as exc:  # pragma: no cover - depends on local server
-            logger.warning("Ollama chat failed, falling back: %s", exc)
+            if reply:
+                return reply, "opencode"
+        except Exception as exc:  # pragma: no cover - network/creds
+            logger.warning("OpenCode GO path failed: %s", exc)
 
     return None
 
 
 def chat(
-    messages: list[dict], market: str | None = None, mode: str = "AUTO"
+    messages: list[dict],
+    market: str | None = None,
+    mode: str = "AUTO",
+    provider: str = "auto",
+    model: str = "",
 ) -> dict:
-    """Respond to a chat turn. Uses an LLM when configured, else a local
-    data-driven responder so the agent always works offline."""
+    """Respond to a chat turn.
+
+    Routes to the requested LLM provider (gemini / ollama / local / auto);
+    ``local`` always uses the data-driven responder, ``auto`` tries any
+    configured LLM then falls back. Both the used provider and the available
+    provider config are returned so the UI can show live status.
+    """
     db = Database(settings.db_path)
     ctx = _gather_context(db, market)
     last_user = ""
@@ -192,10 +317,19 @@ def chat(
             last_user = m.get("content", "")
             break
 
-    reply = _try_llm(messages, ctx, market)
-    provider = "llm"
+    used = "local"
+    reply: str | None = None
+    if (provider or "auto").lower() != "local":
+        llm = _try_llm(messages, ctx, provider or "auto", model or "")
+        if llm:
+            reply, used = llm
+
     if not reply:
         reply = _local_respond(last_user, ctx, market, mode or "AUTO")
-        provider = "local"
 
-    return {"role": "assistant", "content": reply, "provider": provider}
+    return {
+        "role": "assistant",
+        "content": reply,
+        "provider": used,
+        "available": config(),
+    }
