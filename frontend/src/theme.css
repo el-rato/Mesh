@@ -3668,8 +3668,87 @@ button.ghost {
 .ov-news-item:last-child { border-bottom: none; }
 .ov-news-item:hover .ov-news-title { color: var(--amber); }
 .ov-news-title { color: var(--text); font-family: var(--mono); font-size: 12px; line-height: 1.45; }
+.ov-news-summary {
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  margin-top: 3px;
+  opacity: 0.92;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .ov-news-meta { display: flex; gap: 8px; font-size: 10px; margin-top: 4px; }
 .ov-news-tk { color: var(--cyan); }
+.ov-watch-add { display: flex; gap: 6px; margin-bottom: 8px; }
+.ov-watch-add .ov-watch-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 5px 8px;
+}
+.ov-watch-add .ov-watch-input:focus { outline: none; border-color: var(--amber); }
+.ov-watch-add .ov-watch-market {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 5px 4px;
+}
+.ov-watch-addbtn {
+  background: var(--amber);
+  border: none;
+  border-radius: 4px;
+  color: #0b0e14;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ov-watch-addbtn:hover { filter: brightness(1.12); }
+.ov-watch-x {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px;
+}
+.ov-watch-x:hover { color: var(--bear); }
+.ov-hist-list { display: flex; flex-direction: column; }
+.ov-hist-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.ov-hist-item:last-child { border-bottom: none; }
+.ov-hist-item:hover { background: var(--bg-hover); }
+.ov-hist-item:hover .ov-hist-title { color: var(--amber); }
+.ov-hist-title {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-hist-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; white-space: nowrap; }
 .ov-watch-item, .ov-active-item {
   display: flex;
   align-items: center;
@@ -3739,6 +3818,46 @@ button.ghost {
 .agent-io { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
 .agent-io.green { background: #16a34a; }
 .agent-io.blue { background: #2563eb; }
+/* Search-mode toggle buttons (blue = deep search, green = low-token search). */
+.agent-io-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 3px 7px;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.agent-io-btn .agent-io.dot { width: 7px; height: 7px; border-radius: 2px; opacity: 0.45; }
+.agent-io-btn.green .agent-io.dot { background: #16a34a; }
+.agent-io-btn.blue .agent-io.dot { background: #2563eb; }
+.agent-io-btn:hover { opacity: 1; color: var(--text); border-color: var(--text-muted); }
+.agent-io-btn:focus-visible { outline: 1px solid var(--amber); outline-offset: 1px; }
+.agent-io-btn.green.on {
+  opacity: 1;
+  color: #16a34a;
+  border-color: #16a34a;
+  box-shadow: 0 0 6px rgba(22, 163, 74, 0.35);
+}
+.agent-io-btn.green.on .agent-io.dot { opacity: 1; box-shadow: 0 0 5px #16a34a; }
+.agent-io-btn.blue.on {
+  opacity: 1;
+  color: #4f8bff;
+  border-color: #2563eb;
+  box-shadow: 0 0 6px rgba(37, 99, 235, 0.4);
+}
+.agent-io-btn.blue.on .agent-io.dot { opacity: 1; box-shadow: 0 0 5px #2563eb; }
+.agent-search-flag { font-style: normal; font-weight: 700; }
+.agent-search-flag.blue { color: #4f8bff; }
+.agent-search-flag.green { color: #16a34a; }
+.agent-chat-search { display: inline-flex; gap: 5px; margin-left: 10px; }
 
 .agent-msgs {
   display: flex;
@@ -4035,6 +4154,7 @@ button.ghost {
   transition: background 0.12s ease;
 }
 .agent-launcher:hover { background: var(--bg-hover); }
+.agent-launcher { cursor: pointer; user-select: none; }
 .agent-input-static {
   flex: 1 1 auto;
   padding: 8px 12px;

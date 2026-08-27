@@ -20,12 +20,19 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any, Callable
 
 from .config import settings
 from .db import Database
 
 logger = logging.getLogger(__name__)
+
+#: Shared browser user-agent for direct HTTP search calls (Yahoo search API).
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +159,123 @@ def tool_search(args: dict) -> dict:
 
     results = instruments.search_universe(query, limit=limit, market_filter=market)
     return {"query": query, "count": len(results), "results": results}
+
+
+# ---------------------------------------------------------------------------
+# Fincept-style broad search (worldwide assets + live news)
+# ---------------------------------------------------------------------------
+# The local `search_stocks` tool only matches the configured universe, which is
+# far too rigid for open-ended agent questions. This tool mirrors Fincept
+# Terminal's dynamic asset/news search: Yahoo's worldwide finance search API
+# resolves ANY ticker/company/asset across global exchanges and returns related
+# live news in one call; Google News RSS is the fallback when Yahoo is blocked.
+
+_YAHOO_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
+_SEARCH_CACHE: dict[str, tuple[float, dict]] = {}
+_SEARCH_CACHE_TTL = 300  # 5 minutes
+
+
+def _yahoo_search(query: str, quotes_count: int, news_count: int) -> dict | None:
+    import httpx
+
+    try:
+        with httpx.Client(
+            timeout=12,
+            follow_redirects=True,
+            headers={"User-Agent": USER_AGENT},
+        ) as client:
+            resp = client.get(
+                _YAHOO_SEARCH_URL,
+                params={
+                    "q": query,
+                    "quotesCount": quotes_count,
+                    "newsCount": news_count,
+                    "lang": "en-US",
+                    "region": "US",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:  # noqa: BLE001 - network/parse safety
+        logger.warning("Yahoo search failed for %r: %s", query, exc)
+        return None
+    quotes = [
+        {
+            "symbol": q.get("symbol", ""),
+            "name": (q.get("shortname") or q.get("longname") or "").strip(),
+            "exchange": q.get("exchDisp") or q.get("exchange") or "",
+            "type": q.get("quoteType", ""),
+        }
+        for q in (data.get("quotes") or [])
+        if q.get("symbol")
+    ]
+    news = [
+        {
+            "title": (n.get("title") or "").strip(),
+            "publisher": n.get("publisher", ""),
+            "url": n.get("link", ""),
+            "published_at": "",
+        }
+        for n in (data.get("news") or [])
+        if n.get("title")
+    ]
+    return {"quotes": quotes, "news": news}
+
+
+def _google_news_search(query: str, limit: int) -> list[dict]:
+    from .sources import fetch_google_news
+
+    arts = fetch_google_news(query, "US")
+    return [
+        {
+            "title": a.title,
+            "publisher": a.source or "Google News",
+            "url": a.url,
+            "published_at": a.published_at,
+        }
+        for a in arts[:limit]
+    ]
+
+
+def tool_web_search(args: dict) -> dict:
+    """Fincept-style worldwide asset + news search for ANY query.
+
+    Combines Yahoo Finance's global search API (every exchange/asset class)
+    with a Google News fallback, so the agent can resolve companies, tickers,
+    ETFs, FX, crypto and themes well beyond the terminal's own universe.
+    """
+    query = str(args.get("query", "")).strip()
+    limit = max(1, min(int(args.get("limit", 8)), 20))
+    if not query:
+        return {"error": "query is required"}
+
+    now = time.time()
+    key = f"{query.lower()}|{limit}"
+    cached = _SEARCH_CACHE.get(key)
+    if cached and now < cached[0]:
+        return dict(cached[1], cached=True)
+
+    result: dict = {"query": query, "engine": "fincept_web"}
+    y = _yahoo_search(query, quotes_count=limit, news_count=limit)
+    if y is not None:
+        result["assets"] = y["quotes"]
+        result["news"] = y["news"]
+    else:
+        result["assets"] = []
+        result["news"] = []
+    if not result["news"]:
+        result["news"] = _google_news_search(query, limit)
+        if result["assets"]:
+            result["engine"] = "yahoo+google_news"
+        else:
+            result["engine"] = "google_news"
+    elif result["assets"]:
+        result["engine"] = "yahoo"
+
+    result["asset_count"] = len(result["assets"])
+    result["news_count"] = len(result["news"])
+    _SEARCH_CACHE[key] = (now + _SEARCH_CACHE_TTL, result)
+    return result
 
 
 def tool_get_verdict(args: dict) -> dict:
@@ -307,6 +431,118 @@ def tool_reddit(args: dict) -> dict:
     return {"count": len(recs), "recommendations": [r.as_dict() for r in recs]}
 
 
+def tool_list_themes(args: dict) -> dict:
+    """List the thematic/sector baskets the agent can analyze as a rotation."""
+    from .strategy import list_themes
+
+    return {"themes": list_themes()}
+
+
+def tool_research_ticker(args: dict) -> dict:
+    """Deep-dive RESEARCH brief for one ticker (Researcher layer).
+
+    Gathers the stored committee verdict, recent news as evidence, and 13F
+    institutional activity, then returns a ResearchBrief-style structured pack:
+    catalysts, risks, bull/bear evidence, provenance, plus the committee score.
+    Use this when the user wants the *why* behind a name inside a strategy.
+    """
+    market = str(args.get("market", "")).upper()
+    ticker = str(args.get("ticker", "")).upper()
+    company = str(args.get("company", ""))
+    if not ticker:
+        return {"error": "ticker is required"}
+    db = _db()
+    if not market:
+        secs = [s for s in db.all_securities() if s["ticker"].upper() == ticker]
+        market = secs[0]["market"] if secs else ""
+    if not market:
+        return {"error": f"Could not resolve a market for ticker {ticker}. Provide 'market'."}
+
+    rows = db.latest_verdicts(market=market)
+    vrow = next((r for r in rows if r["ticker"].upper() == ticker), None)
+    news = db.recent_news(market, ticker, limit=10)
+    evidence = []
+    for n in news:
+        score = 0.0
+        try:
+            score = float(n.get("sentiment_score") or 0.0)
+        except (TypeError, ValueError):
+            score = 0.0
+        evidence.append((n.get("title", ""), n.get("source", ""), n.get("sentiment_label", "") or "", score))
+    inst = None
+    try:
+        from .institutional import ticker_institutional
+
+        inst = ticker_institutional(ticker, db)
+    except Exception:
+        inst = None
+
+    from . import research
+
+    brief = research.build_brief(
+        ticker=ticker,
+        company=company or (vrow or {}).get("company", ""),
+        market=market,
+        news_score=(vrow or {}).get("news_score"),
+        news_label=(vrow or {}).get("reason", ""),
+        article_count=len(news),
+        evidence=evidence,
+        institutional=inst,
+    )
+    from .strategy import _committee_score
+
+    comp = {
+        "news_score": (vrow or {}).get("news_score"),
+        "combined_score": (vrow or {}).get("combined_score"),
+        "lstm_probability_up": (vrow or {}).get("lstm_probability_up"),
+        "technical_score": (vrow or {}).get("technical_score"),
+    }
+    cs, cv = _committee_score(comp)
+    return {
+        "ticker": ticker,
+        "market": market,
+        "verdict": (vrow or {}).get("verdict"),
+        "committee_score": cs,
+        "committee_verdict": cv,
+        "brief": brief.as_dict(),
+        "institutional": inst,
+    }
+
+
+def tool_market_regime(args: dict) -> dict:
+    """Current market REGIME derived from stored index snapshots (S&P, VIX).
+
+    Returns the regime label (risk-on / risk-off / choppy, with a volatility tag)
+    so the agent can frame a strategy within the prevailing macro tape.
+    """
+    from .strategy import _market_regime
+
+    return _market_regime(_db())
+
+
+def tool_analyze_rotation(args: dict) -> dict:
+    """Analyze a sector/theme rotation: basket, breadth, leadership, setup, watch.
+
+    Given a theme (e.g. 'Healthcare & Biotech', 'semiconductors', 'AI') or an
+    explicit list of tickers, returns a structured rotation snapshot the agent
+    uses to formulate a trading strategy (setup + what to watch).
+    """
+    theme = str(args.get("theme", "")).strip()
+    market = str(args.get("market", "")).upper() or None
+    tickers = args.get("tickers") or []
+    if isinstance(tickers, str):
+        tickers = [t.strip() for t in tickers.split(",") if t.strip()]
+    analyze = bool(args.get("analyze", False))
+    from .strategy import analyze_rotation
+
+    try:
+        result = analyze_rotation(theme=theme, market=market, tickers=list(tickers), analyze=analyze)
+    except Exception as exc:
+        logger.warning("Rotation analysis failed: %s", exc)
+        return {"error": str(exc)}
+    return result
+
+
 #: Each tool: name -> (handler, human description, parameter schema).
 TOOLS: dict[str, tuple[Callable[[dict], dict], str, dict]] = {
     "get_news": (
@@ -341,6 +577,19 @@ TOOLS: dict[str, tuple[Callable[[dict], dict], str, dict]] = {
             "query": "Search term, e.g. 'Tesla' or 'AAPL'. REQUIRED.",
             "market": "Optional market filter.",
             "limit": "Max results (default 8).",
+        },
+    ),
+    "web_search": (
+        tool_web_search,
+        "FINCEPT-STYLE worldwide search across ALL global exchanges and live news "
+        "for ANY company, ticker, ETF, FX, crypto or theme — NOT limited to the "
+        "local universe. Returns matching assets (symbol, name, exchange, type) "
+        "and related news headlines with links. Use this FIRST whenever the user "
+        "asks about a security, company or market topic that CONTEXT and the "
+        "other tools cannot resolve, or when they want the broadest latest news.",
+        {
+            "query": "Free-form search text, e.g. 'rare earth miners', 'Tesla', 'ASML'. REQUIRED.",
+            "limit": "Max assets + max news items (default 8, cap 20).",
         },
     ),
     "get_verdict": (
@@ -397,6 +646,46 @@ TOOLS: dict[str, tuple[Callable[[dict], dict], str, dict]] = {
             "subreddits": "Comma-separated subreddit list (optional).",
             "limit": "Per-subreddit limit (default 30).",
             "time_filter": "day/week/month (default day).",
+        },
+    ),
+    "list_themes": (
+        tool_list_themes,
+        "List the thematic/sector baskets available for rotation analysis "
+        "(e.g. 'Healthcare & Biotech', 'semiconductors', 'AI', 'energy').",
+        {},
+    ),
+    "research_ticker": (
+        tool_research_ticker,
+        "Deep-dive RESEARCH brief for a single ticker: committee verdict, news "
+        "evidence, catalysts/risks, and 13F institutional activity (Researcher "
+        "layer). Use it to explain the *why* behind a name when building or "
+        "defending a strategy.",
+        {
+            "market": "Market code. Optional if ticker is unique in the universe.",
+            "ticker": "Ticker symbol. REQUIRED.",
+            "company": "Optional company name to aid resolution.",
+        },
+    ),
+    "market_regime": (
+        tool_market_regime,
+        "Current market REGIME (risk-on / risk-off / choppy, with volatility tag) "
+        "derived from stored index snapshots. Use to frame a strategy within the "
+        "prevailing macro tape.",
+        {},
+    ),
+    "analyze_rotation": (
+        tool_analyze_rotation,
+        "Analyze a sector/theme ROTATION and formulate the building blocks of a "
+        "trading strategy. Given a theme name (or explicit tickers), returns the "
+        "basket, breadth (bull/bear/neutral), leadership/laggards, average "
+        "momentum & news sentiment, and rules-based 'setup' + 'what to watch' "
+        "bullets. USE THIS when the user asks to analyze a rotation, sector, "
+        "industry, or to formulate a trading strategy/setup/thesis.",
+        {
+            "theme": "Theme/sector name, e.g. 'Healthcare & Biotech', 'semiconductors'. REQUIRED if no tickers.",
+            "market": "Optional market filter (e.g. NYSE).",
+            "tickers": "Optional explicit list of tickers (or 'MARKET:TICKER') to build a custom basket.",
+            "analyze": "true to force fresh live verdicts when stored coverage is thin (default false).",
         },
     ),
 }

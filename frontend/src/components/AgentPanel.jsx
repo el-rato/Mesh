@@ -24,6 +24,9 @@ export default function AgentPanel({ onOpen, onAsk }) {
   const [model, setModel] = useState("");
   const [provOpen, setProvOpen] = useState(false);
   const [cfg, setCfg] = useState(null);
+  // Search style toggles: blue = deep search, green = low-token search.
+  // Mutually exclusive; both off = the default balanced search.
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     agentConfig().then(setCfg).catch(() => {});
@@ -31,13 +34,15 @@ export default function AgentPanel({ onOpen, onAsk }) {
 
   const providerLabel = PROVIDERS.find((p) => p.id === provider)?.label || "Auto";
 
+  const toggleSearch = (mode) => setSearch((cur) => (cur === mode ? "" : mode));
+
   const open = () => {
     setProvOpen(false);
-    onOpen(tab, provider, model);
+    onOpen(tab, provider, model, search);
   };
   const ask = (prompt) => {
     setProvOpen(false);
-    onAsk(prompt, tab, provider, model);
+    onAsk(prompt, tab, provider, model, search);
   };
 
   const configured = (id) => {
@@ -59,14 +64,44 @@ export default function AgentPanel({ onOpen, onAsk }) {
       </div>
 
       {/* Prompt launcher */}
-      <button className="agent-prompt agent-launcher" onClick={open}>
+      <div
+        className="agent-prompt agent-launcher"
+        role="button"
+        tabIndex={0}
+        onClick={open}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") open();
+        }}
+      >
         <span className="agent-caret">❯</span>
-        <span className="agent-hint">Ask your Agent to start your workflow</span>
-        <span className="agent-icons">
-          <span className="agent-io green" />
-          <span className="agent-io blue" />
+        <span className="agent-hint">
+          Ask your Agent to start your workflow
+          {search === "deep" && <em className="agent-search-flag blue"> · DEEP SEARCH</em>}
+          {search === "low" && <em className="agent-search-flag green"> · LOW-TOKEN SEARCH</em>}
         </span>
-      </button>
+        <span className="agent-icons">
+          <button
+            className={`agent-io-btn green ${search === "low" ? "on" : ""}`}
+            title="Low-token search: fast, minimal tool calls, ultra-concise answers"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleSearch("low");
+            }}
+          >
+            <span className="agent-io dot" /> LOW
+          </button>
+          <button
+            className={`agent-io-btn blue ${search === "deep" ? "on" : ""}`}
+            title="Deep search: exhaustive multi-source research across the terminal and the web"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleSearch("deep");
+            }}
+          >
+            <span className="agent-io dot" /> DEEP
+          </button>
+        </span>
+      </div>
 
       {/* Command bar launcher */}
       <div className="agent-inputbar">

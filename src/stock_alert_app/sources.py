@@ -101,6 +101,9 @@ GLOBAL_RSS_FEEDS: list[dict[str, str]] = [
     {"url": "https://www.bankofengland.co.uk/rss/news", "source": "BOE", "category": "REGULATORY"},
 
     # Major financial media
+    {"url": "https://feeds.bloomberg.com/markets/news.rss", "source": "BLOOMBERG", "category": "MARKETS"},
+    {"url": "https://feeds.bloomberg.com/technology/news.rss", "source": "BLOOMBERG", "category": "TECH"},
+    {"url": "https://feeds.bloomberg.com/politics/news.rss", "source": "BLOOMBERG", "category": "GEOPOLITICS"},
     {"url": "https://feeds.marketwatch.com/marketwatch/topstories/", "source": "MARKETWATCH", "category": "MARKETS"},
     {"url": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114", "source": "CNBC", "category": "MARKETS"},
     {"url": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100727362", "source": "CNBC", "category": "MARKETS"},

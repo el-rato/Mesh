@@ -1,5 +1,6 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { fetchJSON, newsFeed, watchlist, tickerStrip } from "../api.js";
+import { loadSessions, deleteSession } from "../agentHistory.js";
 import { useApp } from "../App.jsx";
 import { verdictBadge, verdictClass, SectionHeader, StatusIndicator } from "./ui.jsx";
 import SecurityLink from "./SecurityLink.jsx";
@@ -47,7 +48,7 @@ const SHORTCUTS = [
 ];
 
 export default function OverviewTab() {
-  const { indexes, refreshToken, openDrawer, userEmail, username } = useApp();
+  const { indexes, refreshToken, openDrawer, userEmail, username, addToPortfolio, removeFromPortfolio, markets } = useApp();
   const [verdicts, setVerdicts] = useState([]);
   const [news, setNews] = useState([]);
   const [watch, setWatch] = useState([]);
@@ -59,20 +60,57 @@ export default function OverviewTab() {
   const [chatModel, setChatModel] = useState("");
   const [seed, setSeed] = useState("");
   const [seedId, setSeedId] = useState(0);
+  const [searchMode, setSearchMode] = useState("");
+  const [sessions, setSessions] = useState(() => loadSessions());
+  const [restore, setRestore] = useState(null);
+  const restoreNonce = useRef(0);
+  const [wlTicker, setWlTicker] = useState("");
+  const [wlMarket, setWlMarket] = useState("US");
+  const [wlBusy, setWlBusy] = useState(false);
 
-  const openChat = (mode, provider, model) => {
+  useEffect(() => {
+    if (markets?.length && !markets.some((m) => m.code === wlMarket)) {
+      setWlMarket(markets[0].code);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markets]);
+
+  const openChat = (mode, provider, model, search) => {
     setChatMode(mode || "AUTO");
     setChatProvider(provider || "auto");
     setChatModel(model || "");
+    setSearchMode(search || "");
     setChatOpen(true);
   };
-  const askChat = (prompt, mode, provider, model) => {
+  const askChat = (prompt, mode, provider, model, search) => {
     setChatMode(mode || "AUTO");
     setChatProvider(provider || "auto");
     setChatModel(model || "");
+    setSearchMode(search || "");
     setSeed(prompt);
     setSeedId((n) => n + 1);
     setChatOpen(true);
+  };
+
+  const closeChat = useCallback(() => {
+    setChatOpen(false);
+    setSeed("");
+    setSessions(loadSessions());
+  }, []);
+
+  const openSession = (s) => {
+    setChatMode(s.mode || "AUTO");
+    setChatProvider(s.provider || "auto");
+    setSeed("");
+    restoreNonce.current += 1;
+    setRestore({ session: s, nonce: restoreNonce.current });
+    setChatOpen(true);
+  };
+
+  const removeSession = (e, id) => {
+    e.stopPropagation();
+    deleteSession(id);
+    setSessions(loadSessions());
   };
 
   const loadVerdicts = useCallback(() => {
@@ -82,9 +120,13 @@ export default function OverviewTab() {
       .catch((e) => setError(e.message));
   }, []);
 
+  const loadWatch = useCallback(() => {
+    watchlist().then(setWatch).catch(() => {});
+  }, []);
+
   const loadRails = useCallback(() => {
     newsFeed(10).then(setNews).catch(() => {});
-    watchlist().then(setWatch).catch(() => {});
+    loadWatch();
     tickerStrip()
       .then((rows) =>
         setActive(
@@ -95,7 +137,26 @@ export default function OverviewTab() {
         )
       )
       .catch(() => {});
-  }, []);
+  }, [loadWatch]);
+
+  const addWatch = () => {
+    const tk = wlTicker.trim().toUpperCase();
+    if (!tk || wlBusy) return;
+    setWlBusy(true);
+    addToPortfolio(wlMarket, tk);
+    setWlTicker("");
+    // Give the backend a beat to register + analyse, then refresh the list.
+    setTimeout(() => {
+      watchlist().then(setWatch).catch(() => {});
+      setWlBusy(false);
+    }, 1200);
+  };
+
+  const removeWatch = (e, w) => {
+    e.stopPropagation();
+    removeFromPortfolio(w.market, w.ticker);
+    setWatch((list) => list.filter((x) => !(x.market === w.market && x.ticker === w.ticker)));
+  };
 
   useEffect(() => {
     loadVerdicts();
@@ -210,6 +271,9 @@ export default function OverviewTab() {
                     return (
                       <a key={`${n.url}-${i}`} className="ov-news-item" href={n.url} target="_blank" rel="noopener noreferrer">
                         <div className="ov-news-title">{n.title}</div>
+                        {n.summary && n.summary.toLowerCase() !== (n.title || "").toLowerCase() && (
+                          <div className="ov-news-summary">{n.summary}</div>
+                        )}
                         <div className="ov-news-meta dim">
                           {n.source}
                           {!isGlobal && (n.ticker || n.security_id) && (
@@ -228,6 +292,30 @@ export default function OverviewTab() {
 
             <div className="ov-rail-box">
               <div className="ov-panel-label">WATCHLIST</div>
+              <div className="ov-watch-add">
+                <select
+                  className="ov-watch-market"
+                  value={wlMarket}
+                  onChange={(e) => setWlMarket(e.target.value)}
+                  title="Market"
+                >
+                  {(markets?.length ? markets : [{ code: "US", name: "United States" }]).map((m) => (
+                    <option key={m.code} value={m.code}>{m.code}</option>
+                  ))}
+                </select>
+                <input
+                  className="ov-watch-input"
+                  placeholder="TICKER (e.g. AAPL)"
+                  value={wlTicker}
+                  onChange={(e) => setWlTicker(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") addWatch();
+                  }}
+                />
+                <button className="ov-watch-addbtn" onClick={addWatch} disabled={wlBusy}>
+                  {wlBusy ? "…" : "+ ADD"}
+                </button>
+              </div>
               {watch.length ? (
                 <div className="ov-watch-list">
                   {watch.slice(0, 6).map((w) => (
@@ -237,11 +325,31 @@ export default function OverviewTab() {
                       {w.verdict && (
                         <span className={`ov-watch-verdict ${verdictClass(w.verdict)}`}>{w.verdict}</span>
                       )}
+                      <button className="ov-watch-x" title={`Remove ${w.ticker} from watchlist`} onClick={(e) => removeWatch(e, w)}>✕</button>
                     </div>
                   ))}
                 </div>
               ) : (
                 <div className="empty">NO WATCHLIST ITEMS.</div>
+              )}
+            </div>
+
+            <div className="ov-rail-box">
+              <div className="ov-panel-label">AGENT HISTORY</div>
+              {sessions.length ? (
+                <div className="ov-hist-list">
+                  {sessions.map((s) => (
+                    <div key={s.id} className="ov-hist-item" onClick={() => openSession(s)} title="Reopen this agent session">
+                      <span className="ov-hist-title">{s.title || "Untitled session"}</span>
+                      <span className="ov-hist-meta dim">
+                        {String(s.updated_at || "").slice(0, 10)}
+                        <button className="ov-watch-x" title="Delete session" onClick={(e) => removeSession(e, s.id)}>✕</button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty">NO SAVED SESSIONS YET.</div>
               )}
             </div>
 
@@ -270,13 +378,16 @@ export default function OverviewTab() {
 
       <AgentChat
         open={chatOpen}
-        onClose={() => setChatOpen(false)}
+        onClose={closeChat}
         seed={seed}
         seedId={seedId}
         initialMode={chatMode}
         initialProvider={chatProvider}
         initialModel={chatModel}
+        initialSearch={searchMode}
         onProviderChange={setChatProvider}
+        restoreSession={restore?.session || null}
+        restoreNonce={restore?.nonce || 0}
       />
     </div>
   );

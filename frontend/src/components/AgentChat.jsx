@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { agentChat } from "../api.js";
+import { saveSession } from "../agentHistory.js";
 import { useApp } from "../App.jsx";
 
 function escapeHtml(s) {
@@ -30,12 +31,16 @@ export default function AgentChat({
   initialMode = "AUTO",
   initialProvider = "auto",
   initialModel = "",
+  initialSearch = "",
   onProviderChange,
+  restoreSession = null,
+  restoreNonce = 0,
 }) {
   const { market } = useApp();
   const [tab, setTab] = useState(initialMode || "AUTO");
   const [provider, setProvider] = useState(initialProvider || "auto");
   const [model, setModel] = useState(initialModel || "");
+  const [search, setSearch] = useState(initialSearch || "");
   const [messages, setMessages] = useState([{ role: "assistant", content: INTRO }]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -43,14 +48,27 @@ export default function AgentChat({
   const [provOpen, setProvOpen] = useState(false);
   const inputRef = useRef(null);
   const scrollRef = useRef(null);
+  const sessionRef = useRef(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+
+  // Restore a saved session from the overview history when requested.
+  useEffect(() => {
+    if (!restoreNonce || !restoreSession) return;
+    sessionRef.current = restoreSession.id;
+    setMessages(Array.isArray(restoreSession.messages) && restoreSession.messages.length
+      ? restoreSession.messages
+      : [{ role: "assistant", content: INTRO }]);
+    setUsed(restoreSession.provider || "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoreNonce]);
 
   useEffect(() => {
     if (initialMode && TABS.includes(initialMode.toUpperCase())) setTab(initialMode.toUpperCase());
     if (initialProvider) setProvider(initialProvider);
     if (initialModel) setModel(initialModel);
-  }, [initialMode, initialProvider, initialModel]);
+    setSearch(initialSearch || "");
+  }, [initialMode, initialProvider, initialModel, initialSearch]);
 
   // Focus the chat input only when the chat opens. Depending on `open` (not
   // `onClose`) means parent re-renders (new closure identity) never steal focus
@@ -78,9 +96,21 @@ export default function AgentChat({
       setInput("");
       setSending(true);
       try {
-        const res = await agentChat(next, market, tab, provider, model);
-        setMessages([...next, { role: "assistant", content: res.content || "" }]);
-        setUsed(res.provider || "");
+        const res = await agentChat(next, market, tab, provider, model, search);
+        const finalMsgs = [...next, { role: "assistant", content: res.content || "" }];
+        setMessages(finalMsgs);
+        const usedProvider = res.provider || provider;
+        setUsed(usedProvider);
+        if (!sessionRef.current) sessionRef.current = `sv-${Date.now()}`;
+        saveSession({
+          id: sessionRef.current,
+          title: (next.find((m) => m.role === "user")?.content || payload).slice(0, 64),
+          provider: usedProvider,
+          mode: tab,
+          search,
+          updated_at: new Date().toISOString(),
+          messages: finalMsgs,
+        });
       } catch (e) {
         setMessages([
           ...next,
@@ -90,7 +120,7 @@ export default function AgentChat({
         setSending(false);
       }
     },
-    [input, messages, sending, market, tab, provider, model]
+    [input, messages, sending, market, tab, provider, model, search]
   );
 
   useEffect(() => {
@@ -115,6 +145,22 @@ export default function AgentChat({
         <span className="agent-chat-status">
           <span className="dot" /> {sending ? "WORKING" : "READY"}
           {used && <em className="agent-chat-prov">· {used.toUpperCase()}</em>}
+          <span className="agent-chat-search">
+            <button
+              className={`agent-io-btn blue ${search === "deep" ? "on" : ""}`}
+              title="Deep search: exhaustive multi-source research"
+              onClick={() => setSearch((s) => (s === "deep" ? "" : "deep"))}
+            >
+              <span className="agent-io dot" /> DEEP
+            </button>
+            <button
+              className={`agent-io-btn green ${search === "low" ? "on" : ""}`}
+              title="Low-token search: fast and ultra-concise"
+              onClick={() => setSearch((s) => (s === "low" ? "" : "low"))}
+            >
+              <span className="agent-io dot" /> LOW
+            </button>
+          </span>
         </span>
         <button className="agent-chat-close" onClick={onClose} title="Close (Esc)">
           ✕
@@ -145,7 +191,11 @@ export default function AgentChat({
           </div>
         )}
         {started && used && (
-          <div className="agent-provider-foot dim">AGENT · {used.toUpperCase()} · {tab}</div>
+          <div className="agent-provider-foot dim">
+            AGENT · {used.toUpperCase()} · {tab}
+            {search === "deep" && " · DEEP SEARCH"}
+            {search === "low" && " · LOW-TOKEN SEARCH"}
+          </div>
         )}
       </div>
 

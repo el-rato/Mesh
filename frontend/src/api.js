@@ -215,11 +215,11 @@ export async function newsForTicker(market, ticker, { limit = 200, refresh = tru
   return fetchJSON(`/api/news?${qs.toString()}`);
 }
 
-export async function agentChat(messages, market = "", mode = "AUTO", provider = "auto", model = "") {
+export async function agentChat(messages, market = "", mode = "AUTO", provider = "auto", model = "", search = "") {
   return fetchJSON("/api/agent/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages, market: market || null, mode, provider, model }),
+    body: JSON.stringify({ messages, market: market || null, mode, provider, model, search }),
   });
 }
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sqlite3
@@ -458,6 +459,18 @@ CREATE TABLE IF NOT EXISTS index_snapshots (
 CREATE INDEX IF NOT EXISTS idx_agent_recs_generated ON agent_recommendations(generated_at);
 CREATE INDEX IF NOT EXISTS idx_news_ticker ON news_items(market, ticker);
 CREATE INDEX IF NOT EXISTS idx_verdicts_ticker ON verdicts(market, ticker);
+
+-- Cached chart history (read-through cache for /api/chart). Once a series is
+-- fetched from the live provider it is persisted here so the chart stays
+-- available even when the provider is rate-limited, unreachable, or returns no
+-- intraday data for a symbol.
+CREATE TABLE IF NOT EXISTS price_history (
+    symbol TEXT NOT NULL,
+    range_key TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (symbol, range_key)
+);
 """
 
 
@@ -1813,6 +1826,48 @@ class Database:
                        )"""
                 ).fetchall()
             return [dict(r) for r in rows]
+
+    # ---- Cached chart history (read-through cache for /api/chart) ----
+
+    def _ensure_price_history(self) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS price_history (
+                       symbol TEXT NOT NULL,
+                       range_key TEXT NOT NULL,
+                       fetched_at TEXT NOT NULL,
+                       payload TEXT NOT NULL DEFAULT '[]',
+                       PRIMARY KEY (symbol, range_key)
+                   )"""
+            )
+
+    def upsert_price_history(
+        self, symbol: str, range_key: str, rows: list[dict[str, Any]]
+    ) -> None:
+        self._ensure_price_history()
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO price_history (symbol, range_key, fetched_at, payload)
+                   VALUES (?, ?, ?, ?)""",
+                (symbol.upper(), range_key, utc_now(), json.dumps(rows, default=str)),
+            )
+
+    def get_price_history(
+        self, symbol: str, range_key: str
+    ) -> list[dict[str, Any]] | None:
+        self._ensure_price_history()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM price_history WHERE symbol = ? AND range_key = ?",
+                (symbol.upper(), range_key),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            data = json.loads(row["payload"])
+        except (ValueError, TypeError):
+            return None
+        return data if isinstance(data, list) else None
 
     def ticker_strip_snapshots(
         self, limit: int = 500, market: str | None = None

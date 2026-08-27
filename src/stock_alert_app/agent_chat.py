@@ -199,6 +199,83 @@ def _extract_security(text: str) -> tuple[str, str] | None:
     return None
 
 
+_ROTATION_RE = re.compile(r"\b(rotation|sector|industry|theme|setup|strateg|thesis|trade plan|what to watch|leader|laggard)\b", re.I)
+
+
+def _detect_market(text: str) -> str | None:
+    """Detect an explicit market code (BSE, LSE, TSE, XETRA, ...) in the request."""
+    from .markets import scan_market_codes
+
+    t = (text or "").upper()
+    for code in scan_market_codes(settings.markets_dir):
+        if re.search(r"\b" + re.escape(code) + r"\b", t):
+            return code
+    return None
+
+
+def _mentions_theme(text: str) -> bool:
+    """True if the request names a known thematic basket (word-bounded)."""
+    from .strategy import list_themes
+
+    low = (text or "").lower()
+    for name in list_themes()["themes"]:
+        if re.search(r"\b" + re.escape(name) + r"\b", low):
+            return True
+    return False
+
+
+def _local_rotation(theme: str, market: str | None) -> str | None:
+    """Build a readable rotation/strategy brief from the structured snapshot."""
+    from .strategy import analyze_rotation, list_themes
+
+    snap = analyze_rotation(theme=theme, market=market)
+    if snap.get("error"):
+        return None
+    if not snap.get("covered"):
+        return (
+            f"I resolved '{theme}' to a basket of {snap.get('basket_size', 0)} names "
+            f"(via {snap.get('resolved_from')}) but there's no analysis stored yet. "
+            "Run a refresh and ask again — I'll then break down the setup and what to watch."
+        )
+
+    lines = [f"## {snap['theme']} rotation"]
+    b = snap.get("breadth", {})
+    lines.append(
+        f"- Breadth: {b.get('bull')} bullish / {b.get('bear')} bearish / "
+        f"{b.get('neutral')} neutral ({int((b.get('pct_bull') or 0) * 100)}% bullish)."
+    )
+    comm = snap.get("committee", {})
+    if comm.get("verdict"):
+        lines.append(
+            f"- Investment Committee (LSTM/technical/news): {comm['verdict']} "
+            f"(avg {comm.get('avg_score'):+.2f}, {int((comm.get('pct_bull') or 0) * 100)}% bullish)."
+        )
+    reg = snap.get("regime", {})
+    if reg.get("label") not in (None, "unknown"):
+        lines.append(
+            f"- Market regime: {reg['label']} (S&P {reg.get('spx_change_pct')}%, VIX {reg.get('vix')})."
+        )
+    am = snap.get("avg_momentum")
+    if am is not None:
+        lines.append(f"- Avg 20-day momentum: {am:+.2%}.")
+    an = snap.get("avg_news")
+    if an is not None:
+        lines.append(f"- Avg news sentiment: {an:+.2f}.")
+    sm = snap.get("smart_money") or []
+    if sm:
+        names = ", ".join(f"{s['ticker']}({'+' if s['net'] > 0 else ''}{s['net']})" for s in sm[:4])
+        lines.append(f"- Smart-money (13F) flows: {names}.")
+    lines.append("")
+    lines.append("**Setup**")
+    for s in snap.get("setup", []):
+        lines.append(f"- {s}")
+    lines.append("")
+    lines.append("**What to watch**")
+    for s in snap.get("what_to_watch", []):
+        lines.append(f"- {s}")
+    return "\n".join(lines)
+
+
 def _local_respond_with_tools(
     text: str, ctx: dict, market: str | None, mode: str = "AUTO"
 ) -> str:
@@ -209,6 +286,50 @@ def _local_respond_with_tools(
     then formats it — so the offline agent also never has to bluff.
     """
     t = (text or "").lower()
+
+    # Rotation / sector / strategy requests (also triggered by naming a theme).
+    if _ROTATION_RE.search(t) or _mentions_theme(text):
+        from .strategy import list_themes
+
+        theme = (text or "").strip()
+        # Prefer a known theme whose words all appear in the request.
+        matched = [
+            name
+            for name in list_themes()["themes"]
+            if set(name.split()).issubset(set(theme.lower().split()))
+        ]
+        if not matched:
+            # Otherwise use the longest known theme that is a substring.
+            matched = [name for name in list_themes()["themes"] if name in theme.lower()]
+        if matched:
+            theme = max(matched, key=len)
+        mkt = _detect_market(text) or market
+        result = _local_rotation(theme, mkt)
+        if result:
+            return result
+
+    if any(k in t for k in ("research", "deep dive", "deepdive", "catalyst", "why", "brief", "thesis on")):
+        sec = _extract_security(text)
+        if sec:
+            res = run_tool("research_ticker", {"market": sec[0], "ticker": sec[1]})
+            r = res.get("result") or {}
+            brief = r.get("brief") or {}
+            if r.get("verdict") or brief.get("status") == "ok":
+                lines = [
+                    f"{sec[1]} ({sec[0]}): verdict **{r.get('verdict') or 'N/A'}**, "
+                    f"committee {r.get('committee_verdict')} ({r.get('committee_score')})."
+                ]
+                if brief.get("catalysts"):
+                    lines.append("\n**Catalysts**\n" + "\n".join(f"- {x}" for x in brief["catalysts"][:5]))
+                if brief.get("risks"):
+                    lines.append("\n**Risks**\n" + "\n".join(f"- {x}" for x in brief["risks"][:5]))
+                if r.get("institutional"):
+                    lines.append(
+                        f"\n**13F**: {r['institutional'].get('holding_funds', 0)} funds hold; net {r['institutional'].get('net', 0)} buys/sells."
+                    )
+                if not brief.get("catalysts") and not brief.get("risks"):
+                    lines.append("\nNo scored news evidence stored yet — run a refresh for a fuller brief.")
+                return "\n".join(lines)
 
     if any(k in t for k in ("news", "headline", "article", "happening", "latest", "report")):
         sec = _extract_security(text)
@@ -295,7 +416,27 @@ def _call_openode_chat(prompt: str, base_url: str, api_key: str, model: str) -> 
         return None
 
 
-def _prompt(history: list[dict], context: dict) -> str:
+def _prompt(history: list[dict], context: dict, search: str = "") -> str:
+    s = (search or "").lower()
+    if s == "deep":
+        style = (
+            "\n\nSEARCH MODE: DEEP SEARCH — the user wants an exhaustive answer. "
+            "Cast a wide net: use `web_search` (Fincept-style worldwide asset + news "
+            "search) for anything not fully covered by CONTEXT, and layer additional "
+            "tools (`refresh_news`, `global_news`, `research_ticker`, `scanner`, "
+            "`analyze_rotation`) as needed. Cross-check multiple sources, then give "
+            "a thorough, well-organised answer with short section headers and the "
+            "key facts behind every claim."
+        )
+    elif s == "low":
+        style = (
+            "\n\nSEARCH MODE: LOW-TOKEN — be extremely economical. Use at most ONE "
+            "tool call (prefer `web_search`) only if CONTEXT cannot answer at all. "
+            "Reply in at most 3 short sentences of plain text — no headers, no "
+            "bullet lists, no preamble."
+        )
+    else:
+        style = ""
     system = (
         "You are StockVerdict AI, a warm but sharp markets assistant embedded in a "
         "trading terminal. Answer concisely and in plain language. Use the supplied "
@@ -309,18 +450,39 @@ def _prompt(history: list[dict], context: dict) -> str:
         "then stop. You will receive TOOL_RESULT(name): <json>. Read it, call another "
         "tool if still missing data, or give the final answer once you have enough. "
         "Only call a tool when genuinely needed; if CONTEXT already answers the "
-        "question, answer directly without a TOOL_CALL.\n\n"
+        "question, answer directly without a TOOL_CALL."
+        + style
+        + "\n\n"
+        "STRATEGY / ROTATION — when the user asks you to analyze a rotation, "
+        "sector, or theme, or to formulate a trading strategy, setup, thesis, or "
+        "'what to watch' (e.g. 'Analyze the Healthcare & Biotech rotation — "
+        "describe the setup and what to watch'), reason like the terminal's "
+        "INVESTMENT COMMITTEE. Call `analyze_rotation` (run `list_themes` first if "
+        "unsure of the theme/market) — it already blends the multi-signal "
+        "Committee score (LSTM/technical/news, renormalized), breadth, leadership "
+        "vs laggards, 13F 'smart money' flows, and the market regime. You can pass "
+        "a `market` to scope a rotation to a specific exchange (BSE, LSE, TSE, "
+        "XETRA, HKEX) — the basket is derived from that market's own listings, so "
+        "rotations work in ANY supported market. Also call `market_regime` for the "
+        "macro tape and `research_ticker` to deep-dive a key name's catalysts/"
+        "risks. Then synthesize a clear strategy: describe the macro SETUP "
+        "(regime + Committee verdict + breadth + leadership), state the THESIS, and "
+        "give a concrete WHAT TO WATCH list (confirmation triggers, invalidation "
+        "levels, institutional-flow risk, key catalysts). Cite specific tickers "
+        "and the data behind your read — never invent prices or verdicts that "
+        "aren't in the tool results.\n\n"
         + tools_system_text()
     )
+    n_verdicts, n_news = (40, 15) if s == "deep" else (10, 5) if s == "low" else (25, 10)
     ctx_blob = (
         "VERDICTS (market, ticker, verdict, confidence):\n"
         + "\n".join(
             f"- {v.get('market','')} {v.get('ticker','')} {v.get('verdict','')} "
             f"{int(round(float(v.get('confidence',0) or 0)*100))}%"
-            for v in context["verdicts"][:25]
+            for v in context["verdicts"][:n_verdicts]
         )
         + "\n\nRECENT NEWS:\n"
-        + "\n".join(f"- {n.get('title','')}" for n in context["news"][:10])
+        + "\n".join(f"- {n.get('title','')}" for n in context["news"][:n_news])
     )
     convo = "\n".join(f"{m['role']}: {m['content']}" for m in history)
     return f"{system}\n\nCONTEXT:\n{ctx_blob}\n\nCONVERSATION:\n{convo}\nassistant:"
@@ -378,13 +540,16 @@ def _run_with_tools(
     context: dict,
     provider: str = "auto",
     model: str = "",
-    max_iterations: int = 5,
+    search: str = "",
 ) -> tuple[str, str] | None:
     """Drive an LLM with the terminal's tool-calling loop.
 
     The model may emit ``TOOL_CALL:`` lines; each is executed against the live
     terminal and the result is fed back, so the agent can fetch (and reason over)
     real data it didn't already have in CONTEXT. Returns ``(reply, provider_name)``.
+
+    Search modes tune the loop budget: ``deep`` allows many more tool hops for
+    exhaustive research, ``low`` caps it to a couple of cheap calls.
     """
     p = (provider or "auto").lower()
     c = _load_env()
@@ -392,7 +557,13 @@ def _run_with_tools(
     if name is None:
         return None
 
-    base = _prompt(history, context)
+    max_iterations = 5
+    if (search or "").lower() == "deep":
+        max_iterations = 10
+    elif (search or "").lower() == "low":
+        max_iterations = 2
+
+    base = _prompt(history, context, search)
     tool_notes: list[str] = []
     reply_text: str | None = None
     for _ in range(max_iterations):
@@ -420,13 +591,14 @@ def _try_llm(
     context: dict,
     provider: str = "auto",
     model: str = "",
+    search: str = "",
 ) -> tuple[str, str] | None:
     """Try the requested provider(s) and return ``(reply, provider_name)``.
 
     Delegates to the tool-calling loop so the agent can fetch missing data from
     the terminal's own tools (NEWS RSS, search, verdicts, …) when needed.
     """
-    return _run_with_tools(history, context, provider=provider, model=model)
+    return _run_with_tools(history, context, provider=provider, model=model, search=search)
 
 
 def chat(
@@ -435,13 +607,16 @@ def chat(
     mode: str = "AUTO",
     provider: str = "auto",
     model: str = "",
+    search: str = "",
 ) -> dict:
     """Respond to a chat turn.
 
     Routes to the requested LLM provider (gemini / ollama / local / auto);
     ``local`` always uses the data-driven responder, ``auto`` tries any
-    configured LLM then falls back. Both the used provider and the available
-    provider config are returned so the UI can show live status.
+    configured LLM then falls back. ``search`` selects the search style:
+    "" default, "deep" (exhaustive multi-tool research) or "low" (low-token,
+    minimal calls). Both the used provider and the available provider config
+    are returned so the UI can show live status.
     """
     db = Database(settings.db_path)
     ctx = _gather_context(db, market)
@@ -454,7 +629,7 @@ def chat(
     used = "local"
     reply: str | None = None
     if (provider or "auto").lower() != "local":
-        llm = _try_llm(messages, ctx, provider or "auto", model or "")
+        llm = _try_llm(messages, ctx, provider or "auto", model or "", search or "")
         if llm:
             reply, used = llm
 

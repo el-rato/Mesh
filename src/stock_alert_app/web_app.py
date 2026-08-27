@@ -743,6 +743,16 @@ def paper_order(body: PaperOrder, user: dict = Depends(auth.current_user)) -> di
         )
     except (ValueError, LookupError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    # Portfolio <-> watchlist sync: anything added to the portfolio (any paper
+    # trade) is automatically tracked on the watchlist so it shows up in the
+    # overview WATCHLIST rail and the portfolio TRACKED SECURITIES table.
+    try:
+        if db.add_to_watchlist(body.market, body.ticker):
+            from .universe import register
+
+            register(db, body.market, body.ticker, source="portfolio")
+    except Exception as exc:  # pragma: no cover - sync must never block a fill
+        logger.warning("Watchlist sync failed for %s:%s: %s", body.market, body.ticker, exc)
     return {"order": order, "portfolio": paper.pt_portfolio_state(db, pid)}
 
 
@@ -1246,6 +1256,7 @@ class AgentChatRequest(BaseModel):
     mode: str = "AUTO"
     provider: str = "auto"
     model: str = ""
+    search: str = ""  # '' default | 'deep' (deep search) | 'low' (low-token search)
 
 
 @app.post("/api/agent/chat")
@@ -1254,8 +1265,10 @@ def agent_chat(body: AgentChatRequest) -> dict[str, object]:
 
     Routes to the requested LLM provider (auto / gemini / ollama / local).
     ``local`` always uses the built-in data-driven responder; ``auto`` uses any
-    configured LLM and falls back to local on failure. The used provider and
-    live provider availability are returned so the UI can show status.
+    configured LLM and falls back to local on failure. ``search`` selects the
+    agent's search style: deep (exhaustive, multi-tool) or low (low-token).
+    The used provider and live provider availability are returned so the UI can
+    show status.
     """
     from .agent_chat import chat as agent_chat_fn
 
@@ -1265,6 +1278,7 @@ def agent_chat(body: AgentChatRequest) -> dict[str, object]:
         mode=body.mode,
         provider=body.provider,
         model=body.model,
+        search=body.search,
     )
 
 
