@@ -279,8 +279,10 @@ export default function OverviewTab() {
                         >
                           {n.title}
                         </a>
-                        {n.summary && String(n.summary).toLowerCase() !== String(n.title || "").toLowerCase() && (
+                        {n.summary && String(n.summary).toLowerCase() !== String(n.title || "").toLowerCase() ? (
                           <div className="ov-news-summary">{n.summary}</div>
+                        ) : (
+                          <div className="ov-news-summary dim">No summary — open for the full report.</div>
                         )}
                         <div className="ov-news-meta dim">
                           <span>{n.source}</span>

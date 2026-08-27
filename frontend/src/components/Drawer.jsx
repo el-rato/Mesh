@@ -60,30 +60,46 @@ function DossierHeader({ dossierData, v }) {
   );
 }
 
-function ChartSection({ dossierData }) {
+function ChartSection({ v, symbol, dossierData }) {
   const { theme } = useApp();
-  const inst = dossierData.instrument || {};
-  const price = dossierData.verdict?.price || {};
+  const inst = dossierData?.instrument || {};
+  const price = dossierData?.verdict?.price || {};
   const [range, setRange] = useState("1mo");
   const [chartType, setChartType] = useState("candlestick");
   const [showVolume, setShowVolume] = useState(true);
-  const [showSma50, setShowSma50] = useState(false);
-  const [showSma200, setShowSma200] = useState(false);
+  const [sma, setSma] = useState([50, 200]);
+  const [ema, setEma] = useState([]);
+  const [bollinger, setBollinger] = useState(null);
+  const [vwap, setVwap] = useState(false);
+  const [rsi, setRsi] = useState(null);
+  const [macd, setMacd] = useState(null);
+  const [logScale, setLogScale] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
 
   const close = Number(price.close);
   const open = Number(price.open);
   const changePct = Number.isFinite(close) && Number.isFinite(open) && open !== 0 ? (close - open) / open : 0;
   const up = changePct >= 0;
-  const rangeHost = vRange(inst);
-  const toggle = (setter) => () => setter((v) => !v);
+  const market = inst.market || v.market;
+  const ticker = inst.ticker || v.ticker;
+  // Build the chart URL from props (not from dossier data) so the price chart
+  // can start loading immediately — in parallel with the dossier analysis call
+  // — instead of waiting for that (slower) request to finish first.
+  const chartUrl = symbol
+    ? `/api/chart/${encodeURIComponent(market)}/${encodeURIComponent(ticker)}?range=${range}&symbol=${encodeURIComponent(symbol)}`
+    : `/api/chart/${encodeURIComponent(market)}/${encodeURIComponent(ticker)}?range=${range}`;
+  const toggle = (setter) => () => setter((val) => !val);
+
+  const toggleInSet = (setter) => (p) => setter((arr) => (arr.includes(p) ? arr.filter((x) => x !== p) : [...arr, p].sort((a, b) => a - b)));
+
   return (
     <section className={`dossier-chart-pane${fullscreen ? " is-fullscreen" : ""}`}>
       <div className="chart-pane-head">
         <div className="chart-id">
           <div className="chart-symbol">
-            <span className="chart-ticker">{inst.market}:{inst.ticker}</span>
-            <span className="chart-company">{inst.company || ""}</span>
+            <span className="chart-ticker">{market}:{ticker}</span>
+            <span className="chart-company">{inst.company || v.company || ""}</span>
           </div>
           <div className="chart-price-row">
             <span className="chart-price">{Number.isFinite(close) ? close.toFixed(2) : "N/A"}</span>
@@ -101,29 +117,94 @@ function ChartSection({ dossierData }) {
             ))}
           </div>
           <div className="indicator-bar">
-            <button className={showVolume ? "active" : ""} onClick={toggle(setShowVolume)} title="Volume">VOL</button>
-            <button className={showSma50 ? "active" : ""} onClick={toggle(setShowSma50)} title="50-period moving average">MA50</button>
-            <button className={showSma200 ? "active" : ""} onClick={toggle(setShowSma200)} title="200-period moving average">MA200</button>
+            <button className={showVolume ? "active" : ""} onClick={toggle(setShowVolume)} title="Volume overlay">VOL</button>
+            <button className={sma.includes(50) ? "active" : ""} onClick={() => toggleInSet(setSma)(50)} title="SMA 50">MA50</button>
+            <button className={sma.includes(200) ? "active" : ""} onClick={() => toggleInSet(setSma)(200)} title="SMA 200">MA200</button>
+            <button className={vwap ? "active" : ""} onClick={toggle(setVwap)} title="VWAP">VWAP</button>
+            <button className={rsi ? "active" : ""} onClick={() => setRsi(rsi ? null : { period: 14 })} title="RSI subpanel">RSI</button>
+            <button className={macd ? "active" : ""} onClick={() => setMacd(macd ? null : { fast: 12, slow: 26, signal: 9 })} title="MACD subpanel">MACD</button>
+            <button className={logScale ? "active" : ""} onClick={toggle(setLogScale)} title="Logarithmic scale">LOG</button>
             <select className="chart-type-select" value={chartType} onChange={(event) => setChartType(event.target.value)} aria-label="Chart type" title="Chart type">
               <option value="candlestick">CANDLES</option>
-              <option value="ohlc">OHLC</option>
+              <option value="ohlc">BARS</option>
               <option value="line">LINE</option>
               <option value="area">AREA</option>
             </select>
+            <button className={`icon-btn ${toolsOpen ? "active" : ""}`} onClick={() => setToolsOpen((val) => !val)} title="Chart tools & indicators">⚙</button>
             <button className="icon-btn" onClick={toggle(setFullscreen)} title={fullscreen ? "Exit fullscreen" : "Fullscreen"}>
               {fullscreen ? "EXIT" : "⤢"}
             </button>
           </div>
         </div>
+        {toolsOpen && (
+          <div className="chart-tools">
+            <div className="chart-tools-row">
+              <span className="chart-tools-label">SMA</span>
+              {[20, 50, 100, 200].map((p) => (
+                <button key={p} className={`chip ${sma.includes(p) ? "on" : ""}`} onClick={() => toggleInSet(setSma)(p)}>{p}</button>
+              ))}
+            </div>
+            <div className="chart-tools-row">
+              <span className="chart-tools-label">EMA</span>
+              {[9, 12, 26, 50].map((p) => (
+                <button key={p} className={`chip ${ema.includes(p) ? "on" : ""}`} onClick={() => toggleInSet(setEma)(p)}>{p}</button>
+              ))}
+            </div>
+            <div className="chart-tools-row">
+              <span className="chart-tools-label">BOLLINGER</span>
+              <button className={`chip ${bollinger ? "on" : ""}`} onClick={() => setBollinger(bollinger ? null : { period: 20, std: 2 })}>
+                {bollinger ? `BB ${bollinger.period},${bollinger.std}σ` : "OFF"}
+              </button>
+              {bollinger && (
+                <>
+                  <label className="chart-tools-num">P<input type="number" min="2" max="100" value={bollinger.period} onChange={(e) => setBollinger({ ...bollinger, period: Number(e.target.value) || 20 })} /></label>
+                  <label className="chart-tools-num">σ<input type="number" min="1" max="5" step="0.5" value={bollinger.std} onChange={(e) => setBollinger({ ...bollinger, std: Number(e.target.value) || 2 })} /></label>
+                </>
+              )}
+            </div>
+            <div className="chart-tools-row">
+              <span className="chart-tools-label">RSI</span>
+              <button className={`chip ${rsi ? "on" : ""}`} onClick={() => setRsi(rsi ? null : { period: 14 })}>{rsi ? `RSI ${rsi.period}` : "OFF"}</button>
+              {rsi && <label className="chart-tools-num">P<input type="number" min="2" max="50" value={rsi.period} onChange={(e) => setRsi({ period: Number(e.target.value) || 14 })} /></label>}
+            </div>
+            <div className="chart-tools-row">
+              <span className="chart-tools-label">MACD</span>
+              <button className={`chip ${macd ? "on" : ""}`} onClick={() => setMacd(macd ? null : { fast: 12, slow: 26, signal: 9 })}>{macd ? `${macd.fast},${macd.slow},${macd.signal}` : "OFF"}</button>
+              {macd && (
+                <>
+                  <label className="chart-tools-num">F<input type="number" min="2" max="50" value={macd.fast} onChange={(e) => setMacd({ ...macd, fast: Number(e.target.value) || 12 })} /></label>
+                  <label className="chart-tools-num">S<input type="number" min="2" max="100" value={macd.slow} onChange={(e) => setMacd({ ...macd, slow: Number(e.target.value) || 26 })} /></label>
+                  <label className="chart-tools-num">Sig<input type="number" min="2" max="50" value={macd.signal} onChange={(e) => setMacd({ ...macd, signal: Number(e.target.value) || 9 })} /></label>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
       <div className="chart-workspace">
-        <PriceChart url={rangeHost(range)} chartType={chartType} showVolume={showVolume} showSma50={showSma50} showSma200={showSma200} theme={theme} refreshKey={dossierData.computed_at} />
+        <PriceChart
+          url={chartUrl}
+          chartType={chartType}
+          showVolume={showVolume}
+          sma={sma}
+          ema={ema}
+          bollinger={bollinger}
+          vwap={vwap}
+          rsi={rsi}
+          macd={macd}
+          logScale={logScale}
+          theme={theme}
+        />
       </div>
       <div className="chart-legend">
         <span className="legend-price">PRICE</span>
-        {showSma50 && <span className="legend-sma50">MA 50</span>}
-        {showSma200 && <span className="legend-sma200">MA 200</span>}
+        {sma.map((p) => <span key={`s${p}`} className="legend-sma50">SMA {p}</span>)}
+        {ema.map((p) => <span key={`e${p}`} className="legend-sma50">EMA {p}</span>)}
+        {bollinger && <span className="legend-sma200">BB {bollinger.period}</span>}
+        {vwap && <span className="legend-volume">VWAP</span>}
         {showVolume && <span className="legend-volume">VOLUME</span>}
+        {rsi && <span className="legend-sma50">RSI {rsi.period}</span>}
+        {macd && <span className="legend-sma200">MACD</span>}
       </div>
     </section>
   );
@@ -185,15 +266,6 @@ function QuoteSection({ dossierData }) {
       </details>
     </div>
   );
-}
-
-function vRange(inst) {
-  return function makeUrl(range) {
-    if (inst.symbol) {
-      return `/api/chart/${encodeURIComponent(inst.market)}/${encodeURIComponent(inst.ticker)}?range=${range}&symbol=${encodeURIComponent(inst.symbol)}`;
-    }
-    return `/api/chart/${encodeURIComponent(inst.market)}/${encodeURIComponent(inst.ticker)}?range=${range}`;
-  };
 }
 
 /* ---------------- Investment Committee ---------------- */
@@ -569,46 +641,48 @@ function StockDossier({ v, onClose }) {
   return (
     <>
       <button className="close" onClick={onClose}>✕</button>
-      {!data ? (
-        error ? (
-          <div className="error">
-            <div style={{ marginBottom: 12 }}>ERROR: {error}</div>
-            <button className="primary" onClick={load}>⟳ RETRY</button>
-          </div>
-        ) : (
-          <div className="empty">LOADING DOSSIER…</div>
-        )
-      ) : (
+      {!data && !error && <div className="empty">LOADING DOSSIER…</div>}
+      {!data && error && (
+        <div className="error">
+          <div style={{ marginBottom: 12 }}>ERROR: {error}</div>
+          <button className="primary" onClick={load}>⟳ RETRY</button>
+        </div>
+      )}
+      {data && (
         <>
           {error && (
             <div className="scan-warning">⚠ REFRESH FAILED · SHOWING LAST-KNOWN DATA — {error}</div>
           )}
           <DossierHeader dossierData={data} v={v} />
-          <div className="dossier-workspace">
-            <ChartSection dossierData={data} />
-            <section className="dossier-info-pane">
-              <div className="dossier-tabs">
-                {DOSSIER_TABS.map((t) => (
-                  <button key={t.key} className={tab === t.key ? "active" : ""} onClick={() => setTab(t.key)}>
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-              <div className="dossier-info-scroll">
-                {tab === "overview" && <QuoteSection dossierData={data} />}
-                {tab === "committee" && <CommitteeSection committee={data.committee} />}
-                {tab === "bullbear" && <FactorList factors={data.factors} />}
-                {tab === "model" && <ModelSection verdict={data.verdict} />}
-                {tab === "news" && <NewsSection news={data.news} committee={data.committee} />}
-                {tab === "risk" && (
-                  <RiskSection verdict={data.verdict} symbol={inst.symbol} market={inst.market || v.market} ticker={inst.ticker || v.ticker} />
-                )}
-              </div>
-            </section>
-          </div>
         </>
       )}
-    </>
+      {/* The chart pane mounts immediately so the price chart loads in parallel
+          with the (slower) dossier analysis call — not after it. */}
+      <div className="dossier-workspace">
+        <ChartSection v={v} symbol={symbol} dossierData={data} />
+        {data && (
+          <section className="dossier-info-pane">
+            <div className="dossier-tabs">
+              {DOSSIER_TABS.map((t) => (
+                <button key={t.key} className={tab === t.key ? "active" : ""} onClick={() => setTab(t.key)}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <div className="dossier-info-scroll">
+              {tab === "overview" && <QuoteSection dossierData={data} />}
+              {tab === "committee" && <CommitteeSection committee={data.committee} />}
+              {tab === "bullbear" && <FactorList factors={data.factors} />}
+              {tab === "model" && <ModelSection verdict={data.verdict} />}
+              {tab === "news" && <NewsSection news={data.news} committee={data.committee} />}
+              {tab === "risk" && (
+                <RiskSection verdict={data.verdict} symbol={inst.symbol} market={inst.market || v.market} ticker={inst.ticker || v.ticker} />
+              )}
+            </div>
+            </section>
+          )}
+        </div>
+      </>
   );
 }
 

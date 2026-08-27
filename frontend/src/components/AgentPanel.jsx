@@ -33,13 +33,16 @@ export default function AgentPanel({ onOpen, onAsk }) {
   // Keep the overview workflow list in sync with the active profile's store.
   useEffect(() => {
     setSaved(loadWorkflows(userEmail));
+    const refresh = () => setSaved(loadWorkflows(userEmail));
     const onStorage = (e) => {
-      if (!e.key || e.key === `sv-workflows-${userEmail || "anon"}`) {
-        setSaved(loadWorkflows(userEmail));
-      }
+      if (!e.key || e.key === `sv-workflows-${userEmail || "anon"}`) refresh();
     };
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener("sv-workflows-changed", refresh);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("sv-workflows-changed", refresh);
+    };
   }, [userEmail]);
 
   const providerLabel = PROVIDERS.find((p) => p.id === provider)?.label || "Auto";

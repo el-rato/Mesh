@@ -19,6 +19,15 @@ logger = logging.getLogger(__name__)
 # echoed-title noise, regardless of what was stored at ingest time.
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
+# Aggregator boilerplate to strip from summaries (Hacker News-style links/points).
+_BOILER_RE = re.compile(
+    r"\b(?:Article URL|Comments URL|Comments|Points)\b\s*[:=]?\s*"
+    r"(?:https?://\S+|\d+)?"
+    r"|#\s*Comments\s*:\s*\d+"
+    r"|\bPoints\s*:\s*\d+\b"
+    r"|\bComments\s*:\s*\d+\b",
+    re.IGNORECASE,
+)
 
 
 def _clean_text(value: str | None) -> str:
@@ -53,8 +62,17 @@ def _clean_summary(raw: str | None, title_clean: str, source: str | None) -> str
     MarketWatch"). After stripping the source tag, if what remains equals the
     headline it carries no extra information, so we drop it. A genuine summary
     that continues the headline with a real sentence is kept.
+
+    Some aggregators (Hacker News, etc.) ship pure boilerplate such as
+    "Article URL: https://…  Comments URL: https://…  Points: 11  # Comments: 1".
+    We strip those tokens too; if only boilerplate remains the summary is empty.
     """
     s = _strip_source_suffix(_clean_text(raw), source)
+    if not s:
+        return ""
+    # Drop common aggregator boilerplate tokens (URLs, points, comment counts).
+    s = _BOILER_RE.sub(" ", s)
+    s = _WS_RE.sub(" ", s).strip()
     if not s:
         return ""
     if title_clean and s.lower() == title_clean.lower():

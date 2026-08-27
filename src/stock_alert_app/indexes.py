@@ -2,15 +2,34 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 import yfinance as yf
 
 from .config import settings
 from .db import Database
+
+try:
+    import pandas as pd
+except Exception:  # pragma: no cover - pandas ships with yfinance
+    pd = None
+
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+TIMEOUT = 20.0
+
+# Yahoo chart-API range tokens (daily interval) for the direct fallback.
+_YAHOO_RANGE = {
+    "1d": "1d", "1w": "5d", "1mo": "1mo", "3mo": "3mo",
+    "6mo": "6mo", "1y": "1y", "all": "max",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +61,133 @@ def _fetch_yf(symbol: str, period: str, interval: str) -> Any | None:
     if df is None or getattr(df, "empty", True):
         return None
     return df
+
+
+def _yahoo_variants(symbol: str) -> list[str]:
+    """Suffix variants to try on a 404 (e.g. Indian tickers trade on both
+    NSE `.NS` and BSE `.BO` — one may be absent from Yahoo while the other
+    resolves). Cheap, best-effort coverage boost."""
+    variants = [symbol]
+    swaps = {".BO": ".NS", ".NS": ".BO", ".L": ".IL", ".IL": ".L"}
+    for a, b in swaps.items():
+        if symbol.upper().endswith(a):
+            variants.append(symbol[: -len(a)] + b)
+            break
+    return variants
+
+
+def _alpha_vantage_symbols(symbol: str) -> list[str]:
+    """Alpha Vantage uses its own suffixes (e.g. BSE is `.BOM`, not `.BO`), so
+    try the mapped form plus the common NSE/BSE counterpart."""
+    s = symbol.upper()
+    out = [s]
+    if s.endswith(".BO"):
+        out.append(s[:-3] + ".BOM")
+    elif s.endswith(".BOM"):
+        out.append(s[:-4] + ".BO")
+    if s.endswith(".NS"):
+        out.append(s[:-3] + ".BSE")
+    return out
+
+
+def _fetch_alpha_vantage(symbol: str, api_key: str) -> Any | None:
+    """Keyed backup (tier 3) via Alpha Vantage's TIME_SERIES_DAILY. Used only
+    when yfinance and the direct Yahoo chart API both fail. Results are cached
+    in-memory (30 min) and in the DB, so the free 25-requests/day quota is not
+    exhausted by repeat views. Returns a DataFrame shaped like yfinance's, or
+    None on failure / quota / no-data."""
+    if pd is None:
+        return None
+    for sym in _alpha_vantage_symbols(symbol):
+        params = {
+            "function": "TIME_SERIES_DAILY",
+            "symbol": sym,
+            "outputsize": "full",
+            "apikey": api_key,
+        }
+        try:
+            resp = httpx.get(
+                "https://www.alphavantage.co/query",
+                params=params,
+                headers={"User-Agent": USER_AGENT},
+                timeout=TIMEOUT,
+                follow_redirects=True,
+            )
+            resp.raise_for_status()
+            j = resp.json()
+            series = j.get("Time Series (Daily)")
+            if not series:
+                note = j.get("Note") or j.get("Information") or "no series"
+                logger.warning("Alpha Vantage no data for %s: %s", sym, note)
+                continue
+            rows = []
+            for date_str, ohlc in series.items():
+                try:
+                    rows.append({
+                        "Date": pd.Timestamp(date_str),
+                        "Open": float(ohlc.get("1. open", "nan")),
+                        "High": float(ohlc.get("2. high", "nan")),
+                        "Low": float(ohlc.get("3. low", "nan")),
+                        "Close": float(ohlc.get("4. close", "nan")),
+                        "Volume": float(ohlc.get("5. volume") or 0),
+                    })
+                except (TypeError, ValueError):
+                    continue
+            if not rows:
+                continue
+            return pd.DataFrame(rows).set_index("Date").sort_index()
+        except Exception as exc:  # network / parse / quota
+            logger.warning("Alpha Vantage fallback failed for %s: %s", sym, exc)
+    return None
+
+
+def _fetch_yahoo_direct(symbol: str, range_key: str) -> Any | None:
+    """Backup to yfinance: call Yahoo's chart API directly (no yfinance wrapper),
+    so a yfinance rate-limit/version break doesn't blank the chart. Tries both
+    query hosts and a couple of suffix variants. Returns a DataFrame shaped like
+    yfinance's, or None on failure."""
+    if pd is None:
+        return None
+    rng = _YAHOO_RANGE.get(range_key, "1mo")
+    tried = set()
+    for sym in _yahoo_variants(symbol):
+        if sym in tried:
+            continue
+        tried.add(sym)
+        for host in ("query1", "query2"):
+            url = (
+                f"https://{host}.finance.yahoo.com/v8/finance/chart/{sym}"
+                f"?range={rng}&interval=1d"
+            )
+            try:
+                resp = httpx.get(url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT, follow_redirects=True)
+                if resp.status_code == 404:
+                    continue  # symbol not on this host — try the next variant/host
+                resp.raise_for_status()
+                result = resp.json().get("chart", {}).get("result")
+                if not result:
+                    continue
+                r0 = result[0]
+                ts = r0.get("timestamp")
+                q = r0.get("indicators", {}).get("quote", [{}])[0]
+                closes = q.get("close") or []
+                if not ts or not closes:
+                    continue
+                n = len(ts)
+                rows = []
+                for i in range(n):
+                    rows.append({
+                        "Date": pd.Timestamp(ts[i], unit="s", tz="UTC"),
+                        "Open": (q.get("open") or [None] * n)[i],
+                        "High": (q.get("high") or [None] * n)[i],
+                        "Low": (q.get("low") or [None] * n)[i],
+                        "Close": closes[i],
+                        "Volume": (q.get("volume") or [None] * n)[i],
+                    })
+                return pd.DataFrame(rows).set_index("Date").sort_index()
+            except Exception as exc:  # network / rate-limit / invalid symbol
+                logger.warning("Yahoo-direct fallback (%s) failed for %s: %s", host, sym, exc)
+    return None
 
 
 def _df_to_rows(df: Any) -> list[dict[str, Any]]:
@@ -112,6 +258,24 @@ def index_history(symbol: str, range_key: str = "1mo") -> list[dict[str, Any]]:
         if df is not None and not getattr(df, "empty", True):
             break
     rows = _df_to_rows(df) if df is not None else []
+
+    # Backup provider when yfinance returns nothing (rate-limited / offline):
+    # call Yahoo's chart API directly (no yfinance wrapper). This recovers the
+    # chart for symbols Yahoo still serves even when yfinance is throttled.
+    if not rows:
+        sdf = _fetch_yahoo_direct(symbol, range_key)
+        if sdf is not None:
+            rows = _df_to_rows(sdf)
+
+    # Tier 3: keyed Alpha Vantage fallback (opt-in via ALPHA_VANTAGE_KEY). Covers
+    # symbols Yahoo doesn't serve (e.g. some Indian listings) without burning the
+    # yfinance quota. Cached so the free daily quota lasts.
+    if not rows:
+        av_key = os.environ.get("ALPHA_VANTAGE_KEY") or getattr(settings, "alpha_vantage_key", "") or ""
+        if av_key:
+            adf = _fetch_alpha_vantage(symbol, av_key)
+            if adf is not None:
+                rows = _df_to_rows(adf)
 
     if rows:
         _HISTORY_CACHE[cache_key] = (now, rows)

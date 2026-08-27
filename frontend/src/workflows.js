@@ -27,6 +27,9 @@ export function loadWorkflows(email) {
 export function persistWorkflows(email, list) {
   try {
     localStorage.setItem(storageKey(email), JSON.stringify(list));
+    // Notify listeners in the same window (the `storage` event only fires in
+    // *other* tabs), so the Overview AgentPanel updates without a reload.
+    window.dispatchEvent(new CustomEvent("sv-workflows-changed", { detail: { email } }));
   } catch {
     /* ignore quota / private-mode errors */
   }

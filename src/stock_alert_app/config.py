@@ -78,6 +78,7 @@ class Settings:
         default_factory=lambda: os.getenv("LLM_MODEL", "gpt-4o-mini")
     )
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
+    alpha_vantage_key: str = field(default_factory=lambda: os.getenv("ALPHA_VANTAGE_KEY", ""))
     gemini_model: str = field(
         default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
     )
