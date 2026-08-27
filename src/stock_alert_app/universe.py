@@ -22,30 +22,38 @@ logger = logging.getLogger(__name__)
 def ensure_seeded(db: Database) -> None:
     """Seed the canonical universe from configured markets + watchlist.
 
-    Idempotent via INSERT ... ON CONFLICT (configured rows keep source).
+    Idempotent via INSERT ... ON CONFLICT (configured rows keep source). All
+    writes happen in a single transaction so the universe can be registered
+    without opening a DB connection per ticker.
     """
     from .markets import load_markets
 
     markets = load_markets(settings.markets_dir)
+    rows: list[dict[str, Any]] = []
     for market in markets.values():
         for symbol, tkr in market.tickers.items():
-            db.upsert_security(
-                market=market.code,
-                ticker=symbol,
-                symbol=symbol + (tkr.yahoo_suffix or market.yahoo_suffix),
-                company=tkr.name or "",
-                exchange=market.name,
-                currency=market.currency,
-                source="configured",
+            rows.append(
+                {
+                    "market": market.code,
+                    "ticker": symbol,
+                    "symbol": symbol + (tkr.yahoo_suffix or market.yahoo_suffix),
+                    "company": tkr.name or "",
+                    "exchange": market.name,
+                    "currency": market.currency,
+                    "source": "configured",
+                }
             )
     # Watchlist items join too.
     for w in db.watchlist():
-        db.upsert_security(
-            market=w["market"],
-            ticker=w["ticker"],
-            company=w.get("company") or "",
-            source="watchlist",
+        rows.append(
+            {
+                "market": w["market"],
+                "ticker": w["ticker"],
+                "company": w.get("company") or "",
+                "source": "watchlist",
+            }
         )
+    db.upsert_securities_bulk(rows)
 
 
 def register(

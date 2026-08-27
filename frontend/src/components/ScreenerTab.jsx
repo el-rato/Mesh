@@ -262,7 +262,9 @@ export default function ScreenerTab() {
                 <SecurityLink market={r.market} ticker={r.ticker}><strong>{r.ticker}</strong></SecurityLink>
                 <span className="dim">{r.market} · {r.company || ""}</span>
               </span>
-              <span className={r.verdict === "BULL" ? "up" : r.verdict === "BEAR" ? "down" : "dim"}>{r.verdict || "NO_DATA"}</span>
+              <span className={r.verdict === "BULL" ? "up" : r.verdict === "BEAR" ? "down" : "dim"}>
+                {r.data_status === "no_data" ? (r.warming ? "ANALYZING…" : "NO DATA") : (r.verdict || "—")}
+              </span>
               <span>{r.confidence != null ? (r.confidence * 100).toFixed(0) : "—"}</span>
               <span className={num(r.momentum_20) >= 0 ? "up" : "down"}>{pct(r.momentum_20)}</span>
               <span className={num(r.price_move) >= 0 ? "up" : "down"}>{pct(r.price_move)}</span>

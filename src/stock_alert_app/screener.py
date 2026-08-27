@@ -166,6 +166,23 @@ def run(
         markets = {}
 
     out: list[dict[str, Any]] = []
+    # Cap background analysis requests per screen so a single page load can never
+    # hammer the price/news/LSTM providers. Deduped in the warmer, so this only
+    # bounds the burst on the first open of a universe full of unanalyzed tickers.
+    _WARM_CAP = 10
+    warmed = 0
+
+    def _warm(sec_market: str, sec_ticker: str, company: str, symbol: str) -> bool:
+        nonlocal warmed
+        if warmed >= _WARM_CAP:
+            return False
+        from . import refresh
+
+        if refresh.enqueue_analysis(str(db.path), sec_market, sec_ticker, company, symbol or None):
+            warmed += 1
+            return True
+        return False
+
     for sec in universe(db, mkt):
         sec_market = sec["market"]
         sec_ticker = sec["ticker"]
@@ -191,25 +208,44 @@ def run(
             analysis["security_id"] = f"{sec_market}:{sec_ticker}"
             analysis["last_price_update"] = (snap or {}).get("fetched_at")
             analysis["scanner_updated_at"] = scanned_at
+            # A stored verdict can still be empty (transient provider error on
+            # the first pass): treat it as NO_DATA and warm it so the dossier
+            # stops showing "no available data" on every open.
+            if analysis.get("verdict") is None and analysis.get("price") is None:
+                analysis["data_status"] = "no_data"
+                from . import refresh
+
+                analysis["warming"] = bool(refresh.is_warming(sec_market, sec_ticker)) or _warm(
+                    sec_market, sec_ticker, sec.get("company") or "", sec.get("symbol") or ""
+                )
         else:
-            if no_data_only:
-                analysis = {
-                    "market": sec_market, "ticker": sec_ticker,
-                    "symbol": sec.get("symbol") or sec_ticker,
-                    "company": sec.get("company") or "",
-                    "verdict": None, "confidence": None, "combined_score": None,
-                    "price": None, "momentum_20": None, "decision": {},
-                    "quantitative": {}, "market_regime": {}, "social": {},
-                    "technical": {}, "news": None, "data_status": "no_data",
-                    "security": sec,
-                    "security_id": f"{sec_market}:{sec_ticker}",
-                    "last_price_update": (snap or {}).get("fetched_at"),
-                    "scanner_updated_at": scanned_at,
-                }
-                analysis = _enrich(analysis, prev_snap)
-                out.append(analysis)
+            # No stored verdict yet. Warm it in the background (root cause of
+            # permanent N/A rows): once analyzed it gains lightweight signal data
+            # and appears in the default view automatically. Until then it stays
+            # out of the default scanner — only the NO_DATA / NEEDS RESEARCH
+            # preset surfaces unanalyzed securities explicitly, keeping the
+            # screener lightweight (price/change/volume/ranking only).
+            from . import refresh
+
+            _warm(sec_market, sec_ticker, sec.get("company") or "", sec.get("symbol") or "")
+            if not no_data_only:
                 continue
-            continue  # no analysis yet and not requesting NO_DATA-only
+            analysis = {
+                "market": sec_market, "ticker": sec_ticker,
+                "symbol": sec.get("symbol") or sec_ticker,
+                "company": sec.get("company") or "",
+                "verdict": None, "confidence": None, "combined_score": None,
+                "price": None, "momentum_20": None, "decision": {},
+                "quantitative": {}, "market_regime": {}, "social": {},
+                "technical": {}, "news": None, "data_status": "no_data",
+                "security": sec,
+                "security_id": f"{sec_market}:{sec_ticker}",
+                "last_price_update": (snap or {}).get("fetched_at"),
+                "scanner_updated_at": scanned_at,
+            }
+            analysis["warming"] = bool(refresh.is_warming(sec_market, sec_ticker)) or True
+            # Fall through to the shared enrichment + filter + append block below
+            # so no_data rows still respect verdict / conviction / move filters.
 
         analysis = _enrich(analysis, prev_snap)
         prev_row = prev_map.get(sec_key)

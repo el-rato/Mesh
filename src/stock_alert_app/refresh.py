@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import queue
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -20,6 +21,123 @@ _state: dict[str, object] = {
     "last_error": "",
 }
 _in_flight: set[tuple[str, str]] = set()
+
+# ---------------------------------------------------------------------------
+# On-demand analysis "warmer"
+#
+# The scanner (and dossier) frequently meet securities that have no stored
+# analysis yet — every dynamically discovered ticker, plus configured tickers
+# whose first pass hit a transient provider error. The periodic refresh cycle
+# eventually covers them, but the user is left staring at N/A / "NO DATA" rows
+# (and a dossier that has to compute live on every open) in the meantime.
+#
+# The warmer runs ``live_verdict`` in the background for these securities so
+# their data is ready by the time the user clicks through. It is fully
+# deduplicated (in-flight + queued) and bounded so a single scanner open can
+# never hammer the price/news/LSTM providers.
+# ---------------------------------------------------------------------------
+_warm_queue: "queue.Queue[dict[str, object]]" = queue.Queue(maxsize=4000)
+_warm_pending: set[tuple[str, str]] = set()
+_warm_lock = threading.Lock()
+_warm_started = False
+
+
+def _start_warm_workers() -> None:
+    global _warm_started
+    if _warm_started:
+        return
+    _warm_started = True
+    workers = max(1, min(8, settings.scanner_refresh_batch or 4))
+    for _ in range(workers):
+        threading.Thread(target=_warm_worker, name="analysis-warmer", daemon=True).start()
+
+
+def _warm_worker() -> None:
+    while True:
+        item = _warm_queue.get()
+        if item is None:
+            _warm_queue.task_done()
+            break
+        market = str(item["market"])
+        ticker = str(item["ticker"])
+        company = str(item.get("company") or "")
+        yahoo_symbol = item.get("yahoo_symbol") or None
+        db_path = item.get("db_path")
+        key = (market, ticker.upper())
+        try:
+            from .resolve import resolve_for_fetch
+
+            resolved = resolve_for_fetch(market, ticker, company)
+        except Exception as exc:  # never let one bad symbol kill the worker
+            logger.debug("Warm resolve failed for %s:%s: %s", market, ticker, exc)
+            resolved = None
+        try:
+            if resolved:
+                if key not in _in_flight:
+                    _in_flight.add(key)
+                    try:
+                        from .verdict import live_verdict
+
+                        live_verdict(
+                            market,
+                            ticker,
+                            company,
+                            db_path=db_path,
+                            yahoo_symbol=resolved,
+                        )
+                    except Exception as exc:
+                        logger.warning("Warm analysis failed for %s:%s: %s", market, ticker, exc)
+                    finally:
+                        _in_flight.discard(key)
+        finally:
+            with _warm_lock:
+                _warm_pending.discard(key)
+            _warm_queue.task_done()
+
+
+def enqueue_analysis(
+    db_path: str,
+    market: str,
+    ticker: str,
+    company: str = "",
+    yahoo_symbol: str | None = None,
+) -> bool:
+    """Queue a background ``live_verdict`` for a security that lacks data.
+
+    Returns True if it was newly queued, False if it is already queued / running
+    or the queue is full. Idempotent and cheap, so callers (e.g. the scanner)
+    can invoke it freely on every page load.
+    """
+    _start_warm_workers()
+    key = (market, ticker.upper())
+    with _warm_lock:
+        if key in _in_flight or key in _warm_pending:
+            return False
+        if _warm_queue.qsize() >= 4000:
+            return False
+        _warm_pending.add(key)
+    try:
+        _warm_queue.put_nowait(
+            {
+                "market": market,
+                "ticker": ticker,
+                "company": company,
+                "yahoo_symbol": yahoo_symbol,
+                "db_path": db_path,
+            }
+        )
+    except Exception:
+        with _warm_lock:
+            _warm_pending.discard(key)
+        return False
+    return True
+
+
+def is_warming(market: str, ticker: str) -> bool:
+    """Whether a security is queued or currently being analyzed by the warmer."""
+    key = (market, ticker.upper())
+    with _warm_lock:
+        return key in _in_flight or key in _warm_pending
 
 
 def _iso(timestamp: float | None) -> str | None:
@@ -43,7 +161,7 @@ def refresh_status() -> dict[str, object]:
 
 
 def _candidates(db: Database) -> list[tuple[str, str, str, str]]:
-    """Configured markets + watchlist -> (market, ticker, company, yahoo_symbol)."""
+    """Configured markets + watchlist + full universe -> (market, ticker, company, yahoo_symbol)."""
     from .markets import load_markets, scan_market_codes
 
     markets = load_markets(settings.markets_dir)
@@ -58,6 +176,17 @@ def _candidates(db: Database) -> list[tuple[str, str, str, str]]:
         market = markets.get(item["market"])
         suffix = market.yahoo_suffix if market else ""
         candidates.append((item["market"], item["ticker"], item.get("company") or "", item["ticker"] + suffix))
+    # The dynamic universe (discovered / searched tickers) is otherwise never
+    # analyzed: the slow refresh would leave them as permanent N/A / NO_DATA in
+    # the scanner and force a live compute on every dossier open. Include them so
+    # they are scored on the same periodic cadence as configured markets.
+    for sec in db.all_securities():
+        mkt = sec.get("market") or ""
+        tkr = sec.get("ticker") or ""
+        if not mkt or not tkr:
+            continue
+        suffix = (markets.get(mkt).yahoo_suffix if markets.get(mkt) else "") or ""
+        candidates.append((mkt, tkr, sec.get("company") or "", sec.get("symbol") or (tkr + suffix)))
     seen: set[tuple[str, str]] = set()
     unique: list[tuple[str, str, str, str]] = []
     for candidate in candidates:

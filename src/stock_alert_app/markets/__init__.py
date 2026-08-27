@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
@@ -82,6 +83,11 @@ def _social_configured() -> bool:
     return bool(settings.reddit_client_id and settings.reddit_client_secret)
 
 
+#: Process-wide cache for :func:`load_markets` (invalidated by file mtime).
+_market_cache_lock = threading.Lock()
+_market_cache: dict[str, object] = {"dir": None, "mtime": 0.0, "value": None}
+
+
 def load_market(path: Path) -> Market:
     data = json.loads(path.read_text(encoding="utf-8"))
     tickers = {
@@ -122,10 +128,32 @@ def load_market(path: Path) -> Market:
 
 
 def load_markets(markets_dir: Path) -> dict[str, Market]:
+    """Load all market definitions.
+
+    Cached per ``markets_dir`` and invalidated automatically when any market
+    JSON file's mtime changes, so repeated callers (screener, refresh, dossier,
+    universe seeding) don't re-parse every file on every request.
+    """
+    markets_dir = Path(markets_dir)
+    try:
+        mtime = max((p.stat().st_mtime for p in markets_dir.glob("*.json")), default=0.0)
+    except OSError:
+        mtime = 0.0
+    with _market_cache_lock:
+        if (
+            _market_cache["dir"] == str(markets_dir)
+            and _market_cache["mtime"] == mtime
+            and _market_cache["value"] is not None
+        ):
+            return _market_cache["value"]
     markets: dict[str, Market] = {}
     for path in sorted(markets_dir.glob("*.json")):
         market = load_market(path)
         markets[market.code] = market
+    with _market_cache_lock:
+        _market_cache["dir"] = str(markets_dir)
+        _market_cache["mtime"] = mtime
+        _market_cache["value"] = markets
     return markets
 
 

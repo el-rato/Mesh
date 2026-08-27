@@ -477,6 +477,8 @@ CREATE TABLE IF NOT EXISTS index_snapshots (
 CREATE INDEX IF NOT EXISTS idx_agent_recs_generated ON agent_recommendations(generated_at);
 CREATE INDEX IF NOT EXISTS idx_news_ticker ON news_items(market, ticker);
 CREATE INDEX IF NOT EXISTS idx_verdicts_ticker ON verdicts(market, ticker);
+CREATE INDEX IF NOT EXISTS idx_verdicts_market_ticker_decided ON verdicts(market, ticker, decided_at);
+CREATE INDEX IF NOT EXISTS idx_price_snapshots_security ON price_snapshots(market, ticker, fetched_at);
 
 -- Cached chart history (read-through cache for /api/chart). Once a series is
 -- fetched from the live provider it is persisted here so the chart stays
@@ -894,6 +896,9 @@ class Database:
         return out
 
     def latest_verdicts(self, market: str | None = None) -> list[dict[str, Any]]:
+        # Correlated MAX subquery is fastest here: the UNIQUE(market, ticker,
+        # decided_at) index makes the per-group MAX a cheap index seek, so only
+        # the latest row per security (not the whole table) is returned.
         with self.connect() as conn:
             if market:
                 rows = conn.execute(
@@ -910,9 +915,9 @@ class Database:
                 rows = conn.execute(
                     """SELECT * FROM verdicts v
                        WHERE v.decided_at = (
-                           SELECT MAX(v2.decided_at) FROM verdicts v2
-                           WHERE v2.market = v.market AND v2.ticker = v.ticker
-                       )
+                             SELECT MAX(v2.decided_at) FROM verdicts v2
+                             WHERE v2.market = v.market AND v2.ticker = v.ticker
+                         )
                        ORDER BY v.combined_score DESC"""
                 ).fetchall()
             return [dict(r) for r in rows]
@@ -1007,18 +1012,18 @@ class Database:
         with self.connect() as conn:
             conn.execute(
                 """INSERT INTO securities
-                   (market, ticker, symbol, company, exchange, currency, source,
-                    data_status, last_analysis_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(market, ticker) DO UPDATE SET
-                     symbol=excluded.symbol,
-                     company=excluded.company,
-                     exchange=excluded.exchange,
-                     currency=excluded.currency,
-                     source=CASE WHEN securities.source = 'configured' THEN 'configured' ELSE excluded.source END,
-                     data_status=excluded.data_status,
-                     last_analysis_at=COALESCE(excluded.last_analysis_at, securities.last_analysis_at),
-                     updated_at=excluded.updated_at""",
+                    (market, ticker, symbol, company, exchange, currency, source,
+                     data_status, last_analysis_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(market, ticker) DO UPDATE SET
+                      symbol=excluded.symbol,
+                      company=excluded.company,
+                      exchange=excluded.exchange,
+                      currency=excluded.currency,
+                      source=CASE WHEN securities.source = 'configured' THEN 'configured' ELSE excluded.source END,
+                      data_status=excluded.data_status,
+                      last_analysis_at=COALESCE(excluded.last_analysis_at, securities.last_analysis_at),
+                      updated_at=excluded.updated_at""",
                 (
                     market,
                     ticker.upper(),
@@ -1031,6 +1036,48 @@ class Database:
                     last_analysis_at,
                     utc_now(),
                 ),
+            )
+
+    def upsert_securities_bulk(self, rows: list[dict[str, Any]]) -> None:
+        """Seed many securities in a single transaction.
+
+        Used by :func:`universe.ensure_seeded` so the universe can be registered
+        without opening a new DB connection per ticker (which made ``universe()``
+        take ~1s on every screener call).
+        """
+        if not rows:
+            return
+        with self.connect() as conn:
+            conn.executemany(
+                """INSERT INTO securities
+                    (market, ticker, symbol, company, exchange, currency, source,
+                     data_status, last_analysis_at, updated_at)
+                    VALUES (:market, :ticker, :symbol, :company, :exchange, :currency,
+                            :source, :data_status, :last_analysis_at, :updated_at)
+                    ON CONFLICT(market, ticker) DO UPDATE SET
+                      symbol=excluded.symbol,
+                      company=excluded.company,
+                      exchange=excluded.exchange,
+                      currency=excluded.currency,
+                      source=CASE WHEN securities.source = 'configured' THEN 'configured' ELSE excluded.source END,
+                      data_status=excluded.data_status,
+                      last_analysis_at=COALESCE(excluded.last_analysis_at, securities.last_analysis_at),
+                      updated_at=excluded.updated_at""",
+                [
+                    {
+                        "market": r["market"],
+                        "ticker": r["ticker"].upper(),
+                        "symbol": r.get("symbol", ""),
+                        "company": r.get("company", ""),
+                        "exchange": r.get("exchange", ""),
+                        "currency": r.get("currency", ""),
+                        "source": r.get("source", "configured"),
+                        "data_status": r.get("data_status", "no_data"),
+                        "last_analysis_at": r.get("last_analysis_at", ""),
+                        "updated_at": utc_now(),
+                    }
+                    for r in rows
+                ],
             )
 
     def all_securities(self, market: str | None = None) -> list[dict[str, Any]]:
@@ -1669,41 +1716,59 @@ class Database:
     # ---- Verdict / price history pairs (for change + screener detection) ----
 
     def verdict_pairs(self, market: str | None = None) -> dict[tuple[str, str], tuple[dict[str, Any] | None, dict[str, Any] | None]]:
-        """For every security: (latest_verdict, previous_verdict_or_None)."""
-        with self.connect() as conn:
-            if market:
-                rows = conn.execute(
-                    "SELECT * FROM verdicts WHERE market = ? ORDER BY market, ticker, decided_at",
-                    (market,),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM verdicts ORDER BY market, ticker, decided_at"
-                ).fetchall()
-        pairs: dict[tuple[str, str], tuple[dict[str, Any] | None, dict[str, Any] | None]] = {}
-        for r in rows:
-            key = (r["market"], r["ticker"])
-            latest, previous = pairs.get(key, (None, None))
-            pairs[key] = (dict(r), latest)
-        return pairs
+        """For every security: (latest_verdict, previous_verdict_or_None).
+
+        Uses a window function so only the two most recent verdicts per security
+        are read — not the entire verdicts table (which grows unbounded as the
+        pipeline re-analyzes tickers over time).
+        """
+        return self._latest_prev_pairs("verdicts", "decided_at", market)
 
     def price_snapshot_pairs(self, market: str | None = None) -> dict[tuple[str, str], tuple[dict[str, Any] | None, dict[str, Any] | None]]:
-        """For every security: (latest_price_snapshot, previous_or_None)."""
+        """For every security: (latest_price_snapshot, previous_or_None).
+
+        Window-function backed: only the two most recent snapshots per security
+        are materialized, so a large price history does not slow the screener.
+        """
+        return self._latest_prev_pairs("price_snapshots", "fetched_at", market)
+
+    def _latest_prev_pairs(
+        self, table: str, ts_col: str, market: str | None
+    ) -> dict[tuple[str, str], tuple[dict[str, Any] | None, dict[str, Any] | None]]:
+        """Return ``(market, ticker) -> (latest_row, previous_row_or_None)`` using a
+        window function, reading only the two most recent rows per security."""
         with self.connect() as conn:
             if market:
                 rows = conn.execute(
-                    "SELECT * FROM price_snapshots WHERE market = ? ORDER BY market, ticker, fetched_at",
-                    (market,),
+                    f"""SELECT * FROM (
+                           SELECT {table}.*, ROW_NUMBER() OVER (
+                               PARTITION BY market, ticker ORDER BY {ts_col} DESC
+                           ) AS _rn
+                           FROM {table} WHERE market = :m
+                       ) WHERE _rn <= 2
+                       ORDER BY market, ticker, {ts_col} DESC""",
+                    {"m": market},
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM price_snapshots ORDER BY market, ticker, fetched_at"
+                    f"""SELECT * FROM (
+                           SELECT {table}.*, ROW_NUMBER() OVER (
+                               PARTITION BY market, ticker ORDER BY {ts_col} DESC
+                           ) AS _rn
+                           FROM {table}
+                       ) WHERE _rn <= 2
+                       ORDER BY market, ticker, {ts_col} DESC"""
                 ).fetchall()
         pairs: dict[tuple[str, str], tuple[dict[str, Any] | None, dict[str, Any] | None]] = {}
         for r in rows:
-            key = (r["market"], r["ticker"])
+            d = {k: v for k, v in dict(r).items() if k != "_rn"}
+            key = (d["market"], d["ticker"])
             latest, previous = pairs.get(key, (None, None))
-            pairs[key] = (dict(r), latest)
+            if latest is None:
+                latest = d
+            else:
+                previous = d
+            pairs[key] = (latest, previous)
         return pairs
 
     def upsert_fund_filing(

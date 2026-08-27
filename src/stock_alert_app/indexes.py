@@ -76,35 +76,64 @@ def _yahoo_variants(symbol: str) -> list[str]:
     return variants
 
 
+# Yahoo/yfinance exchange suffix -> Alpha Vantage exchange suffix.
+_AV_SUFFIX = {
+    ".AX": ".AX",    # ASX (Australia)
+    ".BO": ".BOM",   # BSE (India)
+    ".PA": ".PAR",   # Euronext Paris
+    ".HK": ".HKG",   # Hong Kong
+    ".KS": ".KRX",   # Korea
+    ".L": ".LON",    # London
+    ".SI": ".SGX",   # Singapore
+    ".SW": ".SWX",   # Switzerland
+    ".T": ".TSE",    # Tokyo
+    ".TO": ".TOR",   # Toronto
+    ".DE": ".DEX",   # Xetra / Frankfurt
+    ".NS": ".NS",    # NSE (India) — Alpha Vantage uses .NS directly
+    ".BOM": ".BO",   # reverse maps, just in case
+    ".LON": ".L",
+}
+
+
 def _alpha_vantage_symbols(symbol: str) -> list[str]:
-    """Alpha Vantage uses its own suffixes (e.g. BSE is `.BOM`, not `.BO`), so
-    try the mapped form plus the common NSE/BSE counterpart."""
+    """Alpha Vantage uses its own suffixes (e.g. BSE is `.BOM`, LSE is `.LON`),
+    so emit the mapped form. Deduplicated, original first."""
     s = symbol.upper()
     out = [s]
-    if s.endswith(".BO"):
-        out.append(s[:-3] + ".BOM")
-    elif s.endswith(".BOM"):
-        out.append(s[:-4] + ".BO")
-    if s.endswith(".NS"):
-        out.append(s[:-3] + ".BSE")
+    for yahoo_s, av_s in _AV_SUFFIX.items():
+        if s.endswith(yahoo_s) and not s.endswith(av_s):
+            cand = s[: -len(yahoo_s)] + av_s
+            if cand not in out:
+                out.append(cand)
+            break
     return out
 
 
-def _fetch_alpha_vantage(symbol: str, api_key: str) -> Any | None:
-    """Keyed backup (tier 3) via Alpha Vantage's TIME_SERIES_DAILY. Used only
-    when yfinance and the direct Yahoo chart API both fail. Results are cached
-    in-memory (30 min) and in the DB, so the free 25-requests/day quota is not
-    exhausted by repeat views. Returns a DataFrame shaped like yfinance's, or
-    None on failure / quota / no-data."""
+def _av_interval_for_range(range_key: str) -> str | None:
+    """Intraday interval for short ranges; None => use daily series."""
+    if range_key == "1d":
+        return "5min"
+    if range_key == "1w":
+        return "60min"
+    return None
+
+
+def _fetch_alpha_vantage(symbol: str, range_key: str, api_key: str) -> Any | None:
+    """Keyed backup (tier 3) via Alpha Vantage. Used only when yfinance and the
+    direct Yahoo chart API both fail. Uses TIME_SERIES_INTRADAY for 1d/1w (true
+    intraday) and TIME_SERIES_DAILY otherwise. Results are cached in-memory and
+    in the DB so the free 25-requests/day quota is not exhausted by repeat views.
+    Returns a DataFrame shaped like yfinance's, or None on failure / quota."""
     if pd is None:
         return None
+    interval = _av_interval_for_range(range_key)
+    func = "TIME_SERIES_INTRADAY" if interval else "TIME_SERIES_DAILY"
+    series_key = f"Time Series ({interval})" if interval else "Time Series (Daily)"
+    base_params = {"function": func, "apikey": api_key, "outputsize": "full"}
+    if interval:
+        base_params["interval"] = interval
     for sym in _alpha_vantage_symbols(symbol):
-        params = {
-            "function": "TIME_SERIES_DAILY",
-            "symbol": sym,
-            "outputsize": "full",
-            "apikey": api_key,
-        }
+        params = {**base_params, "symbol": sym}
         try:
             resp = httpx.get(
                 "https://www.alphavantage.co/query",
@@ -115,10 +144,10 @@ def _fetch_alpha_vantage(symbol: str, api_key: str) -> Any | None:
             )
             resp.raise_for_status()
             j = resp.json()
-            series = j.get("Time Series (Daily)")
+            series = j.get(series_key)
             if not series:
                 note = j.get("Note") or j.get("Information") or "no series"
-                logger.warning("Alpha Vantage no data for %s: %s", sym, note)
+                logger.warning("Alpha Vantage no data for %s (%s): %s", sym, func, note)
                 continue
             rows = []
             for date_str, ohlc in series.items():
@@ -267,13 +296,13 @@ def index_history(symbol: str, range_key: str = "1mo") -> list[dict[str, Any]]:
         if sdf is not None:
             rows = _df_to_rows(sdf)
 
-    # Tier 3: keyed Alpha Vantage fallback (opt-in via ALPHA_VANTAGE_KEY). Covers
-    # symbols Yahoo doesn't serve (e.g. some Indian listings) without burning the
-    # yfinance quota. Cached so the free daily quota lasts.
+    # Tier 3: keyed Alpha Vantage fallback. Covers symbols Yahoo doesn't serve
+    # (e.g. some Indian/UK listings) without burning the yfinance quota. Cached so
+    # the free 25-requests/day quota lasts.
     if not rows:
-        av_key = os.environ.get("ALPHA_VANTAGE_KEY") or getattr(settings, "alpha_vantage_key", "") or ""
+        av_key = settings.alpha_vantage_key or os.environ.get("ALPHA_VANTAGE_KEY") or ""
         if av_key:
-            adf = _fetch_alpha_vantage(symbol, av_key)
+            adf = _fetch_alpha_vantage(symbol, range_key, av_key)
             if adf is not None:
                 rows = _df_to_rows(adf)
 
