@@ -3659,6 +3659,16 @@ button.ghost {
   padding: 12px 14px;
 }
 .ov-news-list, .ov-watch-list, .ov-active-list { display: flex; flex-direction: column; }
+.ov-news-box .ov-news-list {
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 0 -4px;
+  padding: 0 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.ov-news-box .ov-news-list::-webkit-scrollbar { width: 8px; }
+.ov-news-box .ov-news-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 .ov-news-item {
   display: block;
   padding: 8px 0;
@@ -3666,8 +3676,10 @@ button.ghost {
   text-decoration: none;
 }
 .ov-news-item:last-child { border-bottom: none; }
-.ov-news-item:hover .ov-news-title { color: var(--amber); }
-.ov-news-title { color: var(--text); font-family: var(--mono); font-size: 12px; line-height: 1.45; }
+.ov-news-title { color: var(--text); font-family: var(--mono); font-size: 12px; line-height: 1.45; text-decoration: none; display: block; }
+.ov-news-title:hover { color: var(--amber); }
+.ov-news-open { margin-left: auto; color: var(--cyan); text-decoration: none; font-family: var(--mono); }
+.ov-news-open:hover { text-decoration: underline; }
 .ov-news-summary {
   color: var(--amber);
   font-family: var(--mono);
@@ -4167,3 +4179,48 @@ button.ghost {
   cursor: pointer;
 }
 .agent-input-static:hover { border-color: var(--amber-dim); color: var(--text-dim); }
+
+/* Workflows tab */
+.workflows { padding: 4px 0 24px; }
+.wf-builder { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.wf-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 240px; }
+.wf-field-mode { flex: 0 0 140px; }
+.wf-field label { font-size: 10px; letter-spacing: 0.6px; color: var(--text-muted); font-family: var(--mono); }
+.wf-input, .wf-textarea, .wf-select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 8px 10px;
+  width: 100%;
+}
+.wf-textarea { resize: vertical; line-height: 1.5; }
+.wf-input:focus, .wf-textarea:focus, .wf-select:focus { outline: none; border-color: var(--amber); }
+.wf-builder-actions { display: flex; align-items: center; flex: 1 1 100%; margin-top: 4px; }
+
+.wf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.wf-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.wf-card:hover { border-color: var(--amber); background: var(--bg-hover); }
+.wf-card.saved { cursor: default; }
+.wf-card-title { color: var(--text); font-family: var(--mono); font-size: 13px; font-weight: 700; }
+.wf-card-desc { color: var(--text-muted); font-family: var(--mono); font-size: 11px; line-height: 1.5; }
+.wf-card-run { color: var(--cyan); font-family: var(--mono); font-size: 11px; margin-top: 2px; }
+.wf-card-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+.wf-card-mode { font-family: var(--mono); font-size: 10px; letter-spacing: 0.6px; }
+.wf-card-btns { display: flex; gap: 6px; }
+.wf-run { padding: 4px 8px; font-size: 11px; }
+.wf-del { padding: 4px 8px; font-size: 11px; color: var(--bear); }
+

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { agentChat } from "../api.js";
 import { saveSession } from "../agentHistory.js";
 import { useApp } from "../App.jsx";
+import { randomAgentGreeting } from "../greetings.js";
 
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -20,8 +21,7 @@ const PROVIDERS = [
   { id: "ollama", label: "Ollama" },
   { id: "local", label: "Local" },
 ];
-const INTRO =
-  "I'm **StockVerdict AI**. Markets are moving and I'm watching. What should I dig into?";
+const INTRO = randomAgentGreeting();
 
 export default function AgentChat({
   open,
@@ -51,6 +51,7 @@ export default function AgentChat({
   const sessionRef = useRef(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const greetedRef = useRef(INTRO);
 
   // Restore a saved session from the overview history when requested.
   useEffect(() => {
@@ -58,10 +59,25 @@ export default function AgentChat({
     sessionRef.current = restoreSession.id;
     setMessages(Array.isArray(restoreSession.messages) && restoreSession.messages.length
       ? restoreSession.messages
-      : [{ role: "assistant", content: INTRO }]);
+      : [{ role: "assistant", content: randomAgentGreeting() }]);
     setUsed(restoreSession.provider || "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restoreNonce]);
+
+  // Greet differently every time the chat opens fresh (no ongoing conversation,
+  // not restoring a saved session). This keeps the assistant from repeating the
+  // same static NPC line across opens.
+  useEffect(() => {
+    if (!open) return;
+    if (restoreNonce > 0 && restoreSession) return;
+    setMessages((msgs) => {
+      if (msgs.some((m) => m.role === "user")) return msgs;
+      const g = randomAgentGreeting(greetedRef.current);
+      greetedRef.current = g;
+      return [{ role: "assistant", content: g }];
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, restoreNonce]);
 
   useEffect(() => {
     if (initialMode && TABS.includes(initialMode.toUpperCase())) setTab(initialMode.toUpperCase());

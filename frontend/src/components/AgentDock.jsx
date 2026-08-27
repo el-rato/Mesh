@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { agentChat } from "../api.js";
 import { useApp } from "../App.jsx";
+import { randomAgentGreeting } from "../greetings.js";
 
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -14,8 +15,7 @@ function renderRich(text) {
 
 const WELCOME = {
   role: "assistant",
-  content:
-    "Hey — I'm **StockVerdict AI**. I can pull the latest **news**, read out the committee's **bullish** or **bearish** calls, or walk you through the terminal. Ask me anything.",
+  content: randomAgentGreeting(),
 };
 
 export default function AgentDock() {

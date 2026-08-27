@@ -12,6 +12,7 @@ import SimulationTab from "./components/SimulationTab.jsx";
 import PaperTab from "./components/PaperTab.jsx";
 import PaperOrderPanel from "./components/PaperOrderPanel.jsx";
 import NewsTab from "./components/NewsTab.jsx";
+import WorkflowTab from "./components/WorkflowTab.jsx";
 import NotificationsBell from "./components/NotificationsBell.jsx";
 import Drawer from "./components/Drawer.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
@@ -33,6 +34,7 @@ const SECONDARY_TABS = [
   { key: "screener", fn: "F6", label: "SCREENER" },
   { key: "sim", fn: "F7", label: "SIM / BACKTEST" },
   { key: "funds", fn: "F8", label: "HEDGE FUNDS" },
+  { key: "workflows", fn: "F9", label: "WORKFLOWS" },
 ];
 
 const TAB_COMPONENTS = {
@@ -44,6 +46,7 @@ const TAB_COMPONENTS = {
   news: NewsTab,
   sim: SimulationTab,
   funds: FundsTab,
+  workflows: WorkflowTab,
 };
 
 const CURRENCY_SYMBOLS = {

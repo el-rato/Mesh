@@ -125,7 +125,7 @@ export default function OverviewTab() {
   }, []);
 
   const loadRails = useCallback(() => {
-    newsFeed(10).then(setNews).catch(() => {});
+    newsFeed(30).then(setNews).catch(() => {});
     loadWatch();
     tickerStrip()
       .then((rows) =>
@@ -262,26 +262,42 @@ export default function OverviewTab() {
 
           {/* RIGHT RAIL */}
           <aside className="ov-rail">
-            <div className="ov-rail-box">
-              <div className="ov-panel-label">LIVE NEWS</div>
+            <div className="ov-rail-box ov-news-box">
+              <div className="ov-panel-label">LIVE NEWS <span className="dim">· SCROLL</span></div>
               {news.length ? (
                 <div className="ov-news-list">
                   {news.map((n, i) => {
                     const isGlobal = n.market === "GLOBAL" || n.ticker === "NEWS";
                     return (
-                      <a key={`${n.url}-${i}`} className="ov-news-item" href={n.url} target="_blank" rel="noopener noreferrer">
-                        <div className="ov-news-title">{n.title}</div>
-                        {n.summary && n.summary.toLowerCase() !== (n.title || "").toLowerCase() && (
+                      <div key={`${n.url}-${i}`} className="ov-news-item">
+                        <a
+                          className="ov-news-title"
+                          href={n.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={n.title}
+                        >
+                          {n.title}
+                        </a>
+                        {n.summary && String(n.summary).toLowerCase() !== String(n.title || "").toLowerCase() && (
                           <div className="ov-news-summary">{n.summary}</div>
                         )}
                         <div className="ov-news-meta dim">
-                          {n.source}
+                          <span>{n.source}</span>
                           {!isGlobal && (n.ticker || n.security_id) && (
                             <span className="ov-news-tk">{n.ticker || n.security_id}</span>
                           )}
                           <span>{String(n.published_at || n.fetched_at || "").slice(0, 10)}</span>
+                          <a
+                            className="ov-news-open"
+                            href={n.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            READ ⟶
+                          </a>
                         </div>
-                      </a>
+                      </div>
                     );
                   })}
                 </div>

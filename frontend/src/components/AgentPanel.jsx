@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { agentConfig } from "../api.js";
+import { useApp } from "../App.jsx";
+import { WORKFLOW_TEMPLATES as TEMPLATES, loadWorkflows } from "../workflows.js";
 
 const TABS = ["AUTO", "EQUITY", "MACRO", "NEWS"];
 
@@ -11,14 +13,8 @@ const PROVIDERS = [
   { id: "local", label: "Local", desc: "Built-in data-driven responder" },
 ];
 
-const TEMPLATES = [
-  { title: "China & EM Recovery Trade", prompt: "Analyze the China & EM recovery trade — describe the setup and what to watch." },
-  { title: "Healthcare & Biotech Rotation", prompt: "Analyze the Healthcare & Biotech rotation — describe the setup and what to watch." },
-  { title: "Energy & Infrastructure Play", prompt: "Analyze the Energy & Infrastructure play — describe the setup and what to watch." },
-  { title: "Geopolitical Risk Monitor", prompt: "Give me a geopolitical risk monitor — summarize risks and affected exposures." },
-];
-
 export default function AgentPanel({ onOpen, onAsk }) {
+  const { userEmail } = useApp();
   const [tab, setTab] = useState("AUTO");
   const [provider, setProvider] = useState("auto");
   const [model, setModel] = useState("");
@@ -27,10 +23,24 @@ export default function AgentPanel({ onOpen, onAsk }) {
   // Search style toggles: blue = deep search, green = low-token search.
   // Mutually exclusive; both off = the default balanced search.
   const [search, setSearch] = useState("");
+  // Saved, profile-scoped workflows mirrored from the Workflows tab.
+  const [saved, setSaved] = useState(() => loadWorkflows(userEmail));
 
   useEffect(() => {
     agentConfig().then(setCfg).catch(() => {});
   }, []);
+
+  // Keep the overview workflow list in sync with the active profile's store.
+  useEffect(() => {
+    setSaved(loadWorkflows(userEmail));
+    const onStorage = (e) => {
+      if (!e.key || e.key === `sv-workflows-${userEmail || "anon"}`) {
+        setSaved(loadWorkflows(userEmail));
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [userEmail]);
 
   const providerLabel = PROVIDERS.find((p) => p.id === provider)?.label || "Auto";
 
@@ -40,9 +50,9 @@ export default function AgentPanel({ onOpen, onAsk }) {
     setProvOpen(false);
     onOpen(tab, provider, model, search);
   };
-  const ask = (prompt) => {
+  const ask = (prompt, mode) => {
     setProvOpen(false);
-    onAsk(prompt, tab, provider, model, search);
+    onAsk(prompt, mode || tab, provider, model, search);
   };
 
   const configured = (id) => {
@@ -151,8 +161,22 @@ export default function AgentPanel({ onOpen, onAsk }) {
         </div>
       )}
 
-      {/* Templates */}
+      {/* Templates + saved profile workflows */}
       <div className="agent-workflow">
+        {saved.length > 0 && (
+          <>
+            <div className="ov-panel-label">WORKFLOW <span className="dim">· YOURS</span></div>
+            <div className="agent-template-grid">
+              {saved.map((w) => (
+                <button key={w.id} className="agent-template saved" onClick={() => ask(w.prompt, w.mode || "AUTO")}>
+                  <span className="agent-template-title">◆ {w.title}</span>
+                  <span className="agent-template-desc">{w.prompt}</span>
+                  <span className="agent-template-mode dim">{w.mode || "AUTO"}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
         <div className="ov-panel-label">WORKFLOW <span className="dim">· SUGGESTED TEMPLATES</span></div>
         <div className="agent-template-grid">
           {TEMPLATES.map((t) => (
