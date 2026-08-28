@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import time
 from typing import Any, Callable
@@ -689,6 +690,305 @@ TOOLS: dict[str, tuple[Callable[[dict], dict], str, dict]] = {
         },
     ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Agent Workflow screening (the strategy-discovery capability, in-agent)
+# ---------------------------------------------------------------------------
+
+def parse_strategy_text(text: str) -> dict[str, Any]:
+    """Best-effort extraction of structured criteria from a workflow description.
+
+    Only extracts signals we can actually evaluate from stored terminal data.
+    market_cap language is noted as UNVERIFIED (no reliable cap data exists) -- it
+    is never fabricated or silently treated as a real filter.
+    """
+    import re as _re
+
+    t = (text or "").lower()
+    c: dict[str, Any] = {
+        "name": "",
+        "description": text or "",
+        "market": None,
+        "verdict": None,
+        "momentum_min": None,
+        "trend_bullish": None,
+        "volume_ratio_min": None,
+        "rsi_min": None,
+        "rsi_max": None,
+        "conviction_min": None,
+        "news_min": None,
+        "notes": [],
+    }
+    if _re.search(r"large[- ]?cap|small[- ]?cap|market cap|marketcap", t):
+        c["notes"].append("market_cap criterion detected but market-cap data is unavailable; candidate selection did not use market capitalization")
+    if "bullish" in t or "uptrend" in t or "positive trend" in t:
+        c["trend_bullish"] = True
+    if "bearish" in t or "downtrend" in t:
+        c["trend_bullish"] = False
+    if "strong momentum" in t or "high momentum" in t or "momentum" in t:
+        c["momentum_min"] = 0.02
+    if "increasing volume" in t or "above average volume" in t or "volume confirm" in t:
+        c["volume_ratio_min"] = 1.2
+    if "conviction" in t or "committee" in t:
+        c["conviction_min"] = 0.6
+    if "bullish" in t and "trend" not in t:
+        c["verdict"] = "BULL"
+    if "bearish" in t and "trend" not in t:
+        c["verdict"] = "BEAR"
+    m = _re.search(r"rsi\s*(?:above|over)\s*(\d+)", t)
+    if m:
+        c["rsi_min"] = float(m.group(1))
+    m = _re.search(r"rsi\s*(?:below|under)\s*(\d+)", t)
+    if m:
+        c["rsi_max"] = float(m.group(1))
+    return c
+
+
+def _wf_clip(value: float, lo: float = -1.0, hi: float = 1.0) -> float:
+    return max(lo, min(hi, value))
+
+
+def _wf_num(value: Any, default: float | None = None) -> float | None:
+    try:
+        v = float(value)
+        return v if math.isfinite(v) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _wf_required_inputs(criteria: dict[str, Any]) -> list[str]:
+    req: list[str] = []
+    if criteria.get("momentum_min") is not None:
+        req.append("momentum")
+    if criteria.get("trend_bullish") is not None:
+        req.append("trend")
+    if criteria.get("volume_ratio_min") is not None:
+        req.append("volume")
+    if criteria.get("rsi_min") is not None or criteria.get("rsi_max") is not None:
+        req.append("rsi")
+    if criteria.get("conviction_min") is not None:
+        req.append("conviction")
+    if criteria.get("news_min") is not None:
+        req.append("news")
+    return req
+
+
+def _wf_score(a: dict[str, Any], criteria: dict[str, Any]) -> dict[str, Any]:
+    matched: list[str] = []
+    explanation: list[str] = []
+    missing: list[str] = []
+    parts: list[tuple[float, float, str]] = []
+    weights_total = 0.0
+    W = {"momentum": 0.25, "trend": 0.20, "rsi": 0.15, "volume": 0.10, "conviction": 0.20, "news": 0.10}
+
+    mom = _wf_num(a.get("momentum_20"))
+    if mom is None:
+        missing.append("momentum")
+    else:
+        parts.append((_wf_clip(mom * 2.0), W["momentum"], "momentum"))
+        weights_total += W["momentum"]
+        matched.append("momentum")
+        explanation.append(f"Momentum {mom:+.1%}")
+
+    above = a.get("above_sma")
+    if above is None:
+        missing.append("trend")
+    else:
+        if above:
+            parts.append((0.5, W["trend"], "trend"))
+            explanation.append("Price above SMA50 (bullish trend)")
+        else:
+            parts.append((-0.5, W["trend"], "trend"))
+            explanation.append("Price below SMA50 (bearish trend)")
+        weights_total += W["trend"]
+        matched.append("trend")
+
+    rsi = _wf_num(a.get("rsi_14"))
+    if rsi is None:
+        missing.append("rsi")
+    else:
+        s = 0.6 if rsi >= 70 else (-0.3 if rsi <= 30 else _wf_clip((rsi - 50) / 40.0))
+        parts.append((s, W["rsi"], "rsi"))
+        weights_total += W["rsi"]
+        matched.append("rsi")
+        explanation.append(f"RSI {rsi:.0f}")
+
+    vr = _wf_num(a.get("volume_ratio"))
+    if vr is None:
+        missing.append("volume")
+    else:
+        s = _wf_clip((vr - 1.0) * 0.8)
+        explanation.append(f"Volume {vr:.1f}x average ({'confirmation' if vr >= 1.0 else 'subdued'})")
+        parts.append((s, W["volume"], "volume"))
+        weights_total += W["volume"]
+        matched.append("volume")
+
+    conf = _wf_num(a.get("confidence"))
+    if conf is None:
+        missing.append("conviction")
+    else:
+        parts.append((_wf_clip((conf - 0.5) * 2.0), W["conviction"], "conviction"))
+        weights_total += W["conviction"]
+        matched.append("conviction")
+        explanation.append(f"Committee conviction {conf:.0%}")
+
+    ns = _wf_num(a.get("news_score"))
+    if ns is None:
+        missing.append("news")
+    else:
+        parts.append((_wf_clip(ns * 2.0), W["news"], "news"))
+        weights_total += W["news"]
+        matched.append("news")
+        explanation.append(f"News sentiment {ns:+.2f}")
+
+    score = 0.0 if not parts or weights_total <= 0 else round((sum(s * w for s, w, _ in parts) / weights_total + 1.0) / 2.0 * 100.0, 1)
+    req = _wf_required_inputs(criteria)
+    missing_req = [m for m in req if m in missing]
+    return {
+        "score": score, "matched": matched, "explanation": explanation,
+        "missing": missing, "evaluable": not missing_req, "missing_required": missing_req,
+    }
+
+
+def _wf_apply_gates(a: dict[str, Any], criteria: dict[str, Any]) -> bool:
+    mom = _wf_num(a.get("momentum_20"))
+    if criteria.get("momentum_min") is not None and (mom is None or mom < float(criteria["momentum_min"])):
+        return False
+    if criteria.get("trend_bullish") is not None:
+        above = a.get("above_sma")
+        if above is None or bool(above) != bool(criteria["trend_bullish"]):
+            return False
+    vr = _wf_num(a.get("volume_ratio"))
+    if criteria.get("volume_ratio_min") is not None and (vr is None or vr < float(criteria["volume_ratio_min"])):
+        return False
+    rsi = _wf_num(a.get("rsi_14"))
+    if criteria.get("rsi_min") is not None and (rsi is None or rsi < float(criteria["rsi_min"])):
+        return False
+    if criteria.get("rsi_max") is not None and (rsi is None or rsi > float(criteria["rsi_max"])):
+        return False
+    conf = _wf_num(a.get("confidence"))
+    if criteria.get("conviction_min") is not None and (conf is None or conf < float(criteria["conviction_min"])):
+        return False
+    return True
+
+
+def _wf_result(a: dict[str, Any], sc: dict[str, Any], status: str, market_cap_unverified: bool) -> dict[str, Any]:
+    explanation = list(sc["explanation"])
+    if market_cap_unverified:
+        explanation.append("Market cap: UNVERIFIED (market-cap data unavailable)")
+    return {
+        "security_id": f"{a.get('market')}:{a.get('ticker')}",
+        "market": a.get("market"),
+        "ticker": a.get("ticker"),
+        "company": a.get("company") or "",
+        "score": sc["score"],
+        "verdict": a.get("verdict"),
+        "confidence": a.get("confidence"),
+        "close": a.get("close"),
+        "momentum_20": a.get("momentum_20"),
+        "rsi_14": a.get("rsi_14"),
+        "above_sma": a.get("above_sma"),
+        "volume_ratio": a.get("volume_ratio"),
+        "news_score": a.get("news_score"),
+        "matched": sc["matched"],
+        "explanation": explanation,
+        "missing": sc["missing"],
+        "missing_required": sc.get("missing_required", []),
+        "status": status,
+        "match_reason": (
+            "Insufficient data for required inputs: " + ", ".join(sc.get("missing_required", []))
+            if status == "not_evaluable"
+            else ""
+        ),
+        "price_status": a.get("price_status") or (a.get("price") or {}).get("data_status", "ready"),
+        "price_as_of": a.get("price_as_of") or (a.get("price") or {}).get("as_of", ""),
+        "market_cap_unverified": market_cap_unverified,
+    }
+
+
+def screen_workflow(
+    prompt: str | None = None,
+    db: Database | None = None,
+    market: str | None = None,
+    limit: int = 30,
+    criteria: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Screen the live universe for a workflow and return REAL qualifying securities.
+
+    This is the Agent's strategy-discovery capability (no separate strategy
+    engine). Cheap filters + technical signals come from the existing screener;
+    expensive Research/Committee runs are NOT performed across the whole universe.
+    """
+    if criteria is None:
+        criteria = parse_strategy_text(prompt or "")
+    if market:
+        criteria["market"] = market
+    if criteria.get("market"):
+        criteria["market"] = criteria["market"].upper()
+    min_score = _wf_num(criteria.get("min_score"), 0.0) or 0.0
+    market_cap_unverified = any("market_cap" in n for n in criteria.get("notes", []))
+
+    from .screener import run as screener_run
+
+    if db is None:
+        db = _db()
+    screened = screener_run(
+        db,
+        market=criteria.get("market") or None,
+        verdict=criteria.get("verdict") or "",
+        limit=500,
+    )
+
+    qualifying: list[dict[str, Any]] = []
+    not_evaluable: list[dict[str, Any]] = []
+    for a in screened:
+        sc = _wf_score(a, criteria)
+        if not sc["evaluable"]:
+            not_evaluable.append(_wf_result(a, sc, "not_evaluable", market_cap_unverified))
+            continue
+        if not _wf_apply_gates(a, criteria):
+            continue
+        if sc["score"] < min_score:
+            continue
+        qualifying.append(_wf_result(a, sc, "qualifying", market_cap_unverified))
+
+    qualifying.sort(key=lambda r: r["score"], reverse=True)
+    return {
+        "workflow": criteria.get("description") or prompt or "",
+        "criteria": criteria,
+        "market_cap_unverified": market_cap_unverified,
+        "universe_size": len(screened),
+        "qualifying_count": len(qualifying),
+        "qualifying": qualifying[: int(limit)],
+        "not_evaluable": not_evaluable[:50],
+    }
+
+
+def tool_workflow(args: dict) -> dict:
+    """Agent tool: run a workflow prompt against the universe and return candidates."""
+    prompt = str(args.get("prompt", "")) or None
+    market = str(args.get("market", "")).upper() or None
+    limit = int(args.get("limit", 30))
+    criteria = args.get("criteria")
+    return screen_workflow(prompt=prompt, market=market, limit=limit, criteria=criteria)
+
+
+TOOLS["workflow"] = (
+    tool_workflow,
+    "Run a WORKFLOW prompt against the live universe and return REAL qualifying "
+    "securities (each with a canonical market:ticker id), ranked by a composite of "
+    "available signals, plus a separate NOT_EVALUABLE list for names that could not "
+    "be judged due to missing data. This IS the Agent's strategy screening -- no "
+    "separate strategy system exists. Use it when the user asks to find stocks "
+    "matching momentum/trend/volume/conviction criteria.",
+    {
+        "prompt": "Free-text workflow, e.g. 'strong momentum, bullish trend, increasing volume'. REQUIRED if no criteria.",
+        "market": "Optional market filter (e.g. NASDAQ).",
+        "limit": "Max qualifying results (default 30).",
+        "criteria": "Optional pre-structured criteria dict (advanced).",
+    },
+)
 
 
 def run_tool(name: str, args: dict | str | None = None) -> dict:

@@ -4,6 +4,7 @@ import { useApp } from "../App.jsx";
 import { verdictBadge, verdictClass } from "./ui.jsx";
 import AddToPortfolioButton from "./AddToPortfolioButton.jsx";
 import SecurityLink from "./SecurityLink.jsx";
+import PortfolioGroups from "./PortfolioGroups.jsx";
 
 function num(v, d = 0) {
   const n = Number(v);
@@ -103,6 +104,8 @@ export default function PortfolioTab() {
           ))}
         </div>
       )}
+
+      <PortfolioGroups />
 
       <div className="landing-h" style={{ marginTop: 14 }}>PAPER POSITIONS</div>
       {!positions.length ? (

@@ -190,6 +190,8 @@ def snapshot_price(snap: dict[str, Any] | None) -> dict[str, Any] | None:
         "sma_200": 0.0,
         "trend_50_200": 0.0,
         "above_sma_50": close >= sma if sma else None,
+        "data_status": snap.get("data_status") or "ready",
+        "as_of": snap.get("as_of") or snap.get("fetched_at") or "",
     }
 
 
@@ -260,6 +262,8 @@ def stock_analysis(
     price = snapshot_price(snap)
     if price is not None:
         v["price"] = price
+        v["price_status"] = price.get("data_status", "ready")
+        v["price_as_of"] = price.get("as_of", "")
         technical_score, technical_reasons = technical_from_snapshot(snap)
         v["technical"] = {"score": technical_score, "reasons": technical_reasons}
 
@@ -286,6 +290,32 @@ def stock_analysis(
 
     committee = v.get("committee") or {}
     factors = v.get("factors") or {}
+
+    # Per-metric data state. Each metric is reported independently so one failed
+    # model/provider (e.g. LSTM, news) NEVER poisons the entire security record.
+    # States: "ready", "stale", "no_data", "error".
+    price_status = (price or {}).get("data_status", "no_data") if price else "no_data"
+    metrics_status = {
+        "price": price_status,
+        "technical": "ready" if v.get("technical") else "no_data",
+        "committee": "ready" if committee.get("verdict") else "no_data",
+        "news": "ready" if bool(v.get("news_available")) else "no_data",
+        "lstm": (
+            "ready"
+            if (v.get("lstm") or {}).get("model") not in (None, "N/A")
+            and (row.get("lstm_score") is not None or row.get("lstm_probability_up") is not None)
+            else "no_data"
+        ),
+        "social": "ready" if v.get("social") else "no_data",
+        "market_regime": "ready" if v.get("market_regime") else "no_data",
+    }
+    # Overall security state: STALE if price is stale, otherwise NO_DATA only if
+    # nothing at all is available (here we have a verdict row, so at least the
+    # committee exists -> READY unless price is stale).
+    if price_status == "stale":
+        data_status = "stale"
+    else:
+        data_status = "ready"
 
     return {
         "market": row["market"],
@@ -316,6 +346,10 @@ def stock_analysis(
         "technical": v["technical"],
         "news": news or {"score": 0.0},
         "price": price,
+        "price_status": price_status,
+        "price_as_of": (price or {}).get("as_of", "") if price else "",
+        "data_status": data_status,
+        "metrics_status": metrics_status,
         "momentum_20": momentum,
         "rsi_14": rsi,
         "close": close,

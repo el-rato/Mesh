@@ -243,6 +243,60 @@ export async function watchlist() {
   return fetchJSON("/api/watchlist");
 }
 
+// ---- Agent Workflow screening (the strategy-discovery path, in-agent) ----
+export async function agentWorkflow(prompt, market = null, limit = 30, criteria = null) {
+  return fetchJSON("/api/agent/workflow", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt: prompt || "", market: market || null, limit, criteria }),
+  });
+}
+
+// ---- Portfolio Groups ----
+export async function portfolioGroups() {
+  return fetchJSON("/api/portfolio/groups");
+}
+
+export async function createPortfolioGroup({
+  name, description = "", source = "manual", strategy_id = null,
+  strategy_name = null, members = [],
+}) {
+  return fetchJSON("/api/portfolio/groups", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, description, source, strategy_id, strategy_name, members }),
+  });
+}
+
+export async function renamePortfolioGroup(groupId, name, description = null) {
+  return fetchJSON(`/api/portfolio/groups/${encodeURIComponent(groupId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, description }),
+  });
+}
+
+export async function deletePortfolioGroup(groupId) {
+  return fetchJSON(`/api/portfolio/groups/${encodeURIComponent(groupId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function addToGroup(groupId, market, ticker) {
+  return fetchJSON(`/api/portfolio/groups/${encodeURIComponent(groupId)}/members`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ market, ticker }),
+  });
+}
+
+export async function removeFromGroup(groupId, market, ticker) {
+  return fetchJSON(
+    `/api/portfolio/groups/${encodeURIComponent(groupId)}/members?market=${encodeURIComponent(market)}&ticker=${encodeURIComponent(ticker)}`,
+    { method: "DELETE" },
+  );
+}
+
 export async function authRegister(email, password, username = "") {
   return fetchJSON("/api/auth/register", {
     method: "POST",

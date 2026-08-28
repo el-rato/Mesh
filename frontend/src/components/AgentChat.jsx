@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { agentChat } from "../api.js";
+import { agentChat, agentWorkflow, addToGroup, createPortfolioGroup } from "../api.js";
 import { saveSession } from "../agentHistory.js";
 import { useApp } from "../App.jsx";
 import { randomAgentGreeting } from "../greetings.js";
+import { GroupPicker } from "./PortfolioGroups.jsx";
 
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -36,7 +37,7 @@ export default function AgentChat({
   restoreSession = null,
   restoreNonce = 0,
 }) {
-  const { market } = useApp();
+  const { market, openDrawer } = useApp();
   const [tab, setTab] = useState(initialMode || "AUTO");
   const [provider, setProvider] = useState(initialProvider || "auto");
   const [model, setModel] = useState(initialModel || "");
@@ -144,6 +145,53 @@ export default function AgentChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedId]);
 
+  // ---- Agent Workflow screening + group integration ----
+  // The Agent IS the strategy system: a workflow prompt screens the universe and
+  // returns real securities that can be sent straight to a Portfolio Group.
+  const [wf, setWf] = useState(null);
+  const [wfSel, setWfSel] = useState({});
+  const [wfPicker, setWfPicker] = useState(false);
+  const [wfNotice, setWfNotice] = useState("");
+
+  const runWorkflow = useCallback(async () => {
+    const prompt = input.trim();
+    if (!prompt || sending) return;
+    setSending(true);
+    setWfNotice("");
+    try {
+      const r = await agentWorkflow(prompt, market);
+      setWf(r);
+      const sel = {};
+      (r.qualifying || []).forEach((q) => { sel[q.security_id] = true; });
+      setWfSel(sel);
+    } catch (e) {
+      setWfNotice(`Workflow failed: ${e.message}`);
+    } finally {
+      setSending(false);
+    }
+  }, [input, market, sending]);
+
+  const wfSelectedSecs = wf ? (wf.qualifying || []).filter((q) => wfSel[q.security_id]) : [];
+
+  const wfAddToGroup = async (group) => {
+    let added = 0;
+    for (const s of wfSelectedSecs) {
+      try { await addToGroup(group.group_id, s.market, s.ticker); added += 1; } catch { /* skip */ }
+    }
+    setWfPicker(false);
+    setWfNotice(`Added ${added} securit${added === 1 ? "y" : "ies"} to "${group.name}".`);
+  };
+
+  const wfCreateGroup = async (name) => {
+    const members = wfSelectedSecs.map((s) => ({ market: s.market, ticker: s.ticker }));
+    if (!members.length) { setWfNotice("Select at least one security first."); return; }
+    try {
+      const g = await createPortfolioGroup({ name, source: "agent_workflow", workflow_text: wf?.workflow || "", members });
+      setWfPicker(false);
+      setWfNotice(`Created group "${g.name}" with ${members.length} securities.`);
+    } catch (e) { setWfNotice(`Failed: ${e.message}`); }
+  };
+
   if (!open) return null;
 
   const started = messages.some((m) => m.role === "user");
@@ -215,6 +263,56 @@ export default function AgentChat({
         )}
       </div>
 
+      {wf && (
+        <div className="agent-workflow">
+          <div className="agent-wf-head">
+            <span className="landing-h" style={{ marginTop: 0 }}>WORKFLOW RESULTS</span>
+            <span className="dim">{wf.universe_size} screened · {wf.qualifying_count} qualifying{wf.market_cap_unverified ? " · MARKET CAP UNVERIFIED" : ""}</span>
+          </div>
+          {wfNotice && <div className="scan-warning">{wfNotice}</div>}
+          {wfSelectedSecs.length > 0 && (
+            <div className="strategy-actions">
+              <button className="primary" onClick={() => setWfPicker((v) => !v)}>⊕ ADD SELECTED TO GROUP</button>
+            </div>
+          )}
+          {wfPicker && (
+            <div className="pg-picker-wrap">
+              <div className="dim">Send {wfSelectedSecs.length} selected to a group:</div>
+              <GroupPicker onPick={wfAddToGroup} onPickNew={wfCreateGroup} />
+            </div>
+          )}
+          <div className="grid">
+            {(wf.qualifying || []).map((q) => (
+              <div key={q.security_id} className="panel strategy-card" onClick={() => openDrawer({ type: "stock", v: { market: q.market, ticker: q.ticker, company: q.company, reason: ["WORKFLOW RESULT"] } })}>
+                <label className="strategy-check" onClick={(e) => e.stopPropagation()}>
+                  <input type="checkbox" checked={!!wfSel[q.security_id]} onChange={() => setWfSel((s) => ({ ...s, [q.security_id]: !s[q.security_id] }))} />
+                </label>
+                <div className="panel-head">
+                  <div>
+                    <span className="symbol">{q.ticker}</span>
+                    <div className="name">{q.market} · {q.company || ""}</div>
+                  </div>
+                  <div className="strategy-score">
+                    <span className="score">{q.score}</span><span className="dim">/100</span>
+                    {q.verdict ? <span className={`badge ${q.verdict === "BULL" ? "bull" : q.verdict === "BEAR" ? "bear" : "neutral"}`}>{q.verdict}</span> : null}
+                  </div>
+                </div>
+                <div className="strategy-expl">
+                  {q.explanation.map((e, i) => <div key={i} className="expl-item">+ {e}</div>)}
+                  {q.price_status === "stale" && <div className="expl-item stale">~ price STALE (as_of {String(q.price_as_of).slice(0, 10)})</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+          {wf.not_evaluable && wf.not_evaluable.length > 0 && (
+            <div className="dim" style={{ marginTop: 8 }}>
+              NOT_EVALUABLE ({wf.not_evaluable.length}): {wf.not_evaluable.slice(0, 6).map((n) => `${n.ticker} (${n.missing_required.join("/")})`).join(", ")}
+              {" "}— cannot be judged due to missing data (kept separate from non-matches).
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="agent-chat-inputbar">
         <input
           ref={inputRef}
@@ -253,6 +351,9 @@ export default function AgentChat({
         </div>
         <button className="agent-send" onClick={() => send()} disabled={sending}>
           →
+        </button>
+        <button className="agent-io-btn amber" onClick={runWorkflow} disabled={sending} title="Screen the universe for this workflow and return real candidates">
+          ▶ WORKFLOW
         </button>
       </div>
 

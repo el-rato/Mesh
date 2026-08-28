@@ -13,6 +13,7 @@ import PaperTab from "./components/PaperTab.jsx";
 import PaperOrderPanel from "./components/PaperOrderPanel.jsx";
 import NewsTab from "./components/NewsTab.jsx";
 import WorkflowTab from "./components/WorkflowTab.jsx";
+import PortfolioGroups from "./components/PortfolioGroups.jsx";
 import NotificationsBell from "./components/NotificationsBell.jsx";
 import Drawer from "./components/Drawer.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";

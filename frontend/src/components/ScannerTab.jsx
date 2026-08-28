@@ -33,7 +33,15 @@ function freshness(r) {
 }
 
 function status(r) {
-  return r.data_status === "no_data" ? "NO DATA" : "OK";
+  if (r.data_status === "no_data") return { label: "NO DATA", cls: "down" };
+  if (r.data_status === "stale") return { label: "STALE", cls: "stale" };
+  return { label: "OK", cls: "dim" };
+}
+
+function priceText(r) {
+  const c = r.close;
+  if (c == null || !Number.isFinite(Number(c))) return "NO DATA";
+  return Number(c).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
 const VERDICT_PILLS = [
@@ -171,7 +179,7 @@ export default function ScannerTab() {
                 </div>
               </div>
               <div className="scanner-primary">
-                <span className="lbl">PRICE</span><span className="val">{num(r.close).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                <span className="lbl">PRICE</span><span className="val">{priceText(r)}</span>
                 <span className="lbl">QUANT</span><span className="val">{dirToken(r.quantitative)}</span>
                 <span className="lbl">TECH</span><span className="val">{dirToken(r.technical && num(r.technical.score))}</span>
                 <span className="lbl">NEWS</span><span className="val">{dirToken(r.news_available ? num(r.news_score) : null)}</span>
@@ -179,7 +187,10 @@ export default function ScannerTab() {
               <div className="scanner-meta">
                 <span>AGREEMENT {agreement(r)}</span>
                 <span>FRESH {freshness(r)}</span>
-                <span className={r.data_status === "no_data" ? "down" : "dim"}>{status(r)}</span>
+                {(() => { const s = status(r); return <span className={s.cls}>{s.label}</span>; })()}
+                {r.data_status === "stale" && r.price_as_of && (
+                  <span className="stale-flag" title={`last valid data ${r.price_as_of}`}>AS_OF {r.price_as_of.slice(0, 10)}</span>
+                )}
               </div>
               <div className="row paper-actions" onClick={(e) => e.stopPropagation()}>
                 <AddToPortfolioButton market={r.market} ticker={r.ticker} company={r.company} />

@@ -31,6 +31,12 @@ class PriceState:
     sma_200: float = 0.0
     trend_50_200: float = 0.0
     price_above_sma_50: bool = False
+    #: Data freshness state: "ready" (fresh) or "stale" (last-known-good kept
+    #: after a failed/partial refresh). Never fabricated.
+    data_status: str = "ready"
+    #: When stale, the timestamp the value was originally valid (ISO). Empty for
+    #: fresh data.
+    as_of: str = ""
 
     def as_dict(self) -> dict[str, float | str | int | bool]:
         return {
@@ -46,6 +52,8 @@ class PriceState:
             "sma_200": round(self.sma_200, 4),
             "trend_50_200": round(self.trend_50_200, 4),
             "above_sma_50": self.price_above_sma_50,
+            "data_status": self.data_status,
+            "as_of": self.as_of,
         }
 
 
@@ -137,27 +145,57 @@ def store_price_state(db: Database, state: PriceState) -> None:
         momentum_20=state.momentum_20,
         rsi_14=state.rsi_14,
         sma_50=state.sma_50,
+        data_status=state.data_status,
+        as_of=state.as_of,
+    )
+
+
+def _stale_from_snapshot(market_code: str, ticker: str, db: Database) -> PriceState | None:
+    """Build a STALE PriceState from the last-known-good snapshot.
+
+    Used when a live refresh fails: we KEEP the previous valid values (marked
+    STALE with ``as_of``) instead of dropping them and reverting the security to
+    NO_DATA. Returns None when there is genuinely no prior data.
+    """
+    snap = db.latest_price_snapshot(market_code, ticker)
+    if not snap or snap.get("close") is None:
+        return None
+    return PriceState(
+        market=market_code,
+        ticker=ticker,
+        close=float(snap.get("close") or 0.0),
+        open=float(snap.get("open") or 0.0),
+        high=float(snap.get("high") or 0.0),
+        low=float(snap.get("low") or 0.0),
+        volume=int(snap.get("volume") or 0),
+        momentum_20=float(snap.get("momentum_20") or 0.0),
+        rsi_14=float(snap.get("rsi_14") or 50.0),
+        sma_50=float(snap.get("sma_50") or 0.0),
+        data_status="stale",
+        as_of=snap.get("as_of") or snap.get("fetched_at") or "",
     )
 
 
 def _fetch_one(market: Market, db: Database, symbol: str) -> tuple[str, PriceState] | None:
-    from .resolve import resolve_for_fetch
+    from .resolve import OK, resolve
 
     tkr = market.tickers[symbol]
-    yahoo_symbol = resolve_for_fetch(market.code, symbol, tkr.name)
-    if not yahoo_symbol:
-        # Unavailable/invalid symbols are skipped quietly; the resolver caches
-        # the outcome so they are not re-requested every cycle.
-        return None
+    res = resolve(market.code, symbol, tkr.name)
+    if res["status"] != OK:
+        # Provider could not validate a live symbol (not found / unavailable /
+        # temporary error / possibly delisted). Fall back to last-known-good data
+        # rather than discarding valid history; it is labelled STALE downstream.
+        return symbol, _stale_from_snapshot(market.code, symbol, db)
+    yahoo_symbol = res["symbol"]
     try:
         df = fetch_history(yahoo_symbol, period="6mo")
     except Exception as exc:
         logger.warning("Failed to fetch %s: %s", yahoo_symbol, exc)
-        return None
+        return symbol, _stale_from_snapshot(market.code, symbol, db)
     state = build_price_state(market.code, symbol, df)
     if state is None:
         logger.warning("No price data for %s", yahoo_symbol)
-        return None
+        return symbol, _stale_from_snapshot(market.code, symbol, db)
     return symbol, state
 
 
@@ -184,6 +222,10 @@ def fetch_market_prices(
             if res is None:
                 continue
             symbol, state = res
+            if state is None:
+                # Genuinely no usable data has ever been obtained: leave as
+                # NO_DATA (no snapshot row), never fabricate a value.
+                continue
             store_price_state(db, state)
             states[symbol] = state
     return states

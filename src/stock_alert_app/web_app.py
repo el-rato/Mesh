@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from .config import settings
 from .db import Database, utc_now
+from .analysis import snapshot_price, technical_from_snapshot
 from . import auth
 
 logger = logging.getLogger(__name__)
@@ -484,7 +485,7 @@ def scanner(
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    from .analysis import stock_analysis
+    from .analysis import stock_analysis, snapshot_price, technical_from_snapshot
     from .universe import universe
 
     db = _db()
@@ -492,17 +493,21 @@ def scanner(
     latest = {(r["market"], r["ticker"].upper()): r for r in rows}
 
     def _analyze(sec: dict[str, object]) -> dict[str, object]:
-        row = latest.get((sec["market"], sec["ticker"].upper()))
+        key = (sec["market"], sec["ticker"].upper())
+        row = latest.get(key)
+        snap = snaps.get(f"{key[0]}:{key[1]}")
         if row:
-            analysis = stock_analysis(
-                row, snaps.get(f"{row['market']}:{row['ticker'].upper()}"), markets
-            )
-            analysis["data_status"] = "ok"
+            analysis = stock_analysis(row, snap, markets)
+            # Respect ready/stale freshness from the snapshot; do not blanket "ok".
+            analysis["data_status"] = analysis.get("data_status", "ready")
             analysis["security"] = sec
+            analysis["security_id"] = f"{key[0]}:{sec['ticker']}"
         else:
-            # Security is known but has no analysis yet: keep it discoverable as
-            # NO_DATA instead of silently dropping it from the universe.
-            analysis = _no_data_analysis(sec)
+            # Security is known but has no verdict yet. If a price snapshot exists,
+            # surface its REAL price/technical data (READY or STALE) instead of
+            # discarding it and showing N/A across the whole panel. The committee
+            # verdict stays NO_DATA (per-metric), but the card is not blank.
+            analysis = _no_data_analysis(sec, snap)
         return analysis
 
     analyzed: list[dict[str, object]] = []
@@ -542,8 +547,19 @@ def scanner(
     return out[:limit]
 
 
-def _no_data_analysis(sec: dict[str, object]) -> dict[str, object]:
-    """Minimal analysis entry for a known security with no data/analysis yet."""
+def _no_data_analysis(sec: dict[str, object], snap: dict[str, object] | None = None) -> dict[str, object]:
+    """Minimal analysis entry for a known security with no verdict yet.
+
+    If a price snapshot exists it is surfaced as REAL price/technical data (marked
+    READY or STALE) — never fabricated — so the Scanner panel shows valid values
+    instead of N/A. Per-metric states distinguish what is genuinely unavailable
+    (committee/lstm/news -> no_data) from what is present.
+    """
+    price = snapshot_price(snap) if snap else None
+    tech_score, tech_reasons = technical_from_snapshot(snap) if snap else (0.0, ["no price snapshot"])
+    price_status = (price or {}).get("data_status", "no_data") if price else "no_data"
+    close = (price or {}).get("close")
+    data_status = price_status if price else "no_data"
     return {
         "market": sec.get("market"),
         "ticker": sec.get("ticker"),
@@ -552,14 +568,14 @@ def _no_data_analysis(sec: dict[str, object]) -> dict[str, object]:
         "verdict": "N/A",
         "confidence": None,
         "combined_score": None,
-        "committee": {"verdict": "N/A", "score": None, "confidence": None, "signals": [], "why": ["no data"]},
+        "committee": {"verdict": "N/A", "score": None, "confidence": None, "signals": [], "why": ["no verdict yet"]},
         "factors": {"bull": [], "bear": []},
         "decision": None,
-        "reason": ["NO_DATA — security has not been analyzed yet"],
+        "reason": ["NO_DATA — security has not been analyzed yet (price shown from snapshot if available)"],
         "decided_at": sec.get("last_analysis_at") or "",
-        "price_fetched_at": "",
-        "updated_at": sec.get("last_analysis_at") or "",
-        "analyzed_at": sec.get("last_analysis_at") or "",
+        "price_fetched_at": (snap or {}).get("fetched_at") or "",
+        "updated_at": (snap or {}).get("fetched_at") or sec.get("last_analysis_at") or "",
+        "analyzed_at": (snap or {}).get("fetched_at") or sec.get("last_analysis_at") or "",
         "news_score": 0.0,
         "price_score": 0.0,
         "news_available": False,
@@ -571,13 +587,25 @@ def _no_data_analysis(sec: dict[str, object]) -> dict[str, object]:
         "social": None,
         "market_regime": None,
         "research": None,
-        "technical": {"score": 0.0, "reasons": ["no data"]},
+        "technical": {"score": tech_score, "reasons": tech_reasons},
         "news": {"score": 0.0},
-        "price": None,
-        "momentum_20": 0.0,
-        "rsi_14": 50.0,
-        "close": 0.0,
-        "data_status": "no_data",
+        "price": price,
+        "price_status": price_status,
+        "price_as_of": (price or {}).get("as_of", "") if price else "",
+        "momentum_20": (price or {}).get("momentum_20", 0.0) if price else 0.0,
+        "rsi_14": (price or {}).get("rsi_14", 50.0) if price else 50.0,
+        "close": close,
+        "above_sma_50": (price or {}).get("above_sma_50"),
+        "data_status": data_status,
+        "metrics_status": {
+            "price": price_status,
+            "technical": "ready" if price else "no_data",
+            "committee": "no_data",
+            "news": "no_data",
+            "lstm": "no_data",
+            "social": "no_data",
+            "market_regime": "no_data",
+        },
         "security": sec,
     }
 
@@ -1199,6 +1227,116 @@ def delete_watchlist(market: str, ticker: str) -> dict[str, object]:
     db = _db()
     removed = db.remove_from_watchlist(market, ticker)
     return {"removed": removed, "market": market.upper(), "ticker": ticker.upper()}
+
+
+# ---------------------------------------------------------------------------
+# Strategy Agent discovery
+# ---------------------------------------------------------------------------
+
+
+class AgentWorkflowRequest(BaseModel):
+    prompt: str = ""
+    market: str | None = None
+    limit: int = 30
+    criteria: dict[str, object] | None = None
+
+
+@app.post("/api/agent/workflow")
+def agent_workflow(req: AgentWorkflowRequest) -> dict[str, object]:
+    """Agent Workflow screening.
+
+    This IS the strategy-discovery path: the Agent prompts the universe and returns
+    REAL qualifying securities (each with a canonical ``market:ticker`` id), ranked
+    by a composite of available signals, plus a separate NOT_EVALUABLE list for
+    names that could not be judged. No separate strategy engine/page/db exists.
+    """
+    from .agent_tools import screen_workflow
+
+    return screen_workflow(
+        prompt=req.prompt or None,
+        market=req.market,
+        limit=req.limit,
+        criteria=req.criteria,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Portfolio Groups
+# ---------------------------------------------------------------------------
+
+
+class PortfolioGroupCreate(BaseModel):
+    name: str
+    description: str = ""
+    #: Origin of the group. "agent_workflow" marks groups created from Agent results
+    #: (static snapshot). Plain metadata — never auto-rebalanced or rerun.
+    source: str = "manual"
+    workflow_text: str | None = None
+    members: list[dict[str, str]] = []
+
+
+class PortfolioGroupRename(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class PortfolioGroupAdd(BaseModel):
+    market: str
+    ticker: str
+
+
+@app.get("/api/portfolio/groups")
+def get_portfolio_groups() -> list[dict[str, object]]:
+    return _db().list_groups()
+
+
+@app.post("/api/portfolio/groups")
+def create_portfolio_group(req: PortfolioGroupCreate) -> dict[str, object]:
+    if not req.name:
+        raise HTTPException(status_code=422, detail="group name is required")
+    db = _db()
+    import uuid
+
+    gid = f"grp_{uuid.uuid4().hex[:12]}"
+    # The workflow text (if any) is preserved as metadata in the strategy_name
+    # column so no new schema is required.
+    group = db.create_group(
+        gid,
+        req.name,
+        req.description,
+        source=req.source,
+        strategy_name=req.workflow_text,
+    )
+    for m in req.members:
+        if m.get("market") and m.get("ticker"):
+            db.add_to_group(gid, m["market"], m["ticker"])
+    return db.get_group(gid)
+
+
+@app.patch("/api/portfolio/groups/{group_id}")
+def rename_portfolio_group(group_id: str, req: PortfolioGroupRename) -> dict[str, object]:
+    group = _db().rename_group(group_id, req.name, req.description)
+    if not group:
+        raise HTTPException(status_code=404, detail="group not found")
+    return group
+
+
+@app.delete("/api/portfolio/groups/{group_id}")
+def delete_portfolio_group(group_id: str) -> dict[str, object]:
+    removed = _db().delete_group(group_id)
+    return {"removed": removed, "group_id": group_id}
+
+
+@app.post("/api/portfolio/groups/{group_id}/members")
+def add_portfolio_group_member(group_id: str, req: PortfolioGroupAdd) -> dict[str, object]:
+    added = _db().add_to_group(group_id, req.market, req.ticker)
+    return {"added": added, "group_id": group_id, "market": req.market.upper(), "ticker": req.ticker.upper()}
+
+
+@app.delete("/api/portfolio/groups/{group_id}/members")
+def remove_portfolio_group_member(group_id: str, market: str, ticker: str) -> dict[str, object]:
+    removed = _db().remove_from_group(group_id, market, ticker)
+    return {"removed": removed, "group_id": group_id, "market": market.upper(), "ticker": ticker.upper()}
 
 
 @app.get("/api/agent")

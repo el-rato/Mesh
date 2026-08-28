@@ -203,7 +203,9 @@ def run(
         snap, prev_snap = snap_pairs.get(sec_key, (None, None))
         if row:
             analysis = stock_analysis(row, snap, markets)
-            analysis["data_status"] = "ok"
+            # Respect the per-metric/price freshness computed in analysis (ready /
+            # stale); never blanket-stamp as "ok".
+            analysis["data_status"] = analysis.get("data_status", "ready")
             analysis["security"] = sec
             analysis["security_id"] = f"{sec_market}:{sec_ticker}"
             analysis["last_price_update"] = (snap or {}).get("fetched_at")
@@ -218,13 +220,49 @@ def run(
                 analysis["warming"] = bool(refresh.is_warming(sec_market, sec_ticker)) or _warm(
                     sec_market, sec_ticker, sec.get("company") or "", sec.get("symbol") or ""
                 )
+        elif snap:
+            # No verdict yet BUT price data exists: show price + technical signals
+            # (marked per-metric READY/STALE) instead of hiding the whole row as
+            # N/A. The committee/verdict stay NO_DATA until analyzed.
+            from . import refresh
+            from .analysis import snapshot_price, technical_from_snapshot
+
+            _warm(sec_market, sec_ticker, sec.get("company") or "", sec.get("symbol") or "")
+            price = snapshot_price(snap)
+            tech_score, tech_reasons = technical_from_snapshot(snap)
+            analysis = {
+                "market": sec_market, "ticker": sec_ticker,
+                "symbol": sec.get("symbol") or sec_ticker,
+                "company": sec.get("company") or "",
+                "verdict": None, "confidence": None, "combined_score": None,
+                "price": price,
+                "price_status": (price or {}).get("data_status", "ready"),
+                "price_as_of": (price or {}).get("as_of", ""),
+                "momentum_20": (price or {}).get("momentum_20", 0.0),
+                "rsi_14": (price or {}).get("rsi_14", 50.0),
+                "close": (price or {}).get("close"),
+                "decision": {}, "quantitative": {}, "market_regime": {},
+                "social": {}, "technical": {"score": tech_score, "reasons": tech_reasons},
+                "news": None, "data_status": (price or {}).get("data_status", "ready")
+                if price else "no_data",
+                "metrics_status": {
+                    "price": (price or {}).get("data_status", "ready") if price else "no_data",
+                    "technical": "ready" if price else "no_data",
+                    "committee": "no_data", "news": "no_data",
+                    "lstm": "no_data", "social": "no_data", "market_regime": "no_data",
+                },
+                "security": sec,
+                "security_id": f"{sec_market}:{sec_ticker}",
+                "last_price_update": (snap or {}).get("fetched_at"),
+                "scanner_updated_at": scanned_at,
+            }
+            analysis["warming"] = bool(refresh.is_warming(sec_market, sec_ticker)) or True
+            # Fall through to the shared enrichment + filter + append block below
+            # so these rows still respect price/move/volume filters.
         else:
-            # No stored verdict yet. Warm it in the background (root cause of
-            # permanent N/A rows): once analyzed it gains lightweight signal data
-            # and appears in the default view automatically. Until then it stays
-            # out of the default scanner — only the NO_DATA / NEEDS RESEARCH
-            # preset surfaces unanalyzed securities explicitly, keeping the
-            # screener lightweight (price/change/volume/ranking only).
+            # No stored verdict and no price snapshot yet. Warm it in the
+            # background; only the NO_DATA / NEEDS RESEARCH preset surfaces
+            # unanalyzed securities explicitly, keeping the screener lightweight.
             from . import refresh
 
             _warm(sec_market, sec_ticker, sec.get("company") or "", sec.get("symbol") or "")
@@ -238,6 +276,11 @@ def run(
                 "price": None, "momentum_20": None, "decision": {},
                 "quantitative": {}, "market_regime": {}, "social": {},
                 "technical": {}, "news": None, "data_status": "no_data",
+                "metrics_status": {
+                    "price": "no_data", "technical": "no_data", "committee": "no_data",
+                    "news": "no_data", "lstm": "no_data", "social": "no_data",
+                    "market_regime": "no_data",
+                },
                 "security": sec,
                 "security_id": f"{sec_market}:{sec_ticker}",
                 "last_price_update": (snap or {}).get("fetched_at"),

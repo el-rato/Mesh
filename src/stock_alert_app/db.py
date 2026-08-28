@@ -491,6 +491,29 @@ CREATE TABLE IF NOT EXISTS price_history (
     payload TEXT NOT NULL DEFAULT '[]',
     PRIMARY KEY (symbol, range_key)
 );
+
+-- Reusable Portfolio Groups (file/folder-like collections of securities).
+CREATE TABLE IF NOT EXISTS portfolio_groups (
+    group_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    strategy_id TEXT,
+    strategy_name TEXT,
+    created_from_strategy_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pg_source ON portfolio_groups(source);
+
+CREATE TABLE IF NOT EXISTS portfolio_group_members (
+    group_id TEXT NOT NULL,
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    added_at TEXT NOT NULL,
+    PRIMARY KEY (group_id, market, ticker)
+);
+CREATE INDEX IF NOT EXISTS idx_pgm_group ON portfolio_group_members(group_id);
 """
 
 
@@ -519,7 +542,26 @@ class Database:
             self._migrate_user_ownership(conn)
             self._migrate_user_username(conn)
             self._migrate_paper_v2(conn)
+            self._migrate_price_snapshot_status(conn)
             return self._migrate_verdict_reasons(conn)
+
+    @staticmethod
+    def _migrate_price_snapshot_status(conn: sqlite3.Connection) -> None:
+        """Add last-known-good status columns so a failed refresh can be marked
+        STALE instead of reverting the whole security to NO_DATA.
+
+        Idempotent; existing rows default to 'ready' (they were inserted when a
+        successful fetch occurred).
+        """
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(price_snapshots)")}
+        if "data_status" not in cols:
+            conn.execute(
+                "ALTER TABLE price_snapshots ADD COLUMN data_status TEXT NOT NULL DEFAULT 'ready'"
+            )
+        if "as_of" not in cols:
+            conn.execute(
+                "ALTER TABLE price_snapshots ADD COLUMN as_of TEXT NOT NULL DEFAULT ''"
+            )
 
     @contextmanager
     def transaction(self):
@@ -770,12 +812,14 @@ class Database:
         momentum_20: float = 0.0,
         rsi_14: float = 50.0,
         sma_50: float = 0.0,
+        data_status: str = "ready",
+        as_of: str = "",
     ) -> None:
         with self.connect() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO price_snapshots
-                   (market, ticker, fetched_at, close, open, high, low, volume, momentum_20, rsi_14, sma_50)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (market, ticker, fetched_at, close, open, high, low, volume, momentum_20, rsi_14, sma_50, data_status, as_of)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     market,
                     ticker.upper(),
@@ -788,6 +832,8 @@ class Database:
                     momentum_20,
                     rsi_14,
                     sma_50,
+                    data_status,
+                    as_of,
                 ),
             )
 
@@ -1997,3 +2043,133 @@ class Database:
                     d["change_pct"] = None
                 out.append(d)
             return out
+
+    # ---- Portfolio Groups -------------------------------------------------
+
+    def create_group(
+        self,
+        group_id: str,
+        name: str,
+        description: str = "",
+        source: str = "manual",
+        strategy_id: str | None = None,
+        strategy_name: str | None = None,
+        created_from_strategy_at: str | None = None,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        if source in ("strategy", "agent_workflow") and not created_from_strategy_at:
+            created_from_strategy_at = now
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO portfolio_groups
+                   (group_id, name, description, created_at, updated_at, source,
+                    strategy_id, strategy_name, created_from_strategy_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    group_id,
+                    name,
+                    description,
+                    now,
+                    now,
+                    source,
+                    strategy_id,
+                    strategy_name,
+                    created_from_strategy_at or "",
+                ),
+            )
+        return self.get_group(group_id)
+
+    def get_group(self, group_id: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM portfolio_groups WHERE group_id = ?", (group_id,)
+            ).fetchone()
+            if not row:
+                return None
+            g = dict(row)
+            members = conn.execute(
+                "SELECT market, ticker FROM portfolio_group_members WHERE group_id = ? ORDER BY added_at",
+                (group_id,),
+            ).fetchall()
+            g["security_ids"] = [f"{m['market']}:{m['ticker']}" for m in members]
+            g["members"] = [
+                {"market": m["market"], "ticker": m["ticker"]} for m in members
+            ]
+            return g
+
+    def list_groups(self) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM portfolio_groups ORDER BY updated_at DESC"
+            ).fetchall()
+            out = []
+            for r in rows:
+                g = dict(r)
+                members = conn.execute(
+                    "SELECT market, ticker FROM portfolio_group_members WHERE group_id = ? ORDER BY added_at",
+                    (g["group_id"],),
+                ).fetchall()
+                g["security_ids"] = [f"{m['market']}:{m['ticker']}" for m in members]
+                g["members"] = [
+                    {"market": m["market"], "ticker": m["ticker"]} for m in members
+                ]
+                out.append(g)
+            return out
+
+    def rename_group(self, group_id: str, name: str, description: str | None = None) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE portfolio_groups SET name = ?, updated_at = ? WHERE group_id = ?",
+                (name, utc_now(), group_id),
+            )
+            if description is not None:
+                conn.execute(
+                    "UPDATE portfolio_groups SET description = ? WHERE group_id = ?",
+                    (description, group_id),
+                )
+        return self.get_group(group_id)
+
+    def delete_group(self, group_id: str) -> bool:
+        with self.connect() as conn:
+            conn.execute(
+                "DELETE FROM portfolio_group_members WHERE group_id = ?", (group_id,)
+            )
+            cur = conn.execute(
+                "DELETE FROM portfolio_groups WHERE group_id = ?", (group_id,)
+            )
+            return cur.rowcount > 0
+
+    def add_to_group(self, group_id: str, market: str, ticker: str) -> bool:
+        market = market.upper()
+        ticker = ticker.upper()
+        # No duplicate securities inside the same group.
+        existing = self.get_group(group_id)
+        if existing and any(
+            m["market"] == market and m["ticker"] == ticker
+            for m in existing.get("members", [])
+        ):
+            return False
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO portfolio_group_members
+                   (group_id, market, ticker, added_at) VALUES (?, ?, ?, ?)""",
+                (group_id, market, ticker, utc_now()),
+            )
+            conn.execute(
+                "UPDATE portfolio_groups SET updated_at = ? WHERE group_id = ?",
+                (utc_now(), group_id),
+            )
+            return conn.total_changes > 0
+
+    def remove_from_group(self, group_id: str, market: str, ticker: str) -> bool:
+        with self.connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM portfolio_group_members WHERE group_id = ? AND market = ? AND ticker = ?",
+                (group_id, market.upper(), ticker.upper()),
+            )
+            if cur.rowcount > 0:
+                conn.execute(
+                    "UPDATE portfolio_groups SET updated_at = ? WHERE group_id = ?",
+                    (utc_now(), group_id),
+                )
+            return cur.rowcount > 0
