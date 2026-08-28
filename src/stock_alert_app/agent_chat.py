@@ -358,6 +358,76 @@ def _local_respond_with_tools(
             if v.get("note"):
                 return f"{sec[1]} ({sec[0]}): {v['note']}."
 
+    # Add / remove a ticker to a portfolio group directly from the chat.
+    add_m = re.search(
+        r"\b(add|put|move|save|throw|stick)\b.*?\b([A-Za-z]{1,6})\b.*?\b(group|watchlist|portfolio|bucket|list)\b",
+        text or "",
+        re.I,
+    )
+    remove_m = re.search(
+        r"\b(remove|delete|drop|take)\b.*?\b([A-Za-z]{1,6})\b.*?\b(group|watchlist|portfolio|bucket|list|from)\b",
+        text or "",
+        re.I,
+    )
+    if add_m or remove_m:
+        m = add_m or remove_m
+        tkr = m.group(2).upper()
+        sec = _extract_security(text) or (None, tkr)
+        if sec and sec[1].upper() == tkr:
+            # Pull the group name from a few common phrasings:
+            #   "my Growth group" / "the Tech bucket"
+            #   "add AAPL to Watchlist" (name == keyword)
+            #   "group called Growth" / "put it in Value"
+            #   "remove MSFT from Growth" (name after 'from', no trailing keyword)
+            # NOTE: the bare token "list" is intentionally NOT a keyword so that the
+            # common group name "Watchlist" is captured as a whole, not split as
+            # "Watch" + the "list" keyword.
+            group_name = ""
+            gm = re.search(
+                r"\b(my|the)\s+([A-Za-z0-9 &_-]+?)\s*(group|watchlist|portfolio|bucket)\b",
+                text or "",
+                re.I,
+            )
+            if not gm:
+                gm = re.search(
+                    r"\b(to|in|into|from)\s+([A-Za-z0-9 &_-]+)(?:\s+(group|watchlist|portfolio|bucket)\b)?",
+                    text or "",
+                    re.I,
+                )
+            if not gm:
+                gm = re.search(
+                    r"\b(group|watchlist|portfolio|bucket)\b\s*(?:called|named)?\s*['\"]?([A-Za-z0-9 &_-]+)['\"]?",
+                    text or "",
+                    re.I,
+                )
+            if not gm and remove_m:
+                # "remove MSFT from Growth" — name follows 'from'/'out of' with no keyword.
+                gm = re.search(r"\b(from|out of)\s+([A-Za-z0-9 &_-]{1,24})", text or "", re.I)
+            if gm:
+                group_name = gm.group(2).strip().strip("'\"")
+            # Clean the captured name: drop leading determiners, a trailing
+            # space-separated keyword (e.g. "Value list" -> "Value") while leaving
+            # the single-word group name "Watchlist" intact, and any polite filler.
+            group_name = re.sub(r"^(my|the|a)\s+", "", group_name, flags=re.I).strip()
+            group_name = re.sub(
+                r"\s+(group|watchlist|portfolio|bucket|list)$", "", group_name, flags=re.I
+            ).strip()
+            group_name = re.sub(
+                r"\b(please|now|thanks|thank you|for me)\b.*$", "", group_name, flags=re.I
+            ).strip().strip("'\" ")
+            if group_name:
+                action = "add_to_group" if add_m else "remove_from_group"
+                res = run_tool(action, {"ticker": tkr, "market": sec[0] or "", "group": group_name})
+                r = res.get("result") or {}
+                if r.get("error"):
+                    return f"Couldn't update the group: {r['error']}"
+                verb = "Added" if add_m else "Removed"
+                return (
+                    f"{verb} **{tkr}** ({sec[0]}) {'to' if add_m else 'from'} "
+                    f"**{r.get('group')}**"
+                    + ("" if r.get("added", True) or not add_m else " (already in the group).")
+                )
+
     return _local_respond(text, ctx, market, mode or "AUTO")
 
 
@@ -471,6 +541,14 @@ def _prompt(history: list[dict], context: dict, search: str = "") -> str:
         "levels, institutional-flow risk, key catalysts). Cite specific tickers "
         "and the data behind your read — never invent prices or verdicts that "
         "aren't in the tool results.\n\n"
+        "PORTFOLIO GROUPS — the user can organise securities into named groups "
+        "(e.g. 'Growth', 'Watchlist'). When the user asks to add, put, save, move "
+        "or remove a ticker in/from a group, CALL `add_to_group` (or "
+        "`remove_from_group`) with the ticker and the group name. You do NOT need "
+        "a group id — pass the group NAME and it is matched case-insensitively (and "
+        "created automatically if it does not exist yet). Resolve the market from "
+        "the ticker when you can; if you are unsure of the group, call `list_groups` "
+        "first. Always confirm the action back to the user in plain language.\n\n"
         + tools_system_text()
     )
     n_verdicts, n_news = (40, 15) if s == "deep" else (10, 5) if s == "low" else (25, 10)

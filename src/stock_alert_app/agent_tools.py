@@ -544,6 +544,149 @@ def tool_analyze_rotation(args: dict) -> dict:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Portfolio Group management (the agent can add tickers to the user's groups)
+# ---------------------------------------------------------------------------
+
+import uuid as _uuid  # noqa: E402  (kept local to the group tools section)
+
+
+def _resolve_market_for(ticker: str) -> str:
+    """Best-effort market resolution for a ticker from the known universe."""
+    try:
+        secs = [s for s in _db().all_securities() if s["ticker"].upper() == ticker.upper()]
+    except Exception:
+        secs = []
+    return secs[0]["market"] if secs else ""
+
+
+def _group_by_name_or_id(db: "Database", group: str) -> dict | None:
+    """Find a group by its id first, then by a case-insensitive name match."""
+    g = db.get_group(group)
+    if g:
+        return g
+    want = (group or "").strip().lower()
+    for cand in db.list_groups():
+        if cand.get("name", "").lower() == want:
+            return cand
+    return None
+
+
+def tool_list_groups(args: dict) -> dict:
+    """List the user's portfolio groups (id, name, member count)."""
+    groups = _db().list_groups()
+    return {
+        "count": len(groups),
+        "groups": [
+            {
+                "group_id": g["group_id"],
+                "name": g["name"],
+                "source": g.get("source", ""),
+                "members": g.get("members", []),
+                "member_count": len(g.get("members", [])),
+            }
+            for g in groups
+        ],
+    }
+
+
+def tool_create_group(args: dict) -> dict:
+    """Create a new portfolio group (optionally seeded with tickers)."""
+    name = str(args.get("name", "")).strip()
+    description = str(args.get("description", "") or "")
+    members = args.get("members") or []
+    if isinstance(members, str):
+        members = [m.strip() for m in members.split(",") if m.strip()]
+    if not name:
+        return {"error": "name is required"}
+    db = _db()
+    gid = "grp_" + _uuid.uuid4().hex[:12]
+    g = db.create_group(gid, name, description=description, source="agent_chat")
+    added = []
+    for m in members:
+        # A member may be "MARKET:TICKER" or just "TICKER".
+        if ":" in str(m):
+            mkt, tkr = str(m).split(":", 1)
+        else:
+            mkt, tkr = (_resolve_market_for(str(m)) or ""), str(m)
+        if not mkt:
+            continue
+        if db.add_to_group(gid, mkt, tkr):
+            added.append(f"{mkt}:{tkr.upper()}")
+    return {
+        "group_id": gid,
+        "name": name,
+        "created": True,
+        "members_added": added,
+    }
+
+
+def tool_add_to_group(args: dict) -> dict:
+    """Add a ticker to a portfolio group.
+
+    Accepts either ``group_id`` (exact) or ``group`` (a group name — matched
+    case-insensitively, and created on the fly when it does not exist, unless
+    ``create`` is false). The ``market`` is resolved from the universe when
+    omitted. This is how the agent lets a user add a name it surfaced straight
+    into one of their groups from the chat.
+    """
+    ticker = str(args.get("ticker", "")).upper()
+    market = str(args.get("market", "")).upper() or None
+    group = str(args.get("group") or args.get("group_id") or "").strip()
+    create = bool(args.get("create", True))
+    if not ticker:
+        return {"error": "ticker is required"}
+    if not group:
+        return {"error": "group name or group_id is required"}
+    db = _db()
+    if not market:
+        market = _resolve_market_for(ticker)
+    if not market:
+        return {"error": f"Could not resolve a market for ticker {ticker}. Provide 'market'."}
+    g = _group_by_name_or_id(db, group)
+    if g is None:
+        if not create:
+            return {"error": f"No group named '{group}'. Pass create=true to create it."}
+        gid = "grp_" + _uuid.uuid4().hex[:12]
+        g = db.create_group(gid, group, source="agent_chat")
+    added = db.add_to_group(g["group_id"], market, ticker)
+    return {
+        "group_id": g["group_id"],
+        "group": g["name"],
+        "market": market,
+        "ticker": ticker,
+        "added": added,
+        "already_member": (not added),
+    }
+
+
+def tool_remove_from_group(args: dict) -> dict:
+    """Remove a ticker from a portfolio group (by id or name)."""
+    ticker = str(args.get("ticker", "")).upper()
+    market = str(args.get("market", "")).upper() or None
+    group = str(args.get("group") or args.get("group_id") or "").strip()
+    if not ticker:
+        return {"error": "ticker is required"}
+    if not group:
+        return {"error": "group name or group_id is required"}
+    db = _db()
+    if not market:
+        market = _resolve_market_for(ticker)
+    if not market:
+        return {"error": f"Could not resolve a market for ticker {ticker}. Provide 'market'."}
+    g = _group_by_name_or_id(db, group)
+    if g is None:
+        return {"error": f"No group named '{group}'."}
+    removed = db.remove_from_group(g["group_id"], market, ticker)
+    return {
+        "group_id": g["group_id"],
+        "group": g["name"],
+        "market": market,
+        "ticker": ticker,
+        "removed": removed,
+    }
+
+
 #: Each tool: name -> (handler, human description, parameter schema).
 TOOLS: dict[str, tuple[Callable[[dict], dict], str, dict]] = {
     "get_news": (
@@ -687,6 +830,46 @@ TOOLS: dict[str, tuple[Callable[[dict], dict], str, dict]] = {
             "market": "Optional market filter (e.g. NYSE).",
             "tickers": "Optional explicit list of tickers (or 'MARKET:TICKER') to build a custom basket.",
             "analyze": "true to force fresh live verdicts when stored coverage is thin (default false).",
+        },
+    ),
+    "list_groups": (
+        tool_list_groups,
+        "List the user's PORTFOLIO GROUPS (id, name, members). Use this to find "
+        "the group the user means before adding a ticker to it.",
+        {},
+    ),
+    "create_group": (
+        tool_create_group,
+        "Create a new PORTFOLIO GROUP to organise securities (optionally seed it "
+        "with tickers). Use when the user wants a new watch/group, or when adding "
+        "a ticker to a group that does not exist yet.",
+        {
+            "name": "Group name, e.g. 'Growth'. REQUIRED.",
+            "description": "Optional group description.",
+            "members": "Optional list of tickers (or 'MARKET:TICKER') to seed the group with.",
+        },
+    ),
+    "add_to_group": (
+        tool_add_to_group,
+        "Add a TICKER to one of the user's PORTFOLIO GROUPS directly from chat. "
+        "When the user says things like 'add AAPL to my Growth group' or 'put "
+        "TSLA in Watchlist', call this with the ticker and the group name (the "
+        "group is created automatically if it does not exist yet). The market is "
+        "resolved from the universe when omitted.",
+        {
+            "ticker": "Ticker symbol to add, e.g. AAPL. REQUIRED.",
+            "market": "Market code (optional; resolved from the universe if omitted).",
+            "group": "Group name OR group_id. Created automatically if it does not exist.",
+            "create": "true (default) to create the group when missing; false to error instead.",
+        },
+    ),
+    "remove_from_group": (
+        tool_remove_from_group,
+        "Remove a TICKER from one of the user's PORTFOLIO GROUPS (by name or id).",
+        {
+            "ticker": "Ticker symbol to remove. REQUIRED.",
+            "market": "Market code (optional; resolved from the universe if omitted).",
+            "group": "Group name OR group_id. REQUIRED.",
         },
     ),
 }

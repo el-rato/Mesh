@@ -502,12 +502,67 @@ def scanner(
             analysis["data_status"] = analysis.get("data_status", "ready")
             analysis["security"] = sec
             analysis["security_id"] = f"{key[0]}:{sec['ticker']}"
+        elif snap:
+            # Security has a price snapshot but no stored committee verdict: build a
+            # real technical-based verdict from the snapshot (so the SCANNER shows an
+            # actual BULL/BEAR/NEUTRAL call instead of a wall of N/A), and warm the
+            # security in the background so it later gets the full quant/news verdict.
+            tech_score, _ = technical_from_snapshot(snap)
+            synth_row = {
+                "market": sec["market"],
+                "ticker": sec["ticker"],
+                "verdict": "NEUTRAL",
+                "confidence": 0.0,
+                "news_score": 0.0,
+                "price_score": 0.0,
+                "combined_score": 0.0,
+                "reason": "",
+                "decided_at": (snap or {}).get("fetched_at") or "",
+                "technical_score": tech_score,
+                "lstm_score": 0.0,
+                "lstm_probability_up": None,
+                "lstm_predicted_return": None,
+                "lstm_confidence": None,
+                "signals": "",
+            }
+            analysis = stock_analysis(synth_row, snap, markets)
+            analysis["security"] = sec
+            analysis["security_id"] = f"{key[0]}:{sec['ticker']}"
+            analysis["verdict_source"] = "technical_only"
+            # Warm it so the full committee verdict (quant + news) replaces this.
+            try:
+                from . import refresh
+
+                analysis["warming"] = bool(
+                    refresh.is_warming(sec["market"], sec["ticker"])
+                ) or bool(
+                    refresh.enqueue_analysis(
+                        str(db.path), sec["market"], sec["ticker"],
+                        sec.get("company") or "", sec.get("symbol") or None,
+                    )
+                )
+            except Exception:
+                analysis["warming"] = False
         else:
             # Security is known but has no verdict yet. If a price snapshot exists,
             # surface its REAL price/technical data (READY or STALE) instead of
             # discarding it and showing N/A across the whole panel. The committee
             # verdict stays NO_DATA (per-metric), but the card is not blank.
             analysis = _no_data_analysis(sec, snap)
+            # Warm it in the background so the next scan shows a real verdict.
+            try:
+                from . import refresh
+
+                analysis["warming"] = bool(
+                    refresh.is_warming(sec["market"], sec["ticker"])
+                ) or bool(
+                    refresh.enqueue_analysis(
+                        str(db.path), sec["market"], sec["ticker"],
+                        sec.get("company") or "", sec.get("symbol") or None,
+                    )
+                )
+            except Exception:
+                analysis["warming"] = False
         return analysis
 
     analyzed: list[dict[str, object]] = []
