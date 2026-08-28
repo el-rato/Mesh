@@ -1559,7 +1559,13 @@ def lstm_train(
     batch_size: int = 32,
     lr: float = 1e-3,
 ) -> dict[str, object]:
-    """Train LSTM price prediction model for a symbol."""
+    """Train the SINGLE shared (global) LSTM over the universe and return a
+    prediction for ``symbol`` using it.
+
+    We no longer train one model per ticker (that created hundreds of checkpoint
+    files and re-loaded a model per request). ``train_price_lstm`` trains one
+    cross-asset model and reuses it for every symbol.
+    """
     from .models.price_lstm import train_price_lstm
 
     res = train_price_lstm(
@@ -1571,7 +1577,7 @@ def lstm_train(
         lr=lr,
     )
     if res is None:
-        raise HTTPException(status_code=404, detail=f"Could not train for {symbol}")
+        raise HTTPException(status_code=404, detail=f"Could not train global model (no price data for {symbol})")
     return res.as_dict()
 
 

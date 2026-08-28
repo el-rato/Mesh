@@ -3,13 +3,13 @@ from __future__ import annotations
 import logging
 import math
 import pickle
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-import yfinance as yf
 from torch import nn
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,18 @@ MODEL_DIR = Path(__file__).resolve().parent / "price_lstm_checkpoints"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+#: A SINGLE shared model + scaler for the ENTIRE universe. Training one model
+#: (instead of one checkpoint per ticker) is dramatically cheaper: a single load
+#: per process, a single training pass over pooled data, and one set of weights
+#: to maintain. Stationary features (returns/ratios/momentum) make a cross-asset
+#: model viable, so per-ticker `.pt`/`.pkl` files are no longer created.
+GLOBAL_MODEL_PATH = MODEL_DIR / "global_lstm_model.pt"
+GLOBAL_SCALER_PATH = MODEL_DIR / "global_lstm_scaler.pkl"
+
+_global_lock = threading.Lock()
+_global_model: "PriceLSTM | None" = None
+_global_scaler: "RobustStandardScaler | None" = None
 
 
 @dataclass
@@ -189,9 +201,10 @@ def scale_features(
 
 
 def fetch_history_array(symbol: str, period: str = "2y") -> np.ndarray | None:
+    from ..price_providers import fetch_ohlcv
+
     try:
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(period=period, interval="1d", auto_adjust=True)
+        hist = fetch_ohlcv(symbol, period=period, interval="1d")
         if hist is None or hist.empty or len(hist) < 60:
             return None
         return hist[["Open", "High", "Low", "Close", "Volume"]].values.astype(
@@ -200,14 +213,6 @@ def fetch_history_array(symbol: str, period: str = "2y") -> np.ndarray | None:
     except Exception as exc:
         logger.warning("Failed to fetch history for %s: %s", symbol, exc)
         return None
-
-
-def _model_path(symbol: str) -> Path:
-    return MODEL_DIR / f"{symbol.replace('.', '_')}_model.pt"
-
-
-def _scaler_path(symbol: str) -> Path:
-    return MODEL_DIR / f"{symbol.replace('.', '_')}_scaler.pkl"
 
 
 def train_price_lstm(
@@ -219,148 +224,199 @@ def train_price_lstm(
     batch_size: int = 32,
     lr: float = 1e-3,
 ) -> LSTMResult | None:
-    """Train LSTM with chronological train/val/test split and proper scaling (no leakage)."""
-    arr = fetch_history_array(symbol, period)
-    if arr is None:
-        return None
+    """Train the SINGLE shared (global) LSTM and return a prediction for ``symbol``.
 
-    X, y = prepare_features(arr, window, horizon)
-    if len(X) < 50:
-        return None
+    We deliberately do NOT train a per-ticker model anymore: that created one
+    checkpoint + scaler file per stock (hundreds of files, one model load and
+    one training pass each) which is wasteful. A single cross-asset model is
+    trained over pooled universe data and reused for every ticker.
+    """
+    train_global_lstm(period=period, window=window, horizon=horizon, epochs=epochs, batch_size=batch_size, lr=lr)
+    return predict_price_lstm(symbol, period=period, window=window)
 
-    # Chronological split: 70% train, 15% val, 15% test
-    n = len(X)
-    train_end = int(n * 0.7)
-    val_end = int(n * 0.85)
 
-    X_train, y_train = X[:train_end], y[:train_end]
-    X_val, y_val = X[train_end:val_end], y[train_end:val_end]
-    X_test, y_test = X[val_end:], y[val_end:]
+def train_global_lstm(
+    period: str = "2y",
+    window: int = 30,
+    horizon: int = 1,
+    epochs: int = 20,
+    batch_size: int = 32,
+    lr: float = 1e-3,
+    max_symbols: int = 60,
+    max_samples: int = 30000,
+) -> bool:
+    """Train ONE LSTM over pooled data from the configured universe.
 
-    # Fit scaler ONLY on training data
-    X_train_scaled, scaler = scale_features(X_train, fit=True)
-    X_val_scaled, _ = scale_features(X_val, scaler=scaler, fit=False)
-    X_test_scaled, _ = scale_features(X_test, scaler=scaler, fit=False)
+    Returns True if a global model was trained and saved. The shared scaler is
+    fit on the pooled training features so every ticker is scored on the same
+    scale (no per-ticker scaler files).
+    """
+    from ..config import settings
+    from ..markets import load_markets, scan_market_codes
 
-    model = PriceLSTM(input_size=X.shape[2]).to(DEVICE)
+    symbols: list[str] = []
+    try:
+        mkts = load_markets(settings.markets_dir)
+        for code in scan_market_codes(settings.markets_dir):
+            m = mkts.get(code)
+            if m:
+                symbols.extend(m.tickers.keys())
+    except Exception as exc:
+        logger.warning("Global LSTM: could not enumerate markets: %s", exc)
+
+    # De-duplicate, then deterministically sample a manageable training pool.
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for s in symbols:
+        if s not in seen:
+            seen.add(s)
+            uniq.append(s)
+    if len(uniq) > max_symbols:
+        step = max(1, len(uniq) // max_symbols)
+        uniq = uniq[::step][:max_symbols]
+
+    X_pool: list[np.ndarray] = []
+    y_pool: list[np.ndarray] = []
+    for sym in uniq:
+        arr = fetch_history_array(sym, period)
+        if arr is None or len(arr) < window + horizon + 60:
+            continue
+        X, y = prepare_features(arr, window, horizon)
+        if len(X) < 50:
+            continue
+        X_pool.append(X)
+        y_pool.append(y)
+        if sum(len(x) for x in X_pool) >= max_samples:
+            break
+    if not X_pool:
+        logger.warning("Global LSTM: no usable training data found")
+        return False
+
+    X_all = np.concatenate(X_pool, axis=0)
+    y_all = np.concatenate(y_pool, axis=0)
+    if len(X_all) > max_samples:
+        keep = np.random.permutation(len(X_all))[:max_samples]
+        X_all, y_all = X_all[keep], y_all[keep]
+    n = len(X_all)
+    perm = np.random.permutation(n)
+    train_n = int(n * 0.85)
+    X_tr = X_all[perm[:train_n]]
+    X_val = X_all[perm[train_n:]]
+    y_tr = y_all[perm[:train_n]]
+    y_val = y_all[perm[train_n:]]
+
+    scaler = RobustStandardScaler().fit(X_tr.reshape(-1, X_tr.shape[2]))
+    X_tr_s, _ = scale_features(X_tr, scaler=scaler, fit=False)
+    X_val_s, _ = scale_features(X_val, scaler=scaler, fit=False)
+
+    model = PriceLSTM(input_size=X_tr.shape[2]).to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
     criterion = nn.MSELoss()
 
-    X_train_t = torch.from_numpy(X_train_scaled).to(DEVICE)
-    y_train_t = torch.from_numpy(y_train).unsqueeze(1).to(DEVICE)
-    X_val_t = torch.from_numpy(X_val_scaled).to(DEVICE)
+    X_tr_t = torch.from_numpy(X_tr_s).to(DEVICE)
+    y_tr_t = torch.from_numpy(y_tr).unsqueeze(1).to(DEVICE)
+    X_val_t = torch.from_numpy(X_val_s).to(DEVICE)
     y_val_t = torch.from_numpy(y_val).unsqueeze(1).to(DEVICE)
-    X_test_t = torch.from_numpy(X_test_scaled).to(DEVICE)
-    y_test_t = torch.from_numpy(y_test).unsqueeze(1).to(DEVICE)
 
     best_val_loss = float("inf")
     best_state = None
-
     model.train()
     for epoch in range(epochs):
-        perm = np.random.permutation(len(X_train))
-        for i in range(0, len(X_train), batch_size):
-            batch_idx = perm[i : i + batch_size]
-            bx = X_train_t[batch_idx]
-            by = y_train_t[batch_idx]
-
+        p = np.random.permutation(len(X_tr_s))
+        for i in range(0, len(X_tr_s), batch_size):
+            b = p[i : i + batch_size]
             optimizer.zero_grad()
-            preds = model(bx)
-            loss = criterion(preds, by)
+            loss = criterion(model(X_tr_t[b]), y_tr_t[b])
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
-
         model.eval()
         with torch.no_grad():
-            val_preds = model(X_val_t)
-            val_loss = criterion(val_preds, y_val_t).item()
+            val_loss = criterion(model(X_val_t), y_val_t).item()
         model.train()
-
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_state = {k: v.cpu() for k, v in model.state_dict().items()}
 
     if best_state is not None:
         model.load_state_dict(best_state)
-
     model.eval()
-    with torch.no_grad():
-        test_preds = model(X_test_t).squeeze(1).cpu().numpy()
-        test_y = y_test
-
-        mse = float(np.mean((test_preds - test_y) ** 2))
-        mae = float(np.mean(np.abs(test_preds - test_y)))
-        # Directional accuracy (% of correct sign prediction)
-        correct_dir = np.sign(test_preds) == np.sign(test_y)
-        dir_acc = float(np.mean(correct_dir))
-
-        # Latest prediction for current state (use last test window, properly scaled)
-        latest_window = X[-1:].copy()
-        latest_scaled, _ = scale_features(latest_window, scaler=scaler, fit=False)
-        latest_t = torch.from_numpy(latest_scaled).to(DEVICE)
-        pred_ret = float(model(latest_t).item())
-
-    if not math.isfinite(pred_ret):
-        logger.warning("LSTM produced non-finite prediction for %s", symbol)
-        return None
-
-    # Save checkpoint & scaler
-    torch.save(model.state_dict(), _model_path(symbol))
-    with open(_scaler_path(symbol), "wb") as f:
+    torch.save(model.state_dict(), GLOBAL_MODEL_PATH)
+    with open(GLOBAL_SCALER_PATH, "wb") as f:
         pickle.dump(scaler, f)
+    logger.info("Global LSTM trained on %d samples from %d symbols", n, len(X_pool))
+    return True
 
-    # Probability up via sigmoid of prediction scaled
-    prob_up = float(1.0 / (1.0 + np.exp(-pred_ret * 50)))
-    confidence = float(max(0.0, min(1.0, 1.0 - mse * 50)))
 
-    if pred_ret > 0.002:
-        signal = "BULL"
-    elif pred_ret < -0.002:
-        signal = "BEAR"
-    else:
-        signal = "NEUTRAL"
+def _load_global_artifacts() -> bool:
+    """Load the shared model + scaler into the process cache (once per process).
 
-    return LSTMResult(
-        ticker=symbol,
-        predicted_return=pred_ret,
-        probability_up=prob_up,
-        confidence=confidence,
-        signal=signal,
-        mse=mse,
-        mae=mae,
-        directional_accuracy=dir_acc,
-    )
+    Cheap to call repeatedly: it only touches disk when the model is not already
+    in memory and the checkpoint files exist.
+    """
+    global _global_model, _global_scaler
+    if _global_model is not None:
+        return True
+    with _global_lock:
+        if _global_model is not None:
+            return True
+        if not (GLOBAL_MODEL_PATH.exists() and GLOBAL_SCALER_PATH.exists()):
+            return False
+        try:
+            with open(GLOBAL_SCALER_PATH, "rb") as f:
+                scaler = pickle.load(f)
+            feat_dim = int(scaler.mean.shape[0])
+            model = PriceLSTM(input_size=feat_dim).to(DEVICE)
+            model.load_state_dict(torch.load(GLOBAL_MODEL_PATH, map_location=DEVICE))
+            model.eval()
+            _global_model, _global_scaler = model, scaler
+            return True
+        except Exception as exc:
+            logger.warning("Global LSTM load failed: %s", exc)
+            _global_model, _global_scaler = None, None
+            return False
+    return False
+
+
+def _ensure_global(period: str, window: int) -> tuple["PriceLSTM | None", "RobustStandardScaler | None"]:
+    """Return the (model, scaler), training the global model lazily if missing."""
+    if _load_global_artifacts():
+        return _global_model, _global_scaler
+    # Train on first use (network/CPU heavy, but only ever once per process).
+    try:
+        train_global_lstm(period=period, window=window)
+    except Exception as exc:
+        logger.warning("Global LSTM training failed: %s", exc)
+        return None, None
+    if _load_global_artifacts():
+        return _global_model, _global_scaler
+    return None, None
 
 
 def predict_price_lstm(
     symbol: str, period: str = "2y", window: int = 30
 ) -> LSTMResult | None:
-    model_file = _model_path(symbol)
-    scaler_file = _scaler_path(symbol)
+    """Predict next-day direction for ``symbol`` using the SINGLE shared model.
+
+    The model + scaler are loaded once per process (and trained lazily on first
+    use if absent), so every subsequent ticker reuses the same weights — no
+    per-ticker checkpoint files are created.
+    """
+    model, scaler = _ensure_global(period, window)
+    if model is None or scaler is None:
+        logger.warning("Global LSTM unavailable; cannot predict %s", symbol)
+        return None
 
     arr = fetch_history_array(symbol, period)
     if arr is None or len(arr) < window + 10:
         return None
 
-    if not model_file.exists() or not scaler_file.exists():
-        return train_price_lstm(symbol, period, window=window)
-
     try:
-        with open(scaler_file, "rb") as f:
-            scaler = pickle.load(f)
-
-        # Prepare features without fitting scaler
+        # Prepare features and apply the shared scaler (transform, never fit).
         X, _ = prepare_features(arr, window=window)
         if len(X) == 0:
-            return train_price_lstm(symbol, period, window=window)
-
-        # Apply SAVED scaler only (transform, not fit)
+            return None
         X_scaled, _ = scale_features(X, scaler=scaler, fit=False)
-
-        model = PriceLSTM(input_size=X.shape[2]).to(DEVICE)
-        model.load_state_dict(torch.load(model_file, map_location=DEVICE))
-        model.eval()
 
         with torch.no_grad():
             latest = torch.from_numpy(X_scaled[-1:]).to(DEVICE)
@@ -390,8 +446,8 @@ def predict_price_lstm(
             signal=signal,
         )
     except Exception as exc:
-        logger.warning("Prediction failed for %s, retraining: %s", symbol, exc)
-        return train_price_lstm(symbol, period, window=window)
+        logger.warning("Prediction failed for %s: %s", symbol, exc)
+        return None
 
 
 def batch_predict_lstm(

@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import pandas as pd
-import yfinance as yf
 
 from .config import settings
 from .db import Database
@@ -60,11 +59,9 @@ class PriceState:
 def fetch_history(
     symbol: str, period: str = "6mo", interval: str = "1d"
 ) -> pd.DataFrame:
-    ticker = yf.Ticker(symbol)
-    df = ticker.history(period=period, interval=interval, auto_adjust=True)
-    if df is None or df.empty or "Close" not in df.columns:
-        return pd.DataFrame()
-    return df
+    from .price_providers import fetch_ohlcv
+
+    return fetch_ohlcv(symbol, period=period, interval=interval)
 
 
 def _safe_mean(values: list[float]) -> float:
