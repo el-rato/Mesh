@@ -287,9 +287,11 @@ def stock_analysis(
                 company = ""
 
     news = v.get("news") or {}
-    momentum = _num(price.get("momentum_20")) if price else 0.0
-    rsi = _num(price.get("rsi_14"), 50.0) if price else 50.0
-    close = _num(price.get("close")) if price else 0.0
+    # No fabricated defaults: when no price snapshot exists the metric is
+    # unknown (None), never a fake 0.0 momentum or 50.0 RSI.
+    momentum = _num(price.get("momentum_20")) if price else None
+    rsi = _num(price.get("rsi_14"), 50.0) if price else None
+    close = _num(price.get("close")) if price else None
 
     committee = v.get("committee") or {}
     factors = v.get("factors") or {}
@@ -297,15 +299,17 @@ def stock_analysis(
     # Per-metric data state. Each metric is reported independently so one failed
     # model/provider (e.g. LSTM, news) NEVER poisons the entire security record.
     # States: "ready", "stale", "no_data", "error".
+    committee_verdict = committee.get("verdict")
     price_status = (price or {}).get("data_status", "no_data") if price else "no_data"
+    lstm_signal = (v.get("lstm") or {}).get("signal")
     metrics_status = {
         "price": price_status,
         "technical": "ready" if v.get("technical") else "no_data",
-        "committee": "ready" if committee.get("verdict") else "no_data",
+        "committee": "ready" if committee_verdict not in (None, "", "N/A") else "no_data",
         "news": "ready" if bool(v.get("news_available")) else "no_data",
         "lstm": (
             "ready"
-            if (v.get("lstm") or {}).get("model") not in (None, "N/A")
+            if lstm_signal not in (None, "N/A")
             and (row.get("lstm_score") is not None or row.get("lstm_probability_up") is not None)
             else "no_data"
         ),
@@ -323,6 +327,7 @@ def stock_analysis(
     return {
         "market": row["market"],
         "ticker": row["ticker"],
+        "security_id": f"{row['market']}:{row['ticker']}",
         "symbol": symbol,
         "company": company,
         "verdict": committee.get("verdict"),

@@ -100,7 +100,9 @@ def _enrich(analysis: dict[str, Any], prev_price: dict[str, Any] | None) -> dict
 
     analysis["price_move"] = round(price_move, 6) if price_move is not None else None
     analysis["volume_ratio"] = round(volume_ratio, 6) if volume_ratio is not None else None
-    analysis["above_sma"] = bool((latest_price or {}).get("above_sma_50"))
+    # Unknown (no SMA in the snapshot) stays None — never coerced to False.
+    sma_above = (latest_price or {}).get("above_sma_50")
+    analysis["above_sma"] = None if sma_above is None else bool(sma_above)
     analysis["agreement"] = agreement
     analysis["agreement_n"] = len(available)
     analysis["signal_dir"] = {
@@ -114,6 +116,64 @@ def _enrich(analysis: dict[str, Any], prev_price: dict[str, Any] | None) -> dict
     analysis["regime_direction"] = regime.get("direction")
     analysis["news_score"] = _num(news.get("score")) if news else None
     return analysis
+
+
+def _cheap_skip(
+    snap: dict[str, Any] | None,
+    row: dict[str, Any] | None,
+    prev_snap: dict[str, Any] | None,
+    filters: dict[str, Any],
+) -> bool:
+    """Cheap filter pre-pass on RAW stored snapshot/verdict columns.
+
+    Runs BEFORE the expensive per-row ``stock_analysis`` (committee recompute +
+    bull/bear factors). Only skips a row when a filter DEFINITELY fails on the
+    raw values; when a value is unknown the row survives to the full path, so
+    this can never drop a row that the full evaluation would have kept.
+    """
+    if row is None and snap is None:
+        # Nothing stored at all: the warming/no_data path owns discovery.
+        return False
+    if snap is None:
+        return False
+
+    close = _num(snap.get("close"))
+    if filters.get("min_momentum") is not None:
+        m = snap.get("momentum_20")
+        if m is None or _num(m) < float(filters["min_momentum"]):
+            return True
+    if filters.get("max_momentum") is not None:
+        m = snap.get("momentum_20")
+        if m is not None and _num(m) > float(filters["max_momentum"]):
+            return True
+    if filters.get("min_move") is not None and prev_snap is not None:
+        prev_close = _num(prev_snap.get("close"))
+        if not prev_close or close / prev_close - 1.0 < float(filters["min_move"]):
+            return True
+    if filters.get("min_volume_ratio") is not None and prev_snap is not None:
+        cur_vol = _num(snap.get("volume"))
+        prev_vol = _num(prev_snap.get("volume"))
+        if prev_vol <= 0 or cur_vol <= 0 or cur_vol / prev_vol < float(filters["min_volume_ratio"]):
+            return True
+    if filters.get("news_min") is not None:
+        ns = row.get("news_score") if row else None
+        if ns is None or _num(ns) < float(filters["news_min"]):
+            return True
+    return False
+
+
+def _row_status(
+    data_status: str | None, has_verdict: bool, has_price: bool
+) -> str:
+    """Canonical uppercase row status (READY/STALE/NO_DATA/NOT_EVALUABLE/ERROR)."""
+    if data_status == "stale":
+        return "STALE"
+    if has_verdict:
+        return "READY"
+    if has_price:
+        # Price is known but the committee has not evaluated this security yet.
+        return "NOT_EVALUABLE"
+    return "NO_DATA"
 
 
 def run(
@@ -201,96 +261,145 @@ def run(
 
         row = latest.get(sec_key)
         snap, prev_snap = snap_pairs.get(sec_key, (None, None))
-        if row:
-            analysis = stock_analysis(row, snap, markets)
-            # Respect the per-metric/price freshness computed in analysis (ready /
-            # stale); never blanket-stamp as "ok".
-            analysis["data_status"] = analysis.get("data_status", "ready")
-            analysis["security"] = sec
-            analysis["security_id"] = f"{sec_market}:{sec_ticker}"
-            analysis["last_price_update"] = (snap or {}).get("fetched_at")
-            analysis["scanner_updated_at"] = scanned_at
-            # A stored verdict can still be empty (transient provider error on
-            # the first pass): treat it as NO_DATA and warm it so the dossier
-            # stops showing "no available data" on every open.
-            if analysis.get("verdict") is None and analysis.get("price") is None:
-                analysis["data_status"] = "no_data"
+
+        # Cheap filter pre-pass on raw stored columns BEFORE the expensive
+        # committee/analysis rebuild. Skips only rows that DEFINITELY fail.
+        cheap_filters = {
+            "min_momentum": min_momentum,
+            "max_momentum": max_momentum,
+            "min_move": min_move,
+            "min_volume_ratio": min_volume_ratio,
+            "news_min": news_min,
+        }
+        if _cheap_skip(snap, row, prev_snap, cheap_filters):
+            continue
+
+        try:
+            if row:
+                analysis = stock_analysis(row, snap, markets)
+                # Respect the per-metric/price freshness computed in analysis (ready /
+                # stale); never blanket-stamp as "ok".
+                analysis["data_status"] = analysis.get("data_status", "ready")
+                analysis["security"] = sec
+                analysis["security_id"] = f"{sec_market}:{sec_ticker}"
+                analysis["last_price_update"] = (snap or {}).get("fetched_at")
+                analysis["scanner_updated_at"] = scanned_at
+                # A stored verdict can still be empty (transient provider error on
+                # the first pass): treat it as NO_DATA and warm it so the dossier
+                # stops showing "no available data" on every open.
+                if analysis.get("verdict") is None and analysis.get("price") is None:
+                    analysis["data_status"] = "no_data"
+                    from . import refresh
+
+                    analysis["warming"] = bool(refresh.is_warming(sec_market, sec_ticker)) or _warm(
+                        sec_market, sec_ticker, sec.get("company") or "", sec.get("symbol") or ""
+                    )
+            elif snap:
+                # No verdict yet BUT price data exists: show price + technical signals
+                # (marked per-metric READY/STALE) instead of hiding the whole row as
+                # N/A. The committee/verdict stay NO_DATA until analyzed.
+                from . import refresh
+                from .analysis import snapshot_price, technical_from_snapshot
+
+                _warm(sec_market, sec_ticker, sec.get("company") or "", sec.get("symbol") or "")
+                price = snapshot_price(snap)
+                tech_score, tech_reasons = technical_from_snapshot(snap)
+                analysis = {
+                    "market": sec_market, "ticker": sec_ticker,
+                    "security_id": f"{sec_market}:{sec_ticker}",
+                    "symbol": sec.get("symbol") or sec_ticker,
+                    "company": sec.get("company") or "",
+                    "verdict": None, "confidence": None, "combined_score": None,
+                    "price": price,
+                    "price_status": (price or {}).get("data_status", "ready"),
+                    "price_as_of": (price or {}).get("as_of", ""),
+                    "momentum_20": (price or {}).get("momentum_20"),
+                    "rsi_14": (price or {}).get("rsi_14"),
+                    "close": (price or {}).get("close"),
+                    "decision": {}, "quantitative": {}, "market_regime": {},
+                    "social": {}, "technical": {"score": tech_score, "reasons": tech_reasons},
+                    "news": None, "data_status": (price or {}).get("data_status", "ready")
+                    if price else "no_data",
+                    "metrics_status": {
+                        "price": (price or {}).get("data_status", "ready") if price else "no_data",
+                        "technical": "ready" if price else "no_data",
+                        "committee": "no_data", "news": "no_data",
+                        "lstm": "no_data", "social": "no_data", "market_regime": "no_data",
+                    },
+                    "security": sec,
+                    "security_id": f"{sec_market}:{sec_ticker}",
+                    "last_price_update": (snap or {}).get("fetched_at"),
+                    "scanner_updated_at": scanned_at,
+                }
+                analysis["warming"] = bool(refresh.is_warming(sec_market, sec_ticker)) or True
+                # Fall through to the shared enrichment + filter + append block below
+                # so these rows still respect price/move/volume filters.
+            else:
+                # No stored verdict and no price snapshot yet. Warm it in the
+                # background; only the NO_DATA / NEEDS RESEARCH preset surfaces
+                # unanalyzed securities explicitly, keeping the screener lightweight.
                 from . import refresh
 
-                analysis["warming"] = bool(refresh.is_warming(sec_market, sec_ticker)) or _warm(
-                    sec_market, sec_ticker, sec.get("company") or "", sec.get("symbol") or ""
-                )
-        elif snap:
-            # No verdict yet BUT price data exists: show price + technical signals
-            # (marked per-metric READY/STALE) instead of hiding the whole row as
-            # N/A. The committee/verdict stay NO_DATA until analyzed.
-            from . import refresh
-            from .analysis import snapshot_price, technical_from_snapshot
-
-            _warm(sec_market, sec_ticker, sec.get("company") or "", sec.get("symbol") or "")
-            price = snapshot_price(snap)
-            tech_score, tech_reasons = technical_from_snapshot(snap)
-            analysis = {
-                "market": sec_market, "ticker": sec_ticker,
-                "symbol": sec.get("symbol") or sec_ticker,
-                "company": sec.get("company") or "",
-                "verdict": None, "confidence": None, "combined_score": None,
-                "price": price,
-                "price_status": (price or {}).get("data_status", "ready"),
-                "price_as_of": (price or {}).get("as_of", ""),
-                "momentum_20": (price or {}).get("momentum_20", 0.0),
-                "rsi_14": (price or {}).get("rsi_14", 50.0),
-                "close": (price or {}).get("close"),
-                "decision": {}, "quantitative": {}, "market_regime": {},
-                "social": {}, "technical": {"score": tech_score, "reasons": tech_reasons},
-                "news": None, "data_status": (price or {}).get("data_status", "ready")
-                if price else "no_data",
-                "metrics_status": {
-                    "price": (price or {}).get("data_status", "ready") if price else "no_data",
-                    "technical": "ready" if price else "no_data",
-                    "committee": "no_data", "news": "no_data",
-                    "lstm": "no_data", "social": "no_data", "market_regime": "no_data",
-                },
-                "security": sec,
-                "security_id": f"{sec_market}:{sec_ticker}",
-                "last_price_update": (snap or {}).get("fetched_at"),
-                "scanner_updated_at": scanned_at,
-            }
-            analysis["warming"] = bool(refresh.is_warming(sec_market, sec_ticker)) or True
-            # Fall through to the shared enrichment + filter + append block below
-            # so these rows still respect price/move/volume filters.
-        else:
-            # No stored verdict and no price snapshot yet. Warm it in the
-            # background; only the NO_DATA / NEEDS RESEARCH preset surfaces
-            # unanalyzed securities explicitly, keeping the screener lightweight.
-            from . import refresh
-
-            _warm(sec_market, sec_ticker, sec.get("company") or "", sec.get("symbol") or "")
-            if not no_data_only:
-                continue
-            analysis = {
-                "market": sec_market, "ticker": sec_ticker,
-                "symbol": sec.get("symbol") or sec_ticker,
-                "company": sec.get("company") or "",
-                "verdict": None, "confidence": None, "combined_score": None,
-                "price": None, "momentum_20": None, "decision": {},
-                "quantitative": {}, "market_regime": {}, "social": {},
-                "technical": {}, "news": None, "data_status": "no_data",
-                "metrics_status": {
-                    "price": "no_data", "technical": "no_data", "committee": "no_data",
-                    "news": "no_data", "lstm": "no_data", "social": "no_data",
-                    "market_regime": "no_data",
-                },
-                "security": sec,
-                "security_id": f"{sec_market}:{sec_ticker}",
-                "last_price_update": (snap or {}).get("fetched_at"),
-                "scanner_updated_at": scanned_at,
-            }
-            analysis["warming"] = bool(refresh.is_warming(sec_market, sec_ticker)) or True
-            # Fall through to the shared enrichment + filter + append block below
-            # so no_data rows still respect verdict / conviction / move filters.
+                _warm(sec_market, sec_ticker, sec.get("company") or "", sec.get("symbol") or "")
+                if not no_data_only:
+                    continue
+                analysis = {
+                    "market": sec_market, "ticker": sec_ticker,
+                    "security_id": f"{sec_market}:{sec_ticker}",
+                    "symbol": sec.get("symbol") or sec_ticker,
+                    "company": sec.get("company") or "",
+                    "verdict": None, "confidence": None, "combined_score": None,
+                    "price": None, "momentum_20": None, "decision": {},
+                    "quantitative": {}, "market_regime": {}, "social": {},
+                    "technical": {}, "news": None, "data_status": "no_data",
+                    "metrics_status": {
+                        "price": "no_data", "technical": "no_data", "committee": "no_data",
+                        "news": "no_data", "lstm": "no_data", "social": "no_data",
+                        "market_regime": "no_data",
+                    },
+                    "security": sec,
+                    "security_id": f"{sec_market}:{sec_ticker}",
+                    "last_price_update": (snap or {}).get("fetched_at"),
+                    "scanner_updated_at": scanned_at,
+                }
+                analysis["warming"] = bool(refresh.is_warming(sec_market, sec_ticker)) or True
+                # Fall through to the shared enrichment + filter + append block below
+                # so no_data rows still respect verdict / conviction / move filters.
+        except Exception as exc:  # noqa: BLE001 - one row/signal never kills the screen
+            logger.warning("Screener row failed for %s:%s: %s", sec_market, sec_ticker, exc)
+            out.append(
+                {
+                    "security_id": f"{sec_market}:{sec_ticker}",
+                    "market": sec_market,
+                    "ticker": sec_ticker,
+                    "company": sec.get("company") or "",
+                    "symbol": sec.get("symbol") or sec_ticker,
+                    "verdict": None,
+                    "confidence": None,
+                    "combined_score": None,
+                    "momentum_20": None,
+                    "price_move": None,
+                    "volume_ratio": None,
+                    "above_sma": None,
+                    "data_status": "error",
+                    "status": "ERROR",
+                    "as_of": "",
+                    "reason": [f"screen failed: {exc}"],
+                    "security": sec,
+                    "scanner_updated_at": scanned_at,
+                }
+            )
+            continue
 
         analysis = _enrich(analysis, prev_snap)
+        # Canonical uppercase status + freshness for every Screener row.
+        analysis["status"] = _row_status(
+            analysis.get("data_status"),
+            analysis.get("verdict") is not None,
+            analysis.get("price") is not None,
+        )
+        analysis.setdefault("security_id", f"{sec_market}:{sec_ticker}")
+        analysis.setdefault("as_of", (snap or {}).get("as_of") or (snap or {}).get("fetched_at") or "")
         prev_row = prev_map.get(sec_key)
         analysis["reversal"] = bool(
             prev_row
@@ -347,7 +456,13 @@ def run(
                 continue
         out.append(analysis)
 
-    key_fn = SORTS.get(sort, SORTS["combined"])
+    key_fn_raw = SORTS.get(sort, SORTS["combined"])
+
+    def key_fn(x: dict[str, Any]) -> float:
+        # None-safe sort: unknown metrics sort as 0 instead of crashing.
+        v = key_fn_raw(x)
+        return v if isinstance(v, (int, float)) and math.isfinite(v) else 0.0
+
     out.sort(key=key_fn, reverse=True)
     return out[: int(limit)]
 

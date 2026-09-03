@@ -594,7 +594,7 @@ def scanner(
     sort_keys = {
         "combined": lambda x: (x["combined_score"] is not None, x["combined_score"] or 0.0),
         "confidence": lambda x: (x["confidence"] is not None, x["confidence"] or 0.0),
-        "momentum": lambda x: x["momentum_20"],
+        "momentum": lambda x: x["momentum_20"] if x["momentum_20"] is not None else 0.0,
         "prop_up": lambda x: x["lstm"]["probability_up"] or 0.0,
     }
     key_fn = sort_keys.get(sort, sort_keys["combined"])
