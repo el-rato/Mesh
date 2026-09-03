@@ -79,7 +79,27 @@ def test_workflow_not_evaluable_when_required_input_missing():
     assert res["not_evaluable"], "expected NOT_EVALUABLE, got none"
     for n in res["not_evaluable"]:
         assert "volume" in n["missing_required"]
-        assert n["status"] == "not_evaluable"
+        assert n["match_class"] == "NOT_EVALUABLE"
+        assert n["status"] in ("READY", "STALE", "NO_DATA", "NOT_EVALUABLE", "ERROR")
+
+
+def test_workflow_results_expose_match_classes_and_contract():
+    db = _db()
+    res = screen_workflow(
+        "momentum + trend", criteria={"momentum_min": 0.5}, db=db, limit=50
+    )
+    seen = {r["match_class"] for r in res["not_matching"]}
+    assert "DOES_NOT_MATCH" in seen
+    required = {
+        "security_id", "ticker", "market", "company", "reasoning",
+        "matched", "signals", "as_of", "status", "match_class",
+    }
+    for bucket in (res["qualifying"], res["not_matching"], res["not_evaluable"]):
+        for r in bucket:
+            assert required <= set(r)
+            assert r["status"] in ("READY", "STALE", "NO_DATA", "NOT_EVALUABLE", "ERROR")
+            assert r["match_class"] in ("MATCH", "DOES_NOT_MATCH", "NOT_EVALUABLE")
+            assert r["reasoning"]
 
 
 def test_portfolio_groups_crud_and_no_duplicates():

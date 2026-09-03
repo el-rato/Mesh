@@ -277,7 +277,24 @@ def _dossier_target(
 
         m = load_markets(settings.markets_dir).get(market.upper())
         if m is None:
-            raise HTTPException(status_code=422, detail=f"Unknown market {market!r}")
+            # Discovered market code (not in markets/*.json): resolve through the
+            # stored registry so the Dossier still opens instead of a 422.
+            from .universe import register, symbol_for
+
+            full = symbol_for(db, market.upper(), ticker.upper())
+            register(db, market.upper(), ticker.upper(), symbol=full, source="discovered")
+            item: dict[str, object] = {
+                "market": market.upper(),
+                "ticker": ticker.upper(),
+                "symbol": full,
+                "company": "",
+                "exchange": "",
+                "quote_type": "EQUITY",
+                "supported": True,
+                "featured": False,
+                "source": "discovered",
+            }
+            return item, full
         try:
             tkr = m.get_ticker(ticker)
             company = tkr.name or ""

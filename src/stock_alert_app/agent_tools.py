@@ -903,8 +903,23 @@ def parse_strategy_text(text: str) -> dict[str, Any]:
         "news_min": None,
         "notes": [],
     }
-    if _re.search(r"large[- ]?cap|small[- ]?cap|market cap|marketcap", t):
-        c["notes"].append("market_cap criterion detected but market-cap data is unavailable; candidate selection did not use market capitalization")
+    mcap_bucket = None
+    if _re.search(r"large[- ]?cap", t):
+        mcap_bucket = "large"
+    elif _re.search(r"mid[- ]?cap", t):
+        mcap_bucket = "mid"
+    elif _re.search(r"small[- ]?cap", t):
+        mcap_bucket = "small"
+    if _re.search(r"large[- ]?cap|mid[- ]?cap|small[- ]?cap|market cap|marketcap", t):
+        # Preserve the requirement and mark it UNVERIFIED — market-cap data is
+        # not reliably available for all securities, so it is NEVER used as a
+        # filter and never fabricated.
+        c["market_cap_bucket"] = mcap_bucket
+        c["market_cap_verified"] = False
+        c["notes"].append(
+            f"market_cap criterion detected ({mcap_bucket or 'unspecified'} cap) but market-cap data is "
+            "unavailable; requirement preserved as UNVERIFIED and candidate selection did not use market capitalization"
+        )
     if "bullish" in t or "uptrend" in t or "positive trend" in t:
         c["trend_bullish"] = True
     if "bearish" in t or "downtrend" in t:
@@ -1056,15 +1071,29 @@ def _wf_apply_gates(a: dict[str, Any], criteria: dict[str, Any]) -> bool:
     return True
 
 
-def _wf_result(a: dict[str, Any], sc: dict[str, Any], status: str, market_cap_unverified: bool) -> dict[str, Any]:
+def _wf_result(a: dict[str, Any], sc: dict[str, Any], match_class: str, market_cap_unverified: bool) -> dict[str, Any]:
     explanation = list(sc["explanation"])
     if market_cap_unverified:
         explanation.append("Market cap: UNVERIFIED (market-cap data unavailable)")
+    price = a.get("price") or {}
+    # Canonical uppercase data status from the screener row (READY/STALE/...),
+    # falling back to the price snapshot state for older rows.
+    data_status = (a.get("status") or "").upper() or (
+        a.get("price_status") or price.get("data_status") or "ready"
+    ).upper()
+    as_of = (
+        a.get("as_of")
+        or a.get("price_as_of")
+        or price.get("as_of")
+        or a.get("last_price_update")
+        or ""
+    )
     return {
         "security_id": f"{a.get('market')}:{a.get('ticker')}",
         "market": a.get("market"),
         "ticker": a.get("ticker"),
         "company": a.get("company") or "",
+        "symbol": a.get("symbol") or a.get("ticker") or "",
         "score": sc["score"],
         "verdict": a.get("verdict"),
         "confidence": a.get("confidence"),
@@ -1074,18 +1103,33 @@ def _wf_result(a: dict[str, Any], sc: dict[str, Any], status: str, market_cap_un
         "above_sma": a.get("above_sma"),
         "volume_ratio": a.get("volume_ratio"),
         "news_score": a.get("news_score"),
+        # Relevant signals in one compact block (None = unknown, never fabricated).
+        "signals": {
+            "verdict": a.get("verdict"),
+            "confidence": a.get("confidence"),
+            "momentum_20": a.get("momentum_20"),
+            "rsi_14": a.get("rsi_14"),
+            "above_sma": a.get("above_sma"),
+            "volume_ratio": a.get("volume_ratio"),
+            "news_score": a.get("news_score"),
+        },
         "matched": sc["matched"],
         "explanation": explanation,
+        "reasoning": "; ".join(explanation),
         "missing": sc["missing"],
         "missing_required": sc.get("missing_required", []),
-        "status": status,
+        # MATCH / DOES_NOT_MATCH / NOT_EVALUABLE
+        "match_class": match_class,
+        # Canonical data state: READY / STALE / NO_DATA / NOT_EVALUABLE / ERROR
+        "status": data_status,
         "match_reason": (
             "Insufficient data for required inputs: " + ", ".join(sc.get("missing_required", []))
-            if status == "not_evaluable"
+            if match_class == "NOT_EVALUABLE"
             else ""
         ),
-        "price_status": a.get("price_status") or (a.get("price") or {}).get("data_status", "ready"),
-        "price_as_of": a.get("price_as_of") or (a.get("price") or {}).get("as_of", ""),
+        "price_status": a.get("price_status") or price.get("data_status", "ready"),
+        "price_as_of": a.get("price_as_of") or price.get("as_of", ""),
+        "as_of": as_of,
         "market_cap_unverified": market_cap_unverified,
     }
 
@@ -1124,26 +1168,29 @@ def screen_workflow(
     )
 
     qualifying: list[dict[str, Any]] = []
+    not_matching: list[dict[str, Any]] = []
     not_evaluable: list[dict[str, Any]] = []
     for a in screened:
         sc = _wf_score(a, criteria)
         if not sc["evaluable"]:
-            not_evaluable.append(_wf_result(a, sc, "not_evaluable", market_cap_unverified))
+            not_evaluable.append(_wf_result(a, sc, "NOT_EVALUABLE", market_cap_unverified))
             continue
-        if not _wf_apply_gates(a, criteria):
+        if not _wf_apply_gates(a, criteria) or sc["score"] < min_score:
+            not_matching.append(_wf_result(a, sc, "DOES_NOT_MATCH", market_cap_unverified))
             continue
-        if sc["score"] < min_score:
-            continue
-        qualifying.append(_wf_result(a, sc, "qualifying", market_cap_unverified))
+        qualifying.append(_wf_result(a, sc, "MATCH", market_cap_unverified))
 
     qualifying.sort(key=lambda r: r["score"], reverse=True)
     return {
         "workflow": criteria.get("description") or prompt or "",
         "criteria": criteria,
         "market_cap_unverified": market_cap_unverified,
+        "market_cap_bucket": criteria.get("market_cap_bucket"),
         "universe_size": len(screened),
         "qualifying_count": len(qualifying),
         "qualifying": qualifying[: int(limit)],
+        "not_matching": not_matching[:50],
+        "not_matching_count": len(not_matching),
         "not_evaluable": not_evaluable[:50],
     }
 
