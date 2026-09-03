@@ -1,4 +1,4 @@
-# StockVerdict Terminal
+# Mesh
 
 A multi-market stock research and analysis terminal with an opinionated, data-driven
 view on securities. It ingests prices, news, social chatter, fundamentals and
@@ -6,7 +6,7 @@ institutional filings, scores every security through a quantitative ensemble, an
 renders a single, defensible **verdict** — `BULL`, `BEAR` or `NEUTRAL` — in a fast,
 keyboard-first terminal UI.
 
-> StockVerdict is a research and education tool. All trading is **paper trading only** —
+> Mesh is a research and education tool. All trading is **paper trading only** —
 > no real orders are ever placed and no brokerage integration exists.
 
 ---
