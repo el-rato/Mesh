@@ -44,6 +44,21 @@ function priceText(r) {
   return Number(c).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
+function dayPct(r) {
+  const v = r.price?.change_pct ?? r.change_pct;
+  if (v == null || !Number.isFinite(Number(v))) {
+    const o = r.price?.open ?? r.open;
+    const c = r.price?.close ?? r.close;
+    if (o != null && c != null && Number(o)) return (Number(c) - Number(o)) / Number(o);
+    return null;
+  }
+  return Number(v);
+}
+function dayPctLabel(v) {
+  if (v == null || !Number.isFinite(v)) return null;
+  return `${v > 0 ? "+" : ""}${(v * 100).toFixed(2)}%`;
+}
+
 const VERDICT_PILLS = [
   { key: "", label: "ALL" },
   { key: "BULL", label: "BULL" },
@@ -78,7 +93,7 @@ export default function ScannerTab() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 45000);
+    const t = setInterval(load, 15000);
     return () => clearInterval(t);
   }, [load]);
 
@@ -170,7 +185,10 @@ export default function ScannerTab() {
             >
               <div className="panel-head">
                 <div>
-                  <SecurityLink market={r.market} ticker={r.ticker} className="symbol">{r.ticker}</SecurityLink>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <SecurityLink market={r.market} ticker={r.ticker} className="symbol">{r.ticker}</SecurityLink>
+                    {(() => { const v = dayPct(r); const label = dayPctLabel(v); if (label == null) return null; return <span className={v >= 0 ? "up" : "down"} style={{ fontSize: 11, fontWeight: 700 }}>{v >= 0 ? "▲" : "▼"} {label}</span>; })()}
+                  </div>
                   <div className="name">{r.market} · <SecurityLink market={r.market} ticker={r.ticker} className="link-inline">{r.company || r.symbol}</SecurityLink></div>
                 </div>
                 <div>

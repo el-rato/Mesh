@@ -161,7 +161,7 @@ export default function OverviewTab() {
   useEffect(() => {
     loadVerdicts();
     loadRails();
-    const t = setInterval(loadVerdicts, 30000);
+    const t = setInterval(() => { loadVerdicts(); loadRails(); }, 15000);
     return () => clearInterval(t);
   }, [loadVerdicts, loadRails]);
 

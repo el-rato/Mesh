@@ -177,10 +177,12 @@ def snapshot_price(snap: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
     sma = float(snap.get("sma_50") or 0.0)
     close = float(snap.get("close") or 0.0)
+    open_ = float(snap.get("open") or 0.0)
+    change_pct = (close - open_) / open_ if open_ else 0.0
     return {
         "symbol": snap.get("ticker") or "",
         "close": close,
-        "open": float(snap.get("open") or 0.0),
+        "open": open_,
         "high": float(snap.get("high") or 0.0),
         "low": float(snap.get("low") or 0.0),
         "volume": int(snap.get("volume") or 0),
@@ -190,6 +192,7 @@ def snapshot_price(snap: dict[str, Any] | None) -> dict[str, Any] | None:
         "sma_200": 0.0,
         "trend_50_200": 0.0,
         "above_sma_50": close >= sma if sma else None,
+        "change_pct": round(change_pct, 6),
         "data_status": snap.get("data_status") or "ready",
         "as_of": snap.get("as_of") or snap.get("fetched_at") or "",
     }

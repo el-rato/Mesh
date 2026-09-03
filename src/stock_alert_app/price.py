@@ -30,6 +30,10 @@ class PriceState:
     sma_200: float = 0.0
     trend_50_200: float = 0.0
     price_above_sma_50: bool = False
+    #: Intraday move for the current session: (close - open) / open.
+    #: When the market is open ``close`` is the live price; when closed it is
+    #: the final close — so the same formula covers both cases as requested.
+    change_pct: float = 0.0
     #: Data freshness state: "ready" (fresh) or "stale" (last-known-good kept
     #: after a failed/partial refresh). Never fabricated.
     data_status: str = "ready"
@@ -51,6 +55,7 @@ class PriceState:
             "sma_200": round(self.sma_200, 4),
             "trend_50_200": round(self.trend_50_200, 4),
             "above_sma_50": self.price_above_sma_50,
+            "change_pct": round(self.change_pct, 6),
             "data_status": self.data_status,
             "as_of": self.as_of,
         }
@@ -112,6 +117,7 @@ def build_price_state(market: str, symbol: str, df: pd.DataFrame) -> PriceState 
     sma_200 = _safe_mean(closes[-200:]) if len(closes) >= 200 else 0.0
     trend_50_200 = (sma_50 - sma_200) / sma_200 if sma_200 else 0.0
     above_sma_50 = close > sma_50 if sma_50 else False
+    change_pct = (close - open_) / open_ if open_ else 0.0
 
     return PriceState(
         market=market,
@@ -127,6 +133,7 @@ def build_price_state(market: str, symbol: str, df: pd.DataFrame) -> PriceState 
         sma_200=sma_200,
         trend_50_200=trend_50_200,
         price_above_sma_50=above_sma_50,
+        change_pct=change_pct,
     )
 
 
@@ -157,17 +164,20 @@ def _stale_from_snapshot(market_code: str, ticker: str, db: Database) -> PriceSt
     snap = db.latest_price_snapshot(market_code, ticker)
     if not snap or snap.get("close") is None:
         return None
+    c = float(snap.get("close") or 0.0)
+    o = float(snap.get("open") or 0.0)
     return PriceState(
         market=market_code,
         ticker=ticker,
-        close=float(snap.get("close") or 0.0),
-        open=float(snap.get("open") or 0.0),
+        close=c,
+        open=o,
         high=float(snap.get("high") or 0.0),
         low=float(snap.get("low") or 0.0),
         volume=int(snap.get("volume") or 0),
         momentum_20=float(snap.get("momentum_20") or 0.0),
         rsi_14=float(snap.get("rsi_14") or 50.0),
         sma_50=float(snap.get("sma_50") or 0.0),
+        change_pct=(c - o) / o if o else 0.0,
         data_status="stale",
         as_of=snap.get("as_of") or snap.get("fetched_at") or "",
     )

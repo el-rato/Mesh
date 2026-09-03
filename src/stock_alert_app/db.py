@@ -2005,17 +2005,15 @@ class Database:
 
         Returns the latest price snapshot per (market, ticker) joined with the
         universe `securities` table for display metadata, plus a `change_pct`
-        computed from the previous stored snapshot (None when unavailable, so the
-        UI can show NO_DATA rather than fabricate a move). Only securities that
-        actually have price data are returned.
+        computed as the **intraday** move ``(close - open) / open`` for the
+        current session (``None`` when open is missing, so the UI can show
+        NO_DATA rather than fabricate a move). When the market is open ``close``
+        is the live price; when closed it is the final close — so the same
+        formula satisfies both cases.
         """
         with self.connect() as conn:
             sql = """
-                SELECT p.market, p.ticker, p.close, p.fetched_at,
-                       (SELECT p2.close FROM price_snapshots p2
-                        WHERE p2.market = p.market AND p2.ticker = p.ticker
-                          AND p2.fetched_at < p.fetched_at
-                        ORDER BY p2.fetched_at DESC LIMIT 1) AS prev_close,
+                SELECT p.market, p.ticker, p.close, p.open, p.fetched_at,
                        s.company, s.exchange, s.currency
                 FROM price_snapshots p
                 LEFT JOIN securities s ON s.market = p.market AND s.ticker = p.ticker
@@ -2035,10 +2033,15 @@ class Database:
             out: list[dict[str, Any]] = []
             for r in rows:
                 d = dict(r)
-                prev = d.pop("prev_close", None)
-                close = d.get("close")
-                if prev and close:
-                    d["change_pct"] = (close - prev) / prev if prev else 0.0
+                o = d.get("open")
+                c = d.get("close")
+                try:
+                    ov = float(o) if o not in (None, "") else 0.0
+                    cv = float(c) if c not in (None, "") else 0.0
+                except (TypeError, ValueError):
+                    ov, cv = 0.0, 0.0
+                if ov and cv:
+                    d["change_pct"] = (cv - ov) / ov
                 else:
                     d["change_pct"] = None
                 out.append(d)

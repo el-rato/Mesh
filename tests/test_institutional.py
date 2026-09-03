@@ -92,10 +92,11 @@ def test_ticker_strip_snapshots_computes_change(tmp_path):
 
     ulvr = by_id[("LSE", "ULVR")]
     assert ulvr["close"] == 110.0
-    assert abs(ulvr["change_pct"] - 0.10) < 1e-9
+    # intraday: (close - open) / open for the current session (covers both open/closed markets)
+    assert abs(ulvr["change_pct"] - (110.0 - 108.0) / 108.0) < 1e-9
 
     aapl = by_id[("NYSE", "AAPL")]
     assert aapl["close"] == 200.0
-    assert aapl["change_pct"] is None  # only one snapshot -> NO_DATA, not invented
+    assert abs(aapl["change_pct"] - (200.0 - 199.0) / 199.0) < 1e-9
 
     assert set(by_id) == {("LSE", "ULVR"), ("NYSE", "AAPL")}
