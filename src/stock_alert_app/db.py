@@ -1914,23 +1914,24 @@ class Database:
 
     def latest_price_snapshots(self, market: str | None = None) -> list[dict[str, Any]]:
         with self.connect() as conn:
+            # GROUP-BY join over the (market, ticker, fetched_at) index: one pass
+            # to find each security's MAX, one index lookup per row. Much cheaper
+            # than the previous per-row correlated MAX on large universes.
             if market:
                 rows = conn.execute(
-                    """SELECT * FROM price_snapshots p
-                       WHERE p.market = ?
-                         AND p.fetched_at = (
-                             SELECT MAX(p2.fetched_at) FROM price_snapshots p2
-                             WHERE p2.market = p.market AND p2.ticker = p.ticker
-                         )""",
+                    """SELECT p.* FROM price_snapshots p
+                       JOIN (SELECT market, ticker, MAX(fetched_at) AS mf
+                             FROM price_snapshots WHERE market = ?
+                             GROUP BY market, ticker) g
+                         ON p.market = g.market AND p.ticker = g.ticker AND p.fetched_at = g.mf""",
                     (market,),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    """SELECT * FROM price_snapshots p
-                       WHERE p.fetched_at = (
-                           SELECT MAX(p2.fetched_at) FROM price_snapshots p2
-                           WHERE p2.market = p.market AND p2.ticker = p.ticker
-                       )"""
+                    """SELECT p.* FROM price_snapshots p
+                       JOIN (SELECT market, ticker, MAX(fetched_at) AS mf
+                             FROM price_snapshots GROUP BY market, ticker) g
+                         ON p.market = g.market AND p.ticker = g.ticker AND p.fetched_at = g.mf"""
                 ).fetchall()
             return [dict(r) for r in rows]
 

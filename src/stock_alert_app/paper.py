@@ -29,6 +29,8 @@ from .db import Database
 logger = logging.getLogger(__name__)
 
 _HORIZONS = (5, 15, 30, 60)
+#: NEUTRAL verdicts count as correct when the realized move stays within this band.
+_NEUTRAL_BAND = 0.005
 
 
 def _now_iso() -> str:
@@ -183,6 +185,13 @@ def record_decision_snapshot(
     decided_at = decision.get("decision_timestamp") or _now_iso()
     price = (vdict.get("price") or {})
     reference_price = price.get("close")
+    # Freshness metadata travels inside the immutable snapshot (no schema change)
+    # so analytics can later separate READY from STALE decisions honestly.
+    decision["freshness"] = {
+        "price_status": price.get("data_status") or "ready",
+        "as_of": price.get("as_of") or "",
+        "news_available": bool(vdict.get("news_available")),
+    }
     decision_id = _new_decision_id()
     inserted = db.insert_decision_snapshot(
         decision_id=decision_id,
@@ -205,9 +214,14 @@ def record_decision_snapshot(
 
 def _bar_time(bar: dict[str, Any]) -> datetime | None:
     try:
-        return datetime.fromisoformat(bar.get("date", ""))
+        ts = datetime.fromisoformat(bar.get("date", ""))
     except (ValueError, TypeError):
         return None
+    # Historical bars are stored naive (UTC); decision timestamps are aware.
+    # Normalize so comparisons never raise and silently skip evaluations.
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return ts
 
 
 def _symbol_for(db: Database, market: str, ticker: str) -> str:
@@ -233,6 +247,8 @@ def evaluate_snapshot(snapshot: dict[str, Any], bars: list[dict[str, Any]]) -> d
         decision_time = None
     if decision_time is None:
         return {"status": "no_data", "reference_price": None, "correct": None}
+    if decision_time.tzinfo is None:
+        decision_time = decision_time.replace(tzinfo=UTC)  # naive stored timestamps are UTC
 
     times = [_bar_time(b) for b in bars]
     ref_idx = next(
@@ -266,11 +282,15 @@ def evaluate_snapshot(snapshot: dict[str, Any], bars: list[dict[str, Any]]) -> d
             correct = 1 if move > 0 else 0
         elif verdict == "BEAR":
             correct = 1 if move < 0 else 0
+        elif verdict == "NEUTRAL":
+            # A neutral call is right when price stayed inside the noise band.
+            correct = 1 if abs(move) <= _NEUTRAL_BAND else 0
 
     return {
         "status": "ok",
         "reference_price": round(reference, 6),
         "prices": {k: round(v, 6) if v is not None else None for k, v in prices.items()},
+        "move": round(move, 6) if forward is not None and reference else None,
         "correct": correct,
     }
 

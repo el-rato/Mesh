@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { fetchJSON, newsFeed, watchlist, tickerStrip } from "../api.js";
+import { fetchJSON, newsFeed, watchlist, tickerStrip, events } from "../api.js";
 import { loadSessions, deleteSession } from "../agentHistory.js";
 import { useApp } from "../App.jsx";
 import { verdictBadge, verdictClass, SectionHeader, StatusIndicator } from "./ui.jsx";
@@ -16,6 +16,32 @@ function pct(v) {
   const n = num(v);
   return `${n > 0 ? "+" : ""}${(n * 100).toFixed(2)}%`;
 }
+
+// Regime label from the already-loaded index snapshots (same thresholds as the
+// backend's market-regime signal: S&P change vs ±0.5%, VIX 25 = elevated vol).
+function regimeOf(indexes) {
+  const arr = indexes || [];
+  const spx = arr.find((i) => i.symbol === "^GSPC") || arr.find((i) => i.symbol === "SPY");
+  const vix = arr.find((i) => i.symbol === "^VIX");
+  const chg = spx ? num(spx.change_pct) : null;
+  const vixVal = vix ? num(vix.close) : null;
+  if (chg == null) return null;
+  let label = chg > 0.5 ? "RISK-ON" : chg < -0.5 ? "RISK-OFF" : "CHOPPY";
+  if (vixVal && vixVal > 25) label += " · HIGH VOL";
+  return { label, chg, vix: vixVal };
+}
+
+// Decision-oriented event types for the alerts rail (deterministic backend keys).
+const ALERT_TYPES = new Set([
+  "committee_change",
+  "committee_reversal",
+  "signal_change",
+  "significant_move",
+  "volume_spike",
+  "important_news",
+  "significant_trade",
+  "position_reversed",
+]);
 
 // Clever, rotating greeting lines (grouped with a matching emoji). One is picked
 // every few minutes so it feels alive instead of a static time-of-day phrase.
@@ -53,6 +79,7 @@ export default function OverviewTab() {
   const [news, setNews] = useState([]);
   const [watch, setWatch] = useState([]);
   const [active, setActive] = useState([]);
+  const [alerts, setAlerts] = useState([]);
   const [error, setError] = useState("");
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMode, setChatMode] = useState("AUTO");
@@ -139,6 +166,21 @@ export default function OverviewTab() {
       .catch(() => {});
   }, [loadWatch]);
 
+  // Command-center alerts: ranked events, filtered to decision-oriented types.
+  const loadAlerts = useCallback(() => {
+    events(40)
+      .then((all) =>
+        setAlerts(
+          (all || []).filter(
+            (e) =>
+              ALERT_TYPES.has(e.type) ||
+              (e.type === "news" && (e.importance === "HIGH" || e.importance === "IMPORTANT"))
+          ).slice(0, 6)
+        )
+      )
+      .catch(() => {});
+  }, []);
+
   const addWatch = () => {
     const tk = wlTicker.trim().toUpperCase();
     if (!tk || wlBusy) return;
@@ -161,16 +203,18 @@ export default function OverviewTab() {
   useEffect(() => {
     loadVerdicts();
     loadRails();
-    const t = setInterval(() => { loadVerdicts(); loadRails(); }, 15000);
+    loadAlerts();
+    const t = setInterval(() => { loadVerdicts(); loadRails(); loadAlerts(); }, 15000);
     return () => clearInterval(t);
-  }, [loadVerdicts, loadRails]);
+  }, [loadVerdicts, loadRails, loadAlerts]);
 
   useEffect(() => {
     if (refreshToken) {
       loadVerdicts();
       loadRails();
+      loadAlerts();
     }
-  }, [refreshToken, loadVerdicts, loadRails]);
+  }, [refreshToken, loadVerdicts, loadRails, loadAlerts]);
 
   const topVerdicts = [...verdicts]
     .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
@@ -178,6 +222,9 @@ export default function OverviewTab() {
 
   const strip = [...(indexes || [])].slice(0, 14);
   const greet = greeting();
+  const regime = regimeOf(indexes);
+  const openMarkets = (markets || []).filter((m) => m.status?.status === "open");
+  const closedMarkets = (markets || []).filter((m) => m.status?.status !== "open");
 
   const openDossier = (v) =>
     openDrawer({
@@ -200,6 +247,28 @@ export default function OverviewTab() {
               </span>
             );
           })}
+        </div>
+
+        {/* Command center strip: market status + regime (existing data only) */}
+        <div className="ov-strip" style={{ opacity: 0.95 }}>
+          {(openMarkets.length ? openMarkets : closedMarkets).slice(0, 6).map((m) => {
+            const open = m.status?.status === "open";
+            return (
+              <span key={m.code} className="ov-strip-item" title={`${m.name} · ${m.status?.local_time || ""} local`}>
+                <span className={`dot ${open ? "up" : "dim"}`} style={{ marginRight: 4 }}>●</span>
+                <span className="ov-strip-sym">{m.code}</span>
+                <span className={`dim ${open ? "up" : ""}`}>{open ? "OPEN" : "CLOSED"}</span>
+              </span>
+            );
+          })}
+          {regime && (
+            <span className="ov-strip-item" title={`S&P ${pct(regime.chg)} · VIX ${regime.vix ?? "—"}`}>
+              <span className="ov-strip-sym">REGIME</span>
+              <span className={regime.label.startsWith("RISK-ON") ? "up" : regime.label.startsWith("RISK-OFF") ? "down" : "dim"}>
+                {regime.label} {regime.chg != null ? `(${pct(regime.chg)})` : ""}
+              </span>
+            </span>
+          )}
         </div>
 
         <div className="ov-body">
@@ -262,6 +331,39 @@ export default function OverviewTab() {
 
           {/* RIGHT RAIL */}
           <aside className="ov-rail">
+            <div className="ov-rail-box">
+              <div className="ov-panel-label">ALERTS &amp; SIGNALS <span className="dim">· LIVE</span></div>
+              {alerts.length ? (
+                <div className="ov-news-list">
+                  {alerts.map((a) => (
+                    <div key={a.id} className="ov-news-item">
+                      <div className="ov-news-meta dim" style={{ marginBottom: 2 }}>
+                        <span>{String(a.type || "").replace(/_/g, " ").toUpperCase()}</span>
+                        {a.security_id && (
+                          <SecurityLink securityId={a.security_id} className="ov-news-tk">
+                            {a.security_id}
+                          </SecurityLink>
+                        )}
+                        <span>{String(a.timestamp || "").slice(0, 16).replace("T", " ")}</span>
+                      </div>
+                      <span className="ov-news-title" style={{ cursor: a.security_id ? "pointer" : "default" }}
+                        onClick={() => {
+                          if (!a.security_id) return;
+                          const [mkt, ...rest] = String(a.security_id).split(":");
+                          if (mkt && rest.length) openDrawer({ type: "stock", v: { market: mkt, ticker: rest.join(":"), company: "", reason: ["ALERT"] } });
+                        }}
+                        title={a.security_id ? `Open Dossier ${a.security_id}` : a.headline}
+                      >
+                        {a.headline}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty">NO ALERTS — COMMITTEE CHANGES, SIGNAL FLIPS, MOVES AND IMPORTANT NEWS APPEAR HERE.</div>
+              )}
+            </div>
+
             <div className="ov-rail-box ov-news-box">
               <div className="ov-panel-label">LIVE NEWS <span className="dim">· SCROLL</span></div>
               {news.length ? (

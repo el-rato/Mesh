@@ -312,6 +312,130 @@ def _key_disagreement(signals: dict[str, Any]) -> str | None:
     return None
 
 
+def _disagreements(signals: dict[str, Any]) -> list[str]:
+    """Every bull-vs-bear conflict among AVAILABLE signals (not just the first)."""
+    bulls = [s["label"] for s in signals.values() if s.get("available") and s.get("state") == "BULL"]
+    bears = [s["label"] for s in signals.values() if s.get("available") and s.get("state") == "BEAR"]
+    out: list[str] = []
+    for b in bulls:
+        for r in bears:
+            out.append(f"{b.title()} is bullish while {r.title()} is bearish.")
+    return out
+
+
+def _neutral_case(signals: dict[str, Any], factors: dict[str, Any], verdict: str | None) -> list[str]:
+    """The case for standing aside, built only from real signal states."""
+    why: list[str] = []
+    available = [s for s in signals.values() if s.get("available")]
+    states = {s.get("state") for s in available}
+    if verdict == "NEUTRAL":
+        if not available:
+            why.append("No signals are available, so there is no evidence for a directional view.")
+        elif len(states) == 1 and "NEUTRAL" in states:
+            why.append("Every available signal is neutral — none offers directional evidence.")
+        elif "BULL" in states and "BEAR" in states:
+            why.append("Bullish and bearish signals conflict and offset within the neutral band.")
+        else:
+            why.append("Available signals are neutral on balance; the weighted score stays inside the neutral band.")
+    else:
+        # Counterfactual: what would have to be true for standing aside to be right.
+        conflicts = _disagreements(signals)
+        if conflicts:
+            why.append(
+                f"Standing aside would be justified while {conflicts[0][0].lower() + conflicts[0][1:]} "
+                "— the conflict has not resolved in one direction."
+            )
+        weak = [s["label"] for s in available if s.get("confidence") is not None and s.get("confidence", 0) < 0.5]
+        if weak:
+            why.append(f"{', '.join(weak[:3])} carry low confidence, so the {verdict.lower()} view rests on thin evidence.")
+        if len(available) <= 2:
+            why.append("Only a minority of signals are available; standing aside would be the safer reading of this coverage.")
+        if not why:
+            why.append(f"The {verdict.lower()} case currently dominates on the available evidence; standing aside is not supported.")
+    if not (factors.get("bull") or factors.get("bear")):
+        why.append("No bull or bear factors were derivable from real data.")
+    return why[:5]
+
+
+def _key_evidence(signals: dict[str, Any], factors: dict[str, Any], committee: dict[str, Any]) -> list[dict[str, Any]]:
+    """Top evidence items: highest |contribution| available signals + lead factors."""
+    rows = [
+        s for s in (committee.get("signals") or [])
+        if s.get("available") and s.get("contribution") is not None
+    ]
+    rows.sort(key=lambda s: abs(s.get("contribution") or 0.0), reverse=True)
+    out: list[dict[str, Any]] = []
+    for s in rows[:3]:
+        out.append({
+            "signal": s.get("label"),
+            "direction": s.get("state"),
+            "score": s.get("score"),
+            "confidence": s.get("confidence"),
+            "contribution": s.get("contribution"),
+        })
+    if factors.get("bull"):
+        out.append({"evidence": "bull", "text": factors["bull"][0]})
+    if factors.get("bear"):
+        out.append({"evidence": "bear", "text": factors["bear"][0]})
+    return out
+
+
+def _forecast_range(v: dict[str, Any], signals: dict[str, Any]) -> dict[str, Any]:
+    """Honest forecast statement. Magnitudes are never turned into price targets."""
+    quant = v.get("quantitative") or {}
+    if quant.get("status") == "ok" and quant.get("score") is not None:
+        score = float(quant["score"])
+        strength = "strong" if abs(score) >= 0.6 else "moderate" if abs(score) >= 0.2 else "weak"
+        lstm = v.get("lstm") or {}
+        lstm_part = ""
+        if lstm.get("predicted_return") is not None:
+            lstm_part = f"; LSTM point estimate {lstm['predicted_return'] * 100:+.2f}% (one model, low reliability)"
+        return {
+            "supported": True,
+            "horizon": v.get("forecast_horizon") or "1 trading day",
+            "direction": "up" if score > 0 else "down",
+            "strength": strength,
+            "note": f"Ensemble score {score:+.2f} indicates a {strength} {('up' if score > 0 else 'down')} bias over the horizon. "
+                    f"Scores are not price targets.{lstm_part}",
+        }
+    return {
+        "supported": False,
+        "horizon": v.get("forecast_horizon") or "1 trading day",
+        "reason": "No quantitative ensemble output is available for this security, so no forecast range is claimed.",
+    }
+
+
+def _why_narrative(
+    verdict: str | None,
+    confidence: float | None,
+    signals: dict[str, Any],
+    factors: dict[str, Any],
+) -> str:
+    """Why the decision happened: alignment, exclusions and the decisive factor."""
+    available = [s for s in signals.values() if s.get("available")]
+    excluded = [s["label"] for s in signals.values() if not s.get("available")]
+    bulls = sum(1 for s in available if s.get("state") == "BULL")
+    bears = sum(1 for s in available if s.get("state") == "BEAR")
+    neutrals = sum(1 for s in available if s.get("state") == "NEUTRAL")
+    parts: list[str] = []
+    parts.append(
+        f"{len(available)} of {len(signals)} signals were available "
+        f"({bulls} bullish, {bears} bearish, {neutrals} neutral)."
+    )
+    if excluded:
+        parts.append(f"Excluded from the vote (no data): {', '.join(excluded[:4])} — excluded signals are never counted as neutral votes.")
+    if verdict in ("BULL", "BEAR"):
+        lead = factors.get("bull" if verdict == "BULL" else "bear")
+        contra = factors.get("bear" if verdict == "BULL" else "bull")
+        lead_txt = f" The decisive evidence: {lead[0]}." if lead else ""
+        contra_txt = f" Counter-evidence noted: {contra[0]}." if contra else ""
+        conf_txt = f" Conviction is {confidence * 100:.0f}%" if confidence is not None else ""
+        parts.append(f"The committee concluded {verdict}.{lead_txt}{contra_txt}{conf_txt}.")
+    else:
+        parts.append("The committee concluded NEUTRAL: the weighted evidence does not clear the directional band.")
+    return " ".join(parts)
+
+
 def _view_changes_if(signals: dict[str, Any], verdict: str | None) -> str:
     if verdict not in ("BULL", "BEAR"):
         return "No clear invalidation condition without a directional view."
@@ -403,6 +527,13 @@ def committee_decision(v: dict[str, Any] | None, stale: bool = False) -> dict[st
         "thesis": _thesis(signals, verdict),
         "bull_case": bull_case[:10],
         "bear_case": bear_case[:10],
+        # Presentation additions (derived only from the SAME committee output —
+        # no methodology, weight or renormalization change).
+        "neutral_case": _neutral_case(signals, factors, verdict),
+        "key_evidence": _key_evidence(signals, factors, committee),
+        "disagreements": _disagreements(signals),
+        "forecast_range": _forecast_range(v, signals),
+        "why": _why_narrative(verdict, committee.get("confidence"), signals, factors),
         "key_disagreement": _key_disagreement(signals),
         "primary_risks": risks[:10],
         "catalysts": catalysts[:10],

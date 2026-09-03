@@ -1,8 +1,9 @@
 """Terminal notification service + market event detector.
 
 Detects significant events over the existing data (market sessions, committee
-verdict changes, simulated trades) and records them as notifications with an
-explicit severity (INFO / IMPORTANT / HIGH).
+verdict changes, price/volume moves, signal flips, important news, simulated
+trades) and records them as notifications with an explicit severity
+(INFO / IMPORTANT / HIGH).
 
 Every candidate event has a deterministic key; processed keys are persisted so
 repeated polls never duplicate a notification (e.g. a market open fires exactly
@@ -11,15 +12,25 @@ once per session).
 Events:
 * ``market_open``        — a configured market's session has opened (INFO).
 * ``committee_change``   — a fresh Committee verdict differs from its previous
-                           verdict (IMPORTANT; HIGH on a BULL<->BEAR reversal).
+                            verdict (IMPORTANT; HIGH on a BULL<->BEAR reversal).
+* ``signal_change``      — a non-committee quantitative/technical signal
+                            direction flip between verdicts (IMPORTANT).
+* ``significant_move``   — close-to-close move at/above the threshold (IMPORTANT).
+* ``volume_spike``       — volume at/above the spike multiple of the prior
+                            snapshot (IMPORTANT).
+* ``important_news``     — a freshly stored article with a strong sentiment
+                            score (IMPORTANT).
 * ``significant_trade``  — a paper trade whose notional is at/above the
-                           configured threshold (HIGH), or any LONG<->SHORT
-                           reversal regardless of size (HIGH).
+                            configured threshold (HIGH), or any LONG<->SHORT
+                            reversal regardless of size (HIGH).
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -36,9 +47,42 @@ HIGH = "HIGH"
 #: (i.e. it was just recomputed); otherwise old history would flood the feed.
 _CHANGE_FRESH_WINDOW = timedelta(hours=24)
 
+#: Freshness window for price/volume events (stored snapshots, not live quotes).
+_SNAPSHOT_FRESH_WINDOW = timedelta(hours=24)
+
+#: Freshness window for important-news detection (only freshly STORED articles).
+_NEWS_FRESH_WINDOW = timedelta(hours=6)
+
+
+def _move_threshold() -> float:
+    try:
+        return float(os.getenv("STOCK_ALERT_MOVE_PCT", "0.03"))
+    except (TypeError, ValueError):
+        return 0.03
+
+
+def _volume_multiple() -> float:
+    try:
+        return float(os.getenv("STOCK_ALERT_VOLUME_MULT", "2.0"))
+    except (TypeError, ValueError):
+        return 2.0
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _fresh(iso: str | None, window: timedelta, now: datetime) -> bool:
+    """True when an ISO timestamp is within ``window`` of ``now``."""
+    if not iso:
+        return False
+    try:
+        ts = datetime.fromisoformat(str(iso))
+    except (TypeError, ValueError):
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return now - ts <= window
 
 
 def _money(value: float) -> str:
@@ -157,6 +201,165 @@ def _committee_change_events(db: Database, now: datetime) -> list[dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
+# Signal direction change (quantitative/technical, non-committee)
+# ---------------------------------------------------------------------------
+
+
+def _signal_direction(row: dict[str, Any] | None) -> str | None:
+    """BULL/BEAR direction of a verdict row's quant signal (NEUTRAL/None = no vote)."""
+    if not row:
+        return None
+    direction = None
+    try:
+        payload = json.loads(row.get("signals") or "")
+        direction = (payload.get("quantitative") or {}).get("direction")
+    except (TypeError, ValueError):
+        direction = None
+    if direction in ("BULL", "BEAR"):
+        return direction
+    tech = row.get("technical_score")
+    try:
+        tech = float(tech) if tech is not None else None
+    except (TypeError, ValueError):
+        tech = None
+    if tech is None:
+        return None
+    if tech > 0.05:
+        return "BULL"
+    if tech < -0.05:
+        return "BEAR"
+    return None
+
+
+def _signal_change_events(db: Database, now: datetime) -> list[dict[str, Any]]:
+    """Quant/technical signal direction flip (independent of committee verdict)."""
+    events: list[dict[str, Any]] = []
+    cutoff = (now - _CHANGE_FRESH_WINDOW).isoformat()
+    for (market, ticker), (latest, previous) in db.verdict_pairs().items():
+        if latest is None or previous is None:
+            continue
+        if latest.get("decided_at", "") < cutoff:
+            continue  # only freshly recomputed signals are "changes"
+        prev_d = _signal_direction(previous)
+        cur_d = _signal_direction(latest)
+        if not prev_d or not cur_d or prev_d == cur_d:
+            continue
+        sec = f"{market}:{ticker}"
+        decided_at = str(latest.get("decided_at"))
+        key = f"signal_change:{sec}:{prev_d}:{cur_d}:{decided_at}"
+        if db.is_notification_processed(key):
+            continue
+        event = _emit(
+            db, key, IMPORTANT, "signal_change",
+            f"{sec} SIGNAL {prev_d} → {cur_d}",
+            f"The quantitative/technical signal for {sec} flipped from {prev_d} to {cur_d}.",
+            sec, market, ticker,
+            payload={"previous": prev_d, "signal": cur_d},
+        )
+        if event:
+            events.append(event)
+    return events
+
+
+# ---------------------------------------------------------------------------
+# Significant price move + volume spike (stored snapshot pairs)
+# ---------------------------------------------------------------------------
+
+
+def _market_activity_events(db: Database, now: datetime) -> list[dict[str, Any]]:
+    """Close-to-close move and volume-spike detection over stored snapshots."""
+    events: list[dict[str, Any]] = []
+    move_th = _move_threshold()
+    vol_mult = _volume_multiple()
+    for (market, ticker), (latest, previous) in db.price_snapshot_pairs().items():
+        if not latest or not previous:
+            continue
+        # Only fresh snapshots (a real recent refresh) may fire, so a first scan
+        # over historical data never floods the feed.
+        if not _fresh(latest.get("fetched_at"), _SNAPSHOT_FRESH_WINDOW, now):
+            continue
+        sec = f"{market}:{ticker}"
+        day = str(latest.get("fetched_at"))[:10]
+        try:
+            close = float(latest.get("close") or 0.0)
+            prev_close = float(previous.get("close") or 0.0)
+            cur_vol = float(latest.get("volume") or 0.0)
+            prev_vol = float(previous.get("volume") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if close <= 0 or prev_close <= 0:
+            continue
+        move = close / prev_close - 1.0
+        if abs(move) >= move_th:
+            direction = "up" if move > 0 else "down"
+            key = f"price_move:{sec}:{direction}:{day}"
+            if not db.is_notification_processed(key):
+                severity = HIGH if abs(move) >= move_th * 2 else IMPORTANT
+                event = _emit(
+                    db, key, severity, "significant_move",
+                    f"{sec} {'+' if move > 0 else ''}{move * 100:.1f}% MOVE",
+                    f"{sec} moved {move * 100:+.1f}% "
+                    f"({prev_close:,.2f} → {close:,.2f}) on the latest snapshot.",
+                    sec, market, ticker,
+                    payload={"move_pct": round(move, 4), "close": close, "previous_close": prev_close},
+                )
+                if event:
+                    events.append(event)
+        if prev_vol > 0 and cur_vol >= prev_vol * vol_mult:
+            key = f"volume_spike:{sec}:{day}"
+            if not db.is_notification_processed(key):
+                event = _emit(
+                    db, key, IMPORTANT, "volume_spike",
+                    f"{sec} VOLUME SPIKE {cur_vol / prev_vol:.1f}x",
+                    f"{sec} traded {cur_vol / prev_vol:.1f}x its prior snapshot volume "
+                    f"({prev_vol:,.0f} → {cur_vol:,.0f}).",
+                    sec, market, ticker,
+                    payload={"multiple": round(cur_vol / prev_vol, 2), "volume": cur_vol},
+                )
+                if event:
+                    events.append(event)
+    return events
+
+
+# ---------------------------------------------------------------------------
+# Important news (strong sentiment on freshly stored articles)
+# ---------------------------------------------------------------------------
+
+
+def _important_news_events(db: Database, now: datetime) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    cutoff = (now - _NEWS_FRESH_WINDOW).isoformat()
+    for n in db.recent_news_feed(limit=200):
+        if str(n.get("fetched_at") or "") < cutoff:
+            continue
+        market, ticker = str(n.get("market") or ""), str(n.get("ticker") or "")
+        if not market or not ticker or market == "GLOBAL" or ticker == "NEWS":
+            continue
+        try:
+            score = abs(float(n.get("sentiment_score") or 0.0))
+        except (TypeError, ValueError):
+            continue
+        if score < 0.5:
+            continue
+        sec = f"{market}:{ticker}"
+        url_key = hashlib.md5(str(n.get("url") or n.get("title") or "").encode()).hexdigest()[:12]
+        key = f"important_news:{sec}:{url_key}"
+        if db.is_notification_processed(key):
+            continue
+        label = str(n.get("sentiment_label") or ("bullish" if (n.get("sentiment_score") or 0) > 0 else "bearish"))
+        event = _emit(
+            db, key, IMPORTANT, "important_news",
+            f"{sec} IMPORTANT NEWS ({label.upper()})",
+            str(n.get("title") or ""),
+            sec, market, ticker,
+            payload={"sentiment": label, "score": round(float(n.get("sentiment_score") or 0.0), 4), "url": n.get("url") or ""},
+        )
+        if event:
+            events.append(event)
+    return events
+
+
+# ---------------------------------------------------------------------------
 # Significant trade detection
 # ---------------------------------------------------------------------------
 
@@ -265,7 +468,15 @@ def scan(db: Database, now: datetime | None = None) -> dict[str, Any]:
     """Run the event detectors and persist any new notifications."""
     now = now or _now()
     new_events: list[dict[str, Any]] = []
-    for detector in (_market_open_events, _committee_change_events, _trade_events):
+    detectors = (
+        _market_open_events,
+        _committee_change_events,
+        _signal_change_events,
+        _market_activity_events,
+        _important_news_events,
+        _trade_events,
+    )
+    for detector in detectors:
         try:
             new_events.extend(detector(db, now) if detector is not _trade_events else detector(db))
         except Exception as exc:

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { notifications, notificationsAck } from "../api.js";
 import { useApp } from "../App.jsx";
+import { splitSecurityId } from "../nav.js";
 import SecurityLink, { SecurityText } from "./SecurityLink.jsx";
 
 function sevCls(s) {
@@ -10,7 +11,7 @@ function sevCls(s) {
 }
 
 export default function NotificationsBell() {
-  const { openDrawer, setTab, setScreenerPrefill } = useApp();
+  const { openDrawer, setTab, setScreenerPrefill, markets } = useApp();
   const [items, setItems] = useState([]);
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -39,7 +40,16 @@ export default function NotificationsBell() {
 
   const openDossier = (a) => {
     setOpen(false);
-    openDrawer({ type: "stock", v: { market: a.market || "", ticker: a.ticker || "", company: "", reason: ["NOTIFICATION"] } });
+    // Canonical market:ticker from the event; fall back to splitting the
+    // security_id so every notification can always reach the right Dossier.
+    let market = a.market || "";
+    let ticker = a.ticker || "";
+    if ((!market || !ticker) && a.security_id) {
+      const split = splitSecurityId(a.security_id, (markets || []).map((m) => m.code));
+      market = market || split.market;
+      ticker = ticker || split.ticker;
+    }
+    openDrawer({ type: "stock", v: { market, ticker, company: "", reason: ["NOTIFICATION"] } });
   };
 
   const screenSimilar = (a) => {

@@ -774,9 +774,16 @@ def _summary(capital: float, decisions: list[dict[str, Any]], port: _Portfolio, 
         "long_pnl": round(long_pnl, 2),
         "short_pnl": round(short_pnl, 2),
         "decisions": len(decisions),
+        "evaluable_decisions": sum(1 for d in decisions if d.get("evaluatable")),
+        "not_evaluable_decisions": sum(1 for d in decisions if not d.get("evaluatable")),
         "bull_decisions": len(bulls),
         "bear_decisions": len(bears),
         "no_trade_decisions": len(no_trades),
+        "actions": {
+            a: sum(1 for d in decisions if d["action"] == a)
+            for a in ("BUY", "SELL", "SHORT", "COVER", "HOLD", "NO_TRADE", "INCREASE", "REDUCE")
+            if any(d["action"] == a for d in decisions)
+        },
         "avg_conviction": round(sum(convs) / len(convs), 1) if convs else None,
         "bull_accuracy": bull_acc,
         "bull_n": bull_n,
@@ -903,6 +910,18 @@ def run(
         trader = _trader_decision(committee, ref_px, port, bull_th, bear_th)
         action = trader["action"]
 
+        # NOT_EVALUABLE: with no committee output there is no defensible basis
+        # to trade at this timestamp. The decision is recorded honestly as
+        # unevaluable (never a fabricated NEUTRAL trade).
+        evaluatable = committee.get("verdict") not in (None, "N/A")
+        if not evaluatable:
+            action = "NO_TRADE"
+            trader["action"] = "NO_TRADE"
+            trader["reasons"] = [
+                "NOT_EVALUABLE: no committee signals were available at this historical timestamp "
+                "(no time-safe quant, technical, news, or regime data), so no trade can be justified."
+            ]
+
         # Execution at the FIRST bar strictly after the decision timestamp.
         fill_px = float(df.iloc[i + 1]["open"])
         exec_time = df.iloc[i + 1]["t"].isoformat()
@@ -947,10 +966,15 @@ def run(
         decision = {
             "decision_id": f"{run_id}-{len(decisions):04d}",
             "ts": ts.isoformat(),
+            "security": f"{market}:{ticker}",
             "verdict": verdict,
             "conviction": conviction,
             "action": action,
             "tag": trader.get("tag", ""),
+            # Per-decision data sufficiency: READY when the committee could be
+            # evaluated, NOT_EVALUABLE when required historical data was missing.
+            "status": "READY" if evaluatable else "NOT_EVALUABLE",
+            "evaluatable": evaluatable,
             "reference_price": round(ref_px, 6),
             "execution_price": round(fill_px, 6),
             "orders": orders,
@@ -975,6 +999,11 @@ def run(
             "committee_thesis": rich.get("thesis", ""),
             "bull_case": rich.get("bull_case", []),
             "bear_case": rich.get("bear_case", []),
+            "neutral_case": rich.get("neutral_case", []),
+            "key_evidence": rich.get("key_evidence", []),
+            "disagreements": rich.get("disagreements", []),
+            "forecast_range": rich.get("forecast_range"),
+            "why": rich.get("why", ""),
             "forward": forward,
             "correct": correct,
         }

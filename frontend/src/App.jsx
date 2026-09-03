@@ -20,6 +20,23 @@ import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import SearchBox from "./components/SearchBox.jsx";
 import SecurityLink from "./components/SecurityLink.jsx";
 
+// Data-health chip state (kept out of context: only the footer reads it).
+function useDataHealth(enabled) {
+  const [health, setHealth] = useState(null);
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let alive = true;
+    const load = () =>
+      fetchJSON("/api/health/data")
+        .then((d) => { if (alive) setHealth(d); })
+        .catch(() => {});
+    load();
+    const t = setInterval(load, 60000);
+    return () => { alive = false; clearInterval(t); };
+  }, [enabled]);
+  return health;
+}
+
 export const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
 
@@ -141,9 +158,14 @@ export default function App() {
   const moreRef = useRef(null);
   const now = useClock();
   const refreshInFlight = useRef(false);
+  const health = useDataHealth(auth.status === "authed");
   // Tracks a stock-dossier open initiated by openDrawer so the hashchange
   // handler does not clobber the rich drawer payload with a minimal one.
   const lastOpenRef = useRef(null);
+  // Previous hash: lets onHash distinguish an intentional leave (dossier ->
+  // something else, e.g. browser back) from an unrelated hash write that must
+  // NOT close the open Dossier (News/Committee/Researcher/Signals stay open).
+  const prevHashRef = useRef(window.location.hash);
 
   // Canonical Dossier route: #/dossier/{security_id}. The hash is the single
   // source of truth for stock dossiers: SecurityLink anchors, openDrawer calls
@@ -158,11 +180,19 @@ export default function App() {
           lastOpenRef.current = { id };
           window.location.hash = path;
         }
+        prevHashRef.current = window.location.hash;
         return;
       }
     }
     lastOpenRef.current = null;
     setDrawer(d);
+    // A non-stock panel (e.g. a fund) must not leave a stale dossier hash
+    // behind: a later hashchange would otherwise resurrect the stock Dossier
+    // and clobber this panel's state.
+    if (parseDossierHash(window.location.hash)) {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+    prevHashRef.current = window.location.hash;
   }, []);
 
   const closeDrawer = useCallback(() => {
@@ -171,13 +201,20 @@ export default function App() {
       // Collapse the dossier URL on close without adding a history entry.
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
     }
+    prevHashRef.current = window.location.hash;
   }, []);
 
   useEffect(() => {
     const onHash = () => {
+      const prevWasDossier = !!parseDossierHash(prevHashRef.current);
+      prevHashRef.current = window.location.hash;
       const id = parseDossierHash(window.location.hash);
       if (!id) {
-        setDrawer((cur) => (cur && cur.type === "stock" ? null : cur));
+        // Only an intentional leave (a previous dossier hash navigating away,
+        // e.g. browser back) closes the panel. Unrelated hash writes never do.
+        if (prevWasDossier) {
+          setDrawer((cur) => (cur && cur.type === "stock" ? null : cur));
+        }
         return;
       }
       const last = lastOpenRef.current;
@@ -484,6 +521,23 @@ export default function App() {
           <footer className="statusbar">
             <span>SV 0.1.0</span>
             <span className={now.getSeconds() % 2 ? "pulse" : ""}>● LIVE</span>
+            {health && (
+              <span
+                className="dim"
+                title={[
+                  `providers: ${(health.providers || []).map((p) => `${p.name}${p.enabled ? (p.cooling_down ? " (cooling)" : "") : " (off)"}`).join(", ") || "n/a"}`,
+                  `stale: ${health.counts?.stale ?? "—"} · NO_DATA: ${health.counts?.no_data ?? "—"} · ERROR: ${health.counts?.error ?? "—"}`,
+                  `signal coverage: ${Object.entries(health.signal_coverage || {}).filter(([k]) => k !== "of_analyzed").map(([k, v]) => `${k} ${v}/${health.signal_coverage.of_analyzed ?? "—"}`).join(", ")}`,
+                  `last snapshot: ${health.last_price_snapshot || "—"}`,
+                  `warm queue: ${health.workers?.warm_queue_pending ?? "—"}`,
+                ].join("\n")}
+              >
+                DATA {health.counts?.with_price_data ?? "—"}/{health.counts?.securities ?? "—"}
+                {health.counts?.stale ? ` · STALE ${health.counts.stale}` : ""}
+                {health.counts?.no_data ? ` · NO_DATA ${health.counts.no_data}` : ""}
+                {health.counts?.error ? ` · ERR ${health.counts.error}` : ""}
+              </span>
+            )}
             <span>
               LAST UPDATED{" "}
               {lastUpdated ? lastUpdated.toLocaleTimeString() : "--:--:--"}

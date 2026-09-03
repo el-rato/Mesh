@@ -1047,6 +1047,28 @@ def list_markets() -> list[dict[str, object]]:
     return out
 
 
+@app.get("/api/analytics/committee")
+def committee_analytics(min_sample: int = 5) -> dict[str, object]:
+    """Committee performance analytics from stored decision snapshots.
+
+    Directional / per-verdict accuracy, conviction-vs-accuracy, forecast error,
+    and breakdowns by market, signal and regime. Every bucket carries its
+    sample size n; buckets below ``min_sample`` are flagged reliable=false.
+    """
+    from .analytics import committee_analytics
+
+    return committee_analytics(_db(), min_sample=max(1, int(min_sample)))
+
+
+@app.get("/api/health/data")
+def data_health() -> dict[str, object]:
+    """Lightweight data-health visibility: providers, stale/NO_DATA/ERROR counts,
+    signal + market coverage, last refresh, worker/job health."""
+    from .analytics import data_health as _data_health
+
+    return _data_health(_db())
+
+
 @app.get("/api/notifications")
 def get_notifications(limit: int = 50) -> list[dict[str, object]]:
     from . import notifications
