@@ -532,6 +532,11 @@ class Database:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
+    def execute(self, sql: str, params: tuple = ()) -> None:
+        """Run a statement for health/startup checks (no result set needed)."""
+        with self.connect() as conn:
+            conn.execute(sql, params)
+
     def init_schema(self) -> int:
         with self.connect() as conn:
             conn.executescript(SCHEMA)
@@ -543,7 +548,15 @@ class Database:
             self._migrate_user_username(conn)
             self._migrate_paper_v2(conn)
             self._migrate_price_snapshot_status(conn)
-            return self._migrate_verdict_reasons(conn)
+            changed = self._migrate_verdict_reasons(conn)
+        # Recorded migrations (idempotent; stamps baseline, applies the rest).
+        try:
+            from .migrations import upgrade
+
+            upgrade(self)
+        except Exception as exc:  # pragma: no cover - never block startup on stamps
+            logger.warning("schema_migrations upgrade skipped: %s", exc)
+        return changed
 
     @staticmethod
     def _migrate_price_snapshot_status(conn: sqlite3.Connection) -> None:

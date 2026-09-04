@@ -6,7 +6,7 @@ import secrets
 import time
 from pathlib import Path
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -16,12 +16,108 @@ from .db import Database, utc_now
 from .analysis import snapshot_price, technical_from_snapshot
 from . import auth
 
+from .logging_setup import setup_logging
+
+setup_logging()
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="StockVerdict", version="0.1.0")
 
+# ---- Production hardening: request ids, structured errors, startup checks ----
+
+
+@app.middleware("http")
+async def _request_context(request: Request, call_next):
+    import uuid
+
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception(
+            "unhandled error %s %s", request.method, request.url.path,
+            extra={"request_id": request_id, "path": request.url.path, "method": request.method},
+        )
+        return JSONResponse(
+            {"detail": "internal server error", "request_id": request_id},
+            status_code=500,
+            headers={"X-Request-ID": request_id},
+        )
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def _http_exception(request: Request, exc: HTTPException):
+    return JSONResponse(
+        {"detail": exc.detail, "request_id": request.headers.get("X-Request-ID", "")},
+        status_code=exc.status_code,
+        headers=getattr(exc, "headers", None),
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled(request: Request, exc: Exception):
+    request_id = request.headers.get("X-Request-ID", "")
+    logger.exception(
+        "unhandled error %s %s", request.method, request.url.path,
+        extra={"request_id": request_id, "path": request.url.path, "method": request.method},
+    )
+    return JSONResponse(
+        {"detail": "internal server error", "request_id": request_id},
+        status_code=500,
+    )
+
+
+@app.on_event("startup")
+def _startup_validation() -> None:
+    """Fail fast on misconfiguration instead of serving broken traffic."""
+    settings.validate_runtime()
+    settings.ensure_dirs()
+    db = Database(settings.db_path)
+    db.init_schema()
+    db.execute("SELECT 1")
+    logger.info(
+        "startup ok: env=%s db=%s", settings.environment, settings.db_path
+    )
+
+
+@app.get("/api/health")
+def health_live() -> dict[str, object]:
+    """Liveness: the process is up and able to serve. No external dependencies."""
+    return {"status": "ok", "environment": settings.environment}
+
+
+@app.get("/api/health/ready")
+def health_ready() -> dict[str, object]:
+    """Readiness: database reachable AND recorded migrations up to date."""
+    from . import migrations
+
+    try:
+        db = _db()
+        db.init_schema()
+        db.execute("SELECT 1")
+        st = migrations.status(db)
+    except Exception as exc:
+        logger.warning("readiness failed: %s", exc)
+        return JSONResponse({"status": "unready", "reason": str(exc)}, status_code=503)
+    if not st["up_to_date"]:
+        return JSONResponse(
+            {"status": "unready", "reason": "pending migrations", "pending": st["pending"]},
+            status_code=503,
+        )
+    return {"status": "ready", "environment": settings.environment, "migrations": st["applied"]}
+
 UI_DIR = Path(__file__).resolve().parent / "web"
-FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+#: Frontend dist (configurable for artifact deployments via FRONTEND_DIST).
+#: Empty/whitespace env value must fall back to the default — never to CWD.
+_dist_env = (settings.frontend_dist or "").strip()
+FRONTEND_DIR = (
+    Path(_dist_env).resolve()
+    if _dist_env
+    else Path(__file__).resolve().parents[2] / "frontend" / "dist"
+)
 
 
 def _ui_assets_dir() -> Path:
@@ -695,7 +791,11 @@ def refresh_data() -> dict[str, object]:
     # (world / tech / crypto / macro). Throttled to the RSS cache TTL; all
     # feed fetches share an in-memory cache, so within 10 minutes this is a
     # cheap cache-hit pass over already-fetched articles.
+    # When a dedicated worker runs (WORKER_MANAGED=1) the API skips this so
+    # background work happens in exactly one process.
     global _last_global_news_at
+    if settings.worker_managed:
+        return result
     if time.time() - _last_global_news_at >= _GLOBAL_NEWS_INTERVAL:
         try:
             from .ingest import ingest_global_news
@@ -1809,7 +1909,13 @@ if (FRONTEND_DIR / "index.html").is_file():
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def spa(full_path: str):
-        candidate = FRONTEND_DIR / full_path
+        # Serve only files that actually live inside the dist directory —
+        # never allow ".." traversal outside of it.
+        candidate = (FRONTEND_DIR / full_path).resolve()
+        try:
+            candidate.relative_to(FRONTEND_DIR.resolve())
+        except ValueError:
+            return JSONResponse({"detail": "not found"}, status_code=404)
         if full_path and candidate.is_file():
             return FileResponse(candidate)
         return FileResponse(FRONTEND_DIR / "index.html")

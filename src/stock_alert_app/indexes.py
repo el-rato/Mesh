@@ -35,8 +35,13 @@ logger = logging.getLogger(__name__)
 
 #: In-process cache of chart series so repeated views (dossier, ticker strip,
 #: scanner thumbnails) don't re-hit the live provider and trip rate limits.
+#: TTL configurable via STOCK_ALERT_HISTORY_TTL.
+try:
+    _HISTORY_TTL = float(settings.chart_history_ttl)
+except Exception:  # pragma: no cover
+    _HISTORY_TTL = 1800.0  # 30 minutes
+
 _HISTORY_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
-_HISTORY_TTL = 1800.0  # 30 minutes
 
 #: Per-range fallback chain of (period, interval) tuples. Intraday ranges
 #: (1d/1w) first try a fine interval, then progressively coarser ones, finally

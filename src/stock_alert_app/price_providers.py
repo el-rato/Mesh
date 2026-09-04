@@ -32,7 +32,13 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 #: How long a provider is skipped after a rate-limit / hard failure (seconds).
-_COOLDOWN = 120.0
+#: Tunable via STOCK_ALERT_PROVIDER_COOLDOWN (see config.settings).
+try:
+    from .config import settings as _settings
+
+    _COOLDOWN = float(getattr(_settings, "provider_cooldown_s", 120))
+except Exception:  # pragma: no cover - standalone import safety
+    _COOLDOWN = 120.0
 #: Short cooldown for a generic network error (less certain to be throttling).
 _ERROR_COOLDOWN = 30.0
 #: Per-request HTTP timeout for providers we fetch over the network ourselves.

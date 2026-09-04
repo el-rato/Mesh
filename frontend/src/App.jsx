@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { fetchJSON, authMe, authLogout } from "./api.js";
+import { fetchJSON, apiUrl, authMe, authLogout } from "./api.js";
 import { getDossierPath, parseDossierHash, securityIdOf, splitSecurityId } from "./nav.js";
 import Landing from "./components/Landing.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
@@ -351,7 +351,7 @@ export default function App() {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
     setRefreshStatus((prev) => ({ ...prev, running: true, error: "" }));
-    fetch("/api/refresh", { method: "POST" })
+    fetch(apiUrl("/api/refresh"), { method: "POST" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((payload) => {
         setRefreshStatus(payload);

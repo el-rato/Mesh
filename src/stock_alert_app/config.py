@@ -236,6 +236,62 @@ class Settings:
         default_factory=lambda: os.getenv("STOCK_ALERT_AUTH_SECURE", "0") == "1"
     )
 
+    # ---- Production deployment ------------------------------------------------
+    #: Deployment environment: development (default) | staging | production.
+    #: production enables secure-by-default behaviour (see auth_cookie_secure note).
+    environment: str = field(
+        default_factory=lambda: os.getenv("STOCK_ALERT_ENV", "development").lower()
+    )
+    #: Database URL. SQLite (sqlite:///path/to.db) is the supported, default
+    #: engine. A non-SQLite DATABASE_URL (e.g. postgresql://...) is accepted as
+    #: configuration but REJECTED at service startup until the PostgreSQL
+    #: dialect migration lands (see DEPLOYMENT.md) — fail fast, never half-work.
+    database_url: str = field(
+        default_factory=lambda: os.getenv("DATABASE_URL", "")
+    )
+    #: Web server bind address (used by `stock-alert-app serve`).
+    serve_host: str = field(default_factory=lambda: os.getenv("HOST", "127.0.0.1"))
+    serve_port: int = field(default_factory=lambda: _env_int("PORT", 8000))
+    #: Override the built frontend directory (defaults to <repo>/frontend/dist).
+    #: Stored as a string: empty means "not overridden" (Path("") would
+    #: normalize to "." and silently point the static dir at the CWD).
+    frontend_dist: str = field(
+        default_factory=lambda: os.getenv("FRONTEND_DIST", "").strip()
+    )
+    #: Logging: LOG_LEVEL=INFO|DEBUG|WARNING..., LOG_JSON=1 for structured logs.
+    log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
+    log_json: bool = field(default_factory=lambda: os.getenv("LOG_JSON", "0") == "1")
+    #: Default socket timeout (s) applied at service start — bounds any straggler
+    #: provider library that lacks an explicit timeout (e.g. feedparser).
+    http_timeout_s: int = field(default_factory=lambda: _env_int("HTTP_TIMEOUT", 20))
+    #: Chart-history in-memory cache TTL (seconds).
+    chart_history_ttl: int = field(
+        default_factory=lambda: _env_int("STOCK_ALERT_HISTORY_TTL", 1800)
+    )
+    #: Price-provider circuit-breaker cooldown after a rate limit (seconds).
+    provider_cooldown_s: int = field(
+        default_factory=lambda: _env_int("STOCK_ALERT_PROVIDER_COOLDOWN", 120)
+    )
+    #: Enable the API's on-refresh background top-up when a dedicated worker runs.
+    worker_managed: bool = field(
+        default_factory=lambda: os.getenv("WORKER_MANAGED", "0") == "1"
+    )
+
+    def validate_runtime(self) -> None:
+        """Fail-fast production checks. Called by the API and worker at startup."""
+        if self.environment == "production" and not self.auth_cookie_secure:
+            raise RuntimeError(
+                "STOCK_ALERT_AUTH_SECURE=1 is required when STOCK_ALERT_ENV=production "
+                "(session cookies must be Secure over HTTPS)."
+            )
+        url = (self.database_url or "").strip()
+        if url and not url.lower().startswith(("sqlite", "file:")):
+            raise RuntimeError(
+                "DATABASE_URL points at a non-SQLite engine. PostgreSQL support is "
+                "documented in DEPLOYMENT.md but not yet enabled at runtime; start "
+                "with sqlite:/// or remove DATABASE_URL."
+            )
+
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
 

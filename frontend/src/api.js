@@ -1,5 +1,17 @@
+// Base URL for the backend API. Empty = same origin (recommended: serve the
+// built frontend from the API or reverse-proxy /api to it). For a CDN/static
+// deployment on another domain, set VITE_API_BASE_URL at build time, e.g.
+//   VITE_API_BASE_URL=https://api.example.com npm run build
+// (no trailing slash; never put provider secrets in frontend env vars).
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+
+export function apiUrl(path) {
+  if (/^https?:\/\//i.test(path)) return path;
+  return `${API_BASE}${path}`;
+}
+
 export async function fetchJSON(url, opts) {
-  const r = await fetch(url, opts);
+  const r = await fetch(apiUrl(url), opts);
   if (!r.ok) {
     let detail = "HTTP " + r.status;
     try {
