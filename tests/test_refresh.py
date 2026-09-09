@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from stock_alert_app import refresh
 from stock_alert_app.db import Database
 
@@ -21,8 +23,32 @@ class TestRefreshStatus:
         assert status["last_fast_at"] is None
 
 
+class TestWarmWorkerLifecycle:
+    def teardown_method(self):
+        refresh.shutdown_warm_workers()
+
+    def test_start_is_idempotent_and_shutdown_joins_workers(self):
+        refresh.shutdown_warm_workers()
+        refresh.enable_warm_workers()
+        refresh._start_warm_workers()
+        initial = list(refresh._warm_threads)
+
+        refresh._start_warm_workers()
+
+        assert refresh._warm_threads == initial
+        assert all(thread.is_alive() for thread in initial)
+        refresh.shutdown_warm_workers()
+        assert refresh._warm_threads == []
+        assert not refresh._warm_started
+        assert not refresh._warm_accepting
+        assert not any(
+            thread.name.startswith("analysis-warmer") and thread.is_alive()
+            for thread in threading.enumerate()
+        )
+
+
 class TestRunRefresh:
-    def test_first_cycle_runs_fast_and_slow(self, monkeypatch):
+    def test_first_cycle_runs_fast_only(self, monkeypatch):
         _reset_state()
         calls: list[str] = []
         monkeypatch.setattr(refresh, "run_fast_refresh", lambda db: calls.append("fast"))
@@ -31,10 +57,10 @@ class TestRunRefresh:
 
         result = refresh.run_refresh(db)
 
-        assert calls == ["fast", "slow"]
+        assert calls == ["fast"]
         assert result["running"] is False
         assert result["last_fast_at"] is not None
-        assert result["last_slow_at"] is not None
+        assert result["last_slow_at"] is None
 
     def test_immediate_second_cycle_does_no_duplicate_work(self, monkeypatch):
         _reset_state()

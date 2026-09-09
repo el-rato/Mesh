@@ -17,6 +17,17 @@ def _res(name, score=None, conf=None, status="ok"):
     )
 
 
+def test_gbm_rolling_feature_is_causal():
+    import numpy as np
+
+    values = np.arange(20, dtype=float)
+    changed = values.copy()
+    changed[12:] += 10_000
+    before = signals._causal_rolling_mean(values, 10)
+    after = signals._causal_rolling_mean(changed, 10)
+    np.testing.assert_allclose(before[:12], after[:12])
+
+
 class TestQuantitativeEnsemble:
     def test_all_models_available(self, monkeypatch):
         monkeypatch.setattr(signals, "lstm_signal", lambda s: _res("lstm", 0.6, 0.8))

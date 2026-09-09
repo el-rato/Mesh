@@ -132,6 +132,7 @@ function freshWorkspaces() {
 }
 
 function WorkspaceWidget({ widget, selectedTicker, tickers, theme, refreshToken, chartRange }) {
+  const { openDossier } = useApp();
   if (widget === "search") return <div className="workspace-search"><SearchBox /></div>;
   if (widget === "movers") return <MoversPanel title="MARKET MOVERS" />;
   if (widget === "breadth") return <BreadthStrip rows={tickers} />;
@@ -154,6 +155,9 @@ function WorkspaceWidget({ widget, selectedTicker, tickers, theme, refreshToken,
         <div className="workspace-chart-id">
           <strong>{selectedTicker.ticker}</strong>
           <span>{selectedTicker.company || selectedTicker.market}</span>
+          <button type="button" className="ghost workspace-mesh-action" onClick={() => openDossier({ type: "stock", v: selectedTicker })}>
+            ANALYZE WITH MESH
+          </button>
         </div>
         <PriceChart url={url} chartType="candlestick" showVolume sma={[50]} refreshKey={refreshToken} theme={theme} />
       </div>
@@ -932,6 +936,7 @@ export default function App() {
       refreshToken,
       refreshStatus,
       openDrawer: handleDrawerRequest,
+      openDossier: openDrawer,
       openPaperTicket: (t) => setPaperTicket(t),
       portfolioIds,
       addToPortfolio,
@@ -940,7 +945,7 @@ export default function App() {
       screenerPrefill,
       setScreenerPrefill,
     }),
-    [market, markets, indexes, security, refreshToken, refreshStatus, theme, portfolioIds, addToPortfolio, removeFromPortfolio, inPortfolio, screenerPrefill, handleDrawerRequest, auth, openStandardTab]
+    [market, markets, indexes, security, refreshToken, refreshStatus, theme, portfolioIds, addToPortfolio, removeFromPortfolio, inPortfolio, screenerPrefill, handleDrawerRequest, openDrawer, auth, openStandardTab]
   );
 
   const commands = useMemo(() => [

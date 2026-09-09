@@ -1,19 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchJSON, CHART_RANGES, rangeLabel, dossier } from "../api.js";
+import { fetchJSON, CHART_RANGES, rangeLabel, dossier, meshAnalysis } from "../api.js";
 import { useApp } from "../App.jsx";
 import PriceChart from "./PriceChart.jsx";
 import AddToPortfolioButton from "./AddToPortfolioButton.jsx";
-import { verdictBadge, reasonText, RefreshStatus } from "./ui.jsx";
+import { reasonText, RefreshStatus } from "./ui.jsx";
 
 function sigCls(state) {
   const s = String(state || "").toLowerCase();
   if (s === "bull" || s === "bullish") return "bull";
   if (s === "bear" || s === "bearish") return "bear";
+  if (s === "conflicted") return "conflicted";
+  if (s === "uncertain") return "uncertain";
   return "neutral";
 }
 
+function plainStateLabel(state) {
+  const s = String(state || "N/A").toUpperCase();
+  if (s === "CONFLICTED") return "MIXED OUTLOOK";
+  if (s === "TRENDING_BULL") return "UPTREND";
+  if (s === "TRENDING_BEAR") return "DOWNTREND";
+  return s;
+}
+
 function StateBadge({ state }) {
-  return <span className={`badge ${sigCls(state)}`}>{String(state || "N/A").toUpperCase()}</span>;
+  return <span className={`badge ${sigCls(state)}`}>{plainStateLabel(state)}</span>;
 }
 
 function num(v, def = 0) {
@@ -21,13 +31,71 @@ function num(v, def = 0) {
   return Number.isFinite(n) ? n : def;
 }
 
+function plainOutlook(state) {
+  const s = String(state || "").toUpperCase();
+  if (s === "BULL" || s === "BULLISH") return "Positive outlook";
+  if (s === "BEAR" || s === "BEARISH") return "Negative outlook";
+  if (s === "CONFLICTED") return "Mixed outlook";
+  if (s === "UNCERTAIN") return "Unclear outlook";
+  if (s === "NEUTRAL") return "Neutral outlook";
+  return "No outlook yet";
+}
+
+function plainDirection(state) {
+  const s = String(state || "").toUpperCase();
+  if (s === "BULL" || s === "BULLISH") return "Up";
+  if (s === "BEAR" || s === "BEARISH") return "Down";
+  if (s === "CONFLICTED") return "Mixed";
+  if (s === "NEUTRAL") return "Sideways";
+  if (s === "UNCERTAIN") return "Unclear";
+  return "No estimate";
+}
+
+function plainRisk(level) {
+  const s = String(level || "").toUpperCase();
+  if (s === "HIGH") return "High risk";
+  if (s === "LOW") return "Low risk";
+  if (s === "MEDIUM") return "Moderate risk";
+  return "Risk unavailable";
+}
+
+function plainRegime(regime) {
+  const labels = {
+    TRENDING_BULL: "Uptrend",
+    TRENDING_BEAR: "Downtrend",
+    RANGE: "Sideways market",
+    HIGH_VOL: "Volatile market",
+    LOW_VOL: "Calm market",
+    RISK_OFF: "Risk-off market",
+  };
+  return labels[String(regime || "").toUpperCase()] || "Market condition unclear";
+}
+
+function forecastTerm(horizon, index) {
+  const labels = { "1D": "SHORT TERM", "5D": "MEDIUM TERM", "20D": "LONG TERM" };
+  return labels[String(horizon || "").toUpperCase()] || ["SHORT TERM", "MEDIUM TERM", "LONG TERM"][index] || "OUTLOOK";
+}
+
+function plainEvidence(row, fallback) {
+  const text = String(row?.reason || row?.direction || fallback || "No material signal identified.")
+    .replace(/P\(up\)/gi, "chance of price increase")
+    .replace(/TRENDING_BULL/gi, "uptrend")
+    .replace(/TRENDING_BEAR/gi, "downtrend")
+    .replace(/HIGH_VOL/gi, "high volatility")
+    .replace(/LOW_VOL/gi, "low volatility")
+    .replace(/_/g, " ");
+  const sentence = (text.match(/^[^.!?]+/)?.[0] || text).trim();
+  return sentence.charAt(0).toUpperCase() + sentence.slice(1);
+}
+
 /* ---------------- Analysis workspace ---------------- */
 
-function DossierHeader({ dossierData, v }) {
+function DossierHeader({ dossierData, v, analysisState, onAnalyze }) {
   const { refreshStatus, openPaperTicket } = useApp();
   const verdict = dossierData.verdict || {};
+  const mesh = verdict.mesh_signal || {};
+  const meshState = analysisState || dossierData.mesh_analysis?.status || "IDLE";
   const inst = dossierData.instrument || {};
-  const conf = verdict.confidence == null ? "N/A" : `${(num(verdict.confidence) * 100).toFixed(0)}%`;
   const openTicket = (action) =>
     openPaperTicket({
       market: inst.market || v.market,
@@ -39,22 +107,26 @@ function DossierHeader({ dossierData, v }) {
     });
   return (
     <div className="dossier-header">
-      <div>
+      <div className="dossier-identity">
         <div className="symbol-lg">{inst.ticker || v.ticker}</div>
-        <div className="dossier-company">{inst.company || ""} · {inst.exchange || inst.market || v.market}</div>
+        <div className="dossier-company">
+          {[inst.company, inst.exchange || inst.market || v.market, inst.quote_type || "EQUITY"].filter(Boolean).join(" · ")}
+        </div>
       </div>
       <div className="dossier-header-right">
-        <span className="dossier-mkt">{inst.market || v.market} · {inst.quote_type || "EQUITY"}</span>
-        {verdictBadge(verdict)}
+        <button className="primary mesh-run mesh-header-action" type="button" onClick={onAnalyze} disabled={meshState === "ANALYZING"}>
+          {meshState === "ANALYZING" ? "ANALYZING…" : "RUN MESH ANALYSIS"}
+        </button>
         <AddToPortfolioButton market={inst.market || v.market} ticker={inst.ticker || v.ticker} company={inst.company || v.company} />
         <button className="paper-buy" onClick={() => openTicket("BUY")} title="Open paper BUY ticket">BUY</button>
         <button className="paper-short" onClick={() => openTicket("SHORT")} title="Open paper SHORT ticket">SHORT</button>
         <RefreshStatus status={refreshStatus} />
       </div>
       <div className="dossier-header-meta">
-        CONFIDENCE <strong>{conf}</strong>
+        MESH <strong className={sigCls(mesh.direction || meshState)}>{meshState}</strong>
+        {mesh.direction && <> · OUTLOOK <strong className={sigCls(mesh.direction)}>{plainOutlook(mesh.direction)}</strong></>}
         {dossierData.stale && <span className="stale-flag">STALE</span>}
-        {dossierData.computed_at && <span className="dim"> · ANALYZED {String(dossierData.computed_at).slice(11, 19)}</span>}
+        {dossierData.mesh_analysis?.analyzed_at && <span className="dim"> · ANALYZED {String(dossierData.mesh_analysis.analyzed_at).slice(0, 19).replace("T", " ")}</span>}
       </div>
     </div>
   );
@@ -217,7 +289,145 @@ function ChartSection({ v, symbol, dossierData }) {
   );
 }
 
-function QuoteSection({ dossierData }) {
+const EVIDENCE_LABELS = {
+  ml: "ML", trend: "TREND", momentum: "MOMENTUM", volume: "VOLUME",
+  volatility: "VOLATILITY", candlesticks: "CANDLESTICKS",
+  market_regime: "MARKET CONTEXT", market_context: "MARKET CONTEXT",
+  relative_strength: "MARKET CONTEXT",
+};
+
+function EvidenceRows({ rows, opposing = false }) {
+  if (!rows?.length) return <div className="mesh-empty">NO MATERIAL EVIDENCE</div>;
+  return rows.map((row, i) => (
+    <div className={`mesh-evidence-row ${opposing ? "opposing" : "supporting"}`} key={`${row.category}-${i}`}>
+      <span>{EVIDENCE_LABELS[row.category] || String(row.category || "EVIDENCE").toUpperCase()}</span>
+      <strong>{plainEvidence(row)}</strong>
+      <em>{row.score > 0 ? "+" : ""}{num(row.score).toFixed(2)}</em>
+    </div>
+  ));
+}
+
+function MeshSignalSection({ verdict, analysisState = "IDLE", analysisError }) {
+  const mesh = verdict.mesh_signal || {};
+  if (analysisState !== "READY" && analysisState !== "PARTIAL") {
+    return (
+      <div className={`mesh-status-row ${analysisState === "ERROR" ? "mesh-error" : ""}`}>
+        <div className="mesh-idle-copy">
+          <span className="mesh-kicker">MESH ANALYSIS</span>
+          <strong>{analysisState === "ANALYZING" ? "ANALYZING WITH MESH…" : analysisState === "ERROR" ? "MESH ANALYSIS FAILED" : "Run deep analysis for this stock"}</strong>
+          {analysisError && <span className="mesh-error-text">{analysisError}</span>}
+        </div>
+        <strong className={`mesh-status-code ${sigCls(analysisState)}`}>{analysisState}</strong>
+      </div>
+    );
+  }
+  const forecasts = (mesh.forecasts || []).slice(0, 3);
+  const strongestSupport = mesh.supporting_evidence?.[0];
+  const strongestCaution = mesh.opposing_evidence?.[0];
+  const explanation = strongestSupport && strongestCaution
+    ? `The positive case is led by ${plainEvidence(strongestSupport).toLowerCase()}, while ${plainEvidence(strongestCaution).toLowerCase()} limits confidence.`
+    : strongestSupport
+      ? `The outlook is mainly supported by ${plainEvidence(strongestSupport).toLowerCase()}.`
+      : strongestCaution
+        ? `The main caution is ${plainEvidence(strongestCaution).toLowerCase()}.`
+        : "The available signals do not yet point clearly in one direction.";
+  return (
+    <div className={`mesh-intel ${sigCls(mesh.direction)}`}>
+      <div className="mesh-primary">
+        <div className="mesh-signal-main">
+          <span className="mesh-kicker">OVERALL OUTLOOK</span>
+          <div className="mesh-signal-value">
+            <strong className={`mesh-direction ${sigCls(mesh.direction)}`}>{plainOutlook(mesh.direction)}</strong>
+          </div>
+        </div>
+        <div className="mesh-stat"><span>RISK</span><strong>{plainRisk(mesh.risk_level)}</strong></div>
+        <div className="mesh-stat"><span>MARKET CONDITION</span><strong>{plainRegime(mesh.regime)}</strong></div>
+      </div>
+
+      <div className="mesh-forecasts">
+        {[0, 1, 2].map((index) => {
+          const row = forecasts[index] || {};
+          return (
+          <div className="mesh-forecast" key={row.horizon || index}>
+            <span>{forecastTerm(row.horizon, index)}</span>
+            <strong className={`mesh-forecast-direction ${sigCls(row.direction)}`}>{plainDirection(row.direction)}</strong>
+          </div>
+          );
+        })}
+      </div>
+      <div className="mesh-explanation">{explanation}</div>
+      <div className="mesh-why-caution">
+        <div className="mesh-reason why"><span>WHY</span><p>{plainEvidence(strongestSupport, "No strong supporting signal was identified.")}</p></div>
+        <div className="mesh-reason caution"><span>CAUTION</span><p>{plainEvidence(strongestCaution, "No strong opposing signal was identified.")}</p></div>
+      </div>
+    </div>
+  );
+}
+
+function MeshAnalysisDetail({ verdict }) {
+  const mesh = verdict.mesh_signal || {};
+  const candles = (mesh.evidence || []).find((row) => row.category === "candlesticks") || {};
+  const patterns = candles.metrics?.patterns || [];
+  const reliability = mesh.reliability || {};
+  const evidenceHeader = (
+    <div className="mesh-evidence-head" aria-hidden="true">
+      <span>CATEGORY</span><span>EXPLANATION</span><span>SCORE</span>
+    </div>
+  );
+  return (
+    <div className="mesh-analysis-detail">
+      <section className="mesh-diagnostics">
+        <h3>MESH DIAGNOSTICS</h3>
+        <div className="mesh-diagnostic-grid">
+          <div><span>MESH CONFIDENCE</span><strong>{mesh.confidence == null ? "N/A" : `${(num(mesh.confidence) * 100).toFixed(0)}%`}</strong></div>
+          <div><span>SUPPORTING SIGNALS</span><strong>{mesh.agreement_score == null ? "N/A" : `${(num(mesh.agreement_score) * 100).toFixed(0)}%`}</strong></div>
+          <div><span>CONFLICTING SIGNALS</span><strong>{mesh.contradiction_score == null ? "N/A" : `${(num(mesh.contradiction_score) * 100).toFixed(0)}%`}</strong></div>
+          <div><span>MARKET CONDITION CODE</span><strong>{mesh.regime || "UNKNOWN"}</strong></div>
+          <div><span>CONDITION CONFIDENCE</span><strong>{mesh.regime_confidence == null ? "N/A" : `${(num(mesh.regime_confidence) * 100).toFixed(0)}%`}</strong></div>
+        </div>
+      </section>
+      <section className="mesh-advanced-forecasts">
+        <h3>DIRECTION ESTIMATES</h3>
+        <div className="mesh-advanced-forecast-head" aria-hidden="true">
+          <span>TERM</span><span>DIRECTION</span><span>CHANCE OF PRICE INCREASE</span><span>CALIBRATION</span>
+        </div>
+        {(mesh.forecasts || []).map((row, index) => (
+          <div className="mesh-advanced-forecast" key={row.horizon || index}>
+            <span>{forecastTerm(row.horizon, index)} ({row.horizon || "N/A"})</span>
+            <strong className={sigCls(row.direction)}>{plainDirection(row.direction)}</strong>
+            <span>{row.probability_up == null ? "NO DATA" : `${(num(row.probability_up) * 100).toFixed(1)}%`}</span>
+            <span>{row.calibrated ? "CALIBRATED" : row.status === "ok" ? "UNCALIBRATED" : "UNAVAILABLE"}</span>
+          </div>
+        ))}
+      </section>
+      <div className="mesh-evidence-grid">
+        <section className="supporting"><h3>SUPPORTING EVIDENCE</h3>{evidenceHeader}<EvidenceRows rows={mesh.supporting_evidence} /></section>
+        <section className="opposing"><h3>OPPOSING EVIDENCE</h3>{evidenceHeader}<EvidenceRows rows={mesh.opposing_evidence} opposing /></section>
+      </div>
+      <div className="mesh-candles">
+        <h3>CANDLESTICK ANALYSIS</h3>
+        {patterns.length ? patterns.map((pattern) => (
+          <div className="mesh-pattern" key={pattern}>
+            <strong>{String(pattern).replace(/_/g, " ").toUpperCase()}</strong>
+            <span>{candles.direction || "NEUTRAL"} · CONTEXT {Math.round(num(candles.confidence) * 100)}%</span>
+            <span>{candles.metrics?.volume_confirmed ? "VOLUME CONFIRMED" : "AWAITING VOLUME CONFIRMATION"}</span>
+            <small>{candles.reason || "Pattern is contextual evidence, not an automatic trade signal."}</small>
+          </div>
+        )) : <div className="mesh-empty">NO CONTEXT-CONFIRMED PATTERN</div>}
+      </div>
+      <div className="mesh-reliability">
+        <span>MODEL RELIABILITY</span>
+        <strong>{reliability.model ? `${String(reliability.model).toUpperCase()} / ${reliability.model_version || "UNVERSIONED"}` : "NO MODEL"}</strong>
+        <span>{reliability.calibration_status || "NO DATA"}</span>
+        <span>{reliability.status === "INSUFFICIENT_DATA" ? `INSUFFICIENT DATA · N=${reliability.sample_count}/${reliability.minimum_samples || 30}` : reliability.historical_hit_rate == null ? "SIMILAR-CASE HIT RATE N/A" : `${(num(reliability.historical_hit_rate) * 100).toFixed(0)}% HIT RATE · N=${reliability.sample_count}`}</span>
+        <span>{reliability.last_evaluated_at ? `EVALUATED ${String(reliability.last_evaluated_at).slice(0, 10)}` : "NOT YET EVALUATED"}</span>
+      </div>
+      <div className="mesh-transparency">MODEL PROBABILITY feeds the fusion layer. MESH CONFIDENCE reflects cross-engine agreement, regime and risk.</div>
+    </div>
+  );
+}
+
+function QuoteSection({ dossierData, analysisError }) {
   const verdict = dossierData.verdict || {};
   const decision = verdict.decision || {};
   const price = verdict.price || {};
@@ -234,11 +444,17 @@ function QuoteSection({ dossierData }) {
   ];
   return (
     <div className="quote-section">
+      <MeshSignalSection verdict={verdict} analysisState={dossierData.mesh_analysis?.status || "IDLE"} analysisError={analysisError} />
+      <details className="mesh-advanced">
+        <summary>ADVANCED DETAILS</summary>
+        <div className="mesh-advanced-body">
+      <section className="overview-section overview-committee">
+        <h3>COMMITTEE DECISION</h3>
       {decision.status === "ok" ? (
         <>
           <div className="decision-primary">
             <div className="decision-verdict">
-              <span className={`badge ${sigCls(decision.verdict)}`}>{decision.verdict}</span>
+              <span className={`badge ${sigCls(decision.verdict)}`}>{plainStateLabel(decision.verdict)}</span>
               <span className="decision-conviction">{decision.conviction != null ? Math.round(decision.conviction * 100) : "—"} CONVICTION</span>
             </div>
             <div className="decision-agreement">{aligned}/{availSignals.length} SIGNALS ALIGNED · DATA {coverage}</div>
@@ -248,7 +464,7 @@ function QuoteSection({ dossierData }) {
             <div className="decision-line"><span className="lbl">KEY RISK</span>{decision.primary_risks[0]}</div>
           )}
           {decision.key_disagreement && (
-            <div className="decision-line"><span className="lbl">DISAGREEMENT</span>{decision.key_disagreement}</div>
+            <div className="decision-line"><span className="lbl">CONFLICTING VIEW</span>{decision.key_disagreement}</div>
           )}
           {decision.view_changes_if && (
             <div className="decision-line dim"><span className="lbl">VIEW CHANGES IF</span>{decision.view_changes_if}</div>
@@ -260,16 +476,20 @@ function QuoteSection({ dossierData }) {
           <div className="decision-agreement">DATA {coverage} · VERDICT {String(verdict.verdict || "N/A")}</div>
         </div>
       )}
+      </section>
 
-      <details className="paper-detail">
-        <summary>QUOTE &amp; PRICE</summary>
+      <section className="overview-section overview-quotes">
+        <h3>QUOTE &amp; PRICE</h3>
         <div className="quote-grid">
           {rows.map(([key, value]) => <div className="quote-cell" key={key}><span>{key}</span><strong>{value}</strong></div>)}
         </div>
-      </details>
+      </section>
+      {(dossierData.mesh_analysis?.status === "READY" || dossierData.mesh_analysis?.status === "PARTIAL") && <MeshAnalysisDetail verdict={verdict} />}
       <details className="paper-detail">
         <summary>FULL REASONING</summary>
         <div className="dossier-summary">{reasonText(verdict.reason) || "No additional explanation available."}</div>
+      </details>
+        </div>
       </details>
     </div>
   );
@@ -402,6 +622,8 @@ function ModelSection({ verdict }) {
   const prob = lstm.probability_up;
   const isUp = num(prob, 0.5) >= 0.5;
   const metrics = lstm.metrics || {};
+  const mesh = verdict.mesh_signal || {};
+  const reliability = mesh.reliability || {};
   const availableModels = models.filter((m) => m.status === "ok");
   const quantRows = [
     ["ENSEMBLE", quant.status === "ok" ? `${quant.direction || "NEUTRAL"} · ${quant.score != null ? (quant.score > 0 ? "+" : "") + quant.score.toFixed(3) : "n/a"} · ${quant.confidence != null ? (quant.confidence * 100).toFixed(0) + "%" : "n/a"}` : "UNAVAILABLE"],
@@ -440,12 +662,12 @@ function ModelSection({ verdict }) {
           <div className="team-model"><span className="tm-na">NO MODELS AVAILABLE</span></div>
         )}
       </div>
-      <h3>LSTM DETAIL</h3>
+      <h3>MODEL PROBABILITY — LSTM DETAIL</h3>
       <div className="dossier-rows">
         {[
-          ["P(UP)", prob != null ? <span key="p" style={{ color: isUp ? "var(--bull)" : "var(--bear)" }}>{(num(prob) * 100).toFixed(1)}%</span> : "N/A"],
+          ["CHANCE OF PRICE INCREASE", prob != null ? <span key="p" style={{ color: isUp ? "var(--bull)" : "var(--bear)" }}>{(num(prob) * 100).toFixed(1)}%</span> : "N/A"],
           ["PREDICTED RETURN", lstm.predicted_return != null ? <span key="r" className={isUp ? "up" : "down"}>{num(lstm.predicted_return) > 0 ? "+" : ""}{(num(lstm.predicted_return) * 100).toFixed(2)}%</span> : "N/A"],
-          ["MODEL CONFIDENCE", lstm.model_confidence != null ? num(lstm.model_confidence).toFixed(3) : "N/A"],
+          ["MODEL CLASS CONFIDENCE", lstm.model_confidence != null ? num(lstm.model_confidence).toFixed(3) : "N/A"],
           ["LSTM SCORE", num(lstm.score).toFixed(3)],
           ["MODEL VERSION", lstm.model_version || "N/A"],
           ...Object.entries(metrics).map(([k, v2]) => [k.toUpperCase().replace(/_/g, " "), v2]),
@@ -456,8 +678,19 @@ function ModelSection({ verdict }) {
           </div>
         ))}
       </div>
+      <h3>MESH RELIABILITY</h3>
+      <div className="dossier-rows">
+        {[
+          ["MESH CONFIDENCE", mesh.confidence == null ? "N/A" : `${(num(mesh.confidence) * 100).toFixed(0)}%`],
+          ["CALIBRATION STATUS", reliability.calibration_status || "NO DATA"],
+          ["SIMILAR CONFIDENCE / REGIME", reliability.status === "INSUFFICIENT_DATA" ? `INSUFFICIENT DATA (N=${reliability.sample_count}/${reliability.minimum_samples || 30})` : reliability.historical_hit_rate == null ? "NOT YET EVALUATED" : `${(num(reliability.historical_hit_rate) * 100).toFixed(1)}% HIT RATE (N=${reliability.sample_count})`],
+          ["LAST EVALUATION", reliability.last_evaluated_at || "N/A"],
+        ].map(([k, val]) => (
+          <div className="row" key={k}><span className="label">{k}</span><span className="value">{val}</span></div>
+        ))}
+      </div>
       <div className="model-disclaimer">
-        PROBABILISTIC MODELS — NOT FINANCIAL ADVICE. MODEL CONFIDENCE ≠ PROBABILITY OF PROFIT.
+        MODEL PROBABILITY IS NOT MESH CONFIDENCE. PROBABILISTIC MODELS — NOT FINANCIAL ADVICE.
         PREDICTIONS ARE ESTIMATES AND CAN BE WRONG. MODELS ARE WEIGHTED BY AVAILABILITY.
       </div>
     </div>
@@ -573,7 +806,7 @@ function RiskSection({ verdict, symbol, market, ticker }) {
           <span className="value">{verdict.forecast_horizon || "1 trading day"}</span>
         </div>
         <div className="row">
-          <span className="label">SIGNAL AGREEMENT</span>
+          <span className="label">SUPPORTING SIGNALS</span>
           <span className="value">{String(verdict.signal_agreement || "unknown").toUpperCase()}</span>
         </div>
       </div>
@@ -601,6 +834,8 @@ function StockDossier({ v, onClose }) {
   const [tab, setTab] = useState("overview");
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const [analysisState, setAnalysisState] = useState("IDLE");
+  const [analysisError, setAnalysisError] = useState("");
 
   const symbol = useMemo(() => {
     if (v.symbol) return v.symbol;
@@ -609,39 +844,60 @@ function StockDossier({ v, onClose }) {
   }, [v, markets]);
 
   const reqRef = useRef(0);
-  const load = useCallback((fresh = false) => {
+  const abortRef = useRef(null);
+  const load = useCallback(() => {
     const req = ++reqRef.current;
     setError("");
-    dossier({ symbol, fresh })
+    dossier({ symbol, market: v.market, ticker: v.ticker })
       .then((d) => {
-        if (req === reqRef.current) setData(d);
+        if (req !== reqRef.current) return;
+        setData(d);
+        const state = d.mesh_analysis?.status || "IDLE";
+        if (state === "READY" || state === "PARTIAL") setAnalysisState(state);
       })
       .catch((e) => {
         if (req === reqRef.current) setError(e.message);
       });
-  }, [symbol]);
+  }, [symbol, v.market, v.ticker]);
+
+  const runAnalysis = useCallback(() => {
+    const req = ++reqRef.current;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setAnalysisState("ANALYZING");
+    setAnalysisError("");
+    meshAnalysis(
+      { symbol, market: v.market, ticker: v.ticker, timeframe: "1d" },
+      { signal: controller.signal },
+    )
+      .then((d) => {
+        if (req !== reqRef.current) return;
+        setData(d);
+        setAnalysisState(d.mesh_analysis?.status || "READY");
+      })
+      .catch((e) => {
+        if (req !== reqRef.current || e.name === "AbortError") return;
+        setAnalysisState("ERROR");
+        setAnalysisError(e.message);
+      });
+  }, [symbol, v.market, v.ticker]);
 
   useEffect(() => {
     setData(null);
     setTab("overview");
+    setAnalysisState("IDLE");
+    setAnalysisError("");
     load();
+    return () => {
+      reqRef.current += 1;
+      abortRef.current?.abort();
+    };
   }, [load]);
 
   useEffect(() => {
-    if (refreshToken) load();
-  }, [refreshToken, load]);
-
-  // Prioritize the currently viewed stock: when its stored analysis is stale,
-  // re-run it once so the dossier updates promptly. Data already on screen
-  // stays visible while the fresh analysis completes.
-  const staleRef = useRef(false);
-  useEffect(() => {
-    if (!data) return;
-    if (data.stale && !staleRef.current) {
-      staleRef.current = true;
-      load(true);
-    }
-  }, [data, load]);
+    if (refreshToken && analysisState !== "ANALYZING") load();
+  }, [refreshToken, analysisState, load]);
 
   const inst = data?.instrument || {};
 
@@ -660,7 +916,7 @@ function StockDossier({ v, onClose }) {
           {error && (
             <div className="scan-warning">⚠ REFRESH FAILED · SHOWING LAST-KNOWN DATA — {error}</div>
           )}
-          <DossierHeader dossierData={data} v={v} />
+          <DossierHeader dossierData={data} v={v} analysisState={analysisState} onAnalyze={runAnalysis} />
         </>
       )}
       {/* The chart pane mounts immediately so the price chart loads in parallel
@@ -677,7 +933,7 @@ function StockDossier({ v, onClose }) {
               ))}
             </div>
             <div className="dossier-info-scroll">
-              {tab === "overview" && <QuoteSection dossierData={data} />}
+              {tab === "overview" && <QuoteSection dossierData={{ ...data, mesh_analysis: { ...(data.mesh_analysis || {}), status: analysisState } }} analysisError={analysisError} />}
               {tab === "committee" && <CommitteeSection committee={data.committee} />}
               {tab === "bullbear" && <FactorList factors={data.factors} />}
               {tab === "model" && <ModelSection verdict={data.verdict} />}

@@ -91,6 +91,7 @@ def _parse_signals(row: dict[str, Any]) -> dict[str, Any]:
     models = payload.get("models") or []
     social = payload.get("social") or {}
     regime = payload.get("market_regime") or {}
+    mesh_signal = payload.get("mesh_signal") or {}
     research = payload.get("research")
     if not quant:
         # Legacy row: build a single-model quantitative result from lstm columns.
@@ -114,7 +115,7 @@ def _parse_signals(row: dict[str, Any]) -> dict[str, Any]:
                 "analyzed_at": "",
             }
         ]
-    return {"quantitative": quant, "models": models, "social": social, "market_regime": regime, "research": research}
+    return {"quantitative": quant, "models": models, "social": social, "market_regime": regime, "research": research, "mesh_signal": mesh_signal}
 
 
 def verdict_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
@@ -127,11 +128,12 @@ def verdict_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     lstm_model = next((m for m in parsed["models"] if m.get("model_name") == "lstm"), None)
     lstm_block = {
         "score": float(lstm_model.get("score") or 0.0) if lstm_model else float(row.get("lstm_score") or 0.0),
-        "probability_up": row.get("lstm_probability_up"),
+        "probability_up": lstm_model.get("probability_up") if lstm_model else row.get("lstm_probability_up"),
         "predicted_return": lstm_model.get("prediction") if lstm_model else row.get("lstm_predicted_return"),
         "model_confidence": lstm_model.get("confidence") if lstm_model else row.get("lstm_confidence"),
-        "metrics": {},
-        "model_version": "",
+        "metrics": (lstm_model.get("metrics") or {}) if lstm_model else {},
+        "model_version": (lstm_model.get("model_version") or "") if lstm_model else "",
+        "as_of": (lstm_model.get("as_of") or "") if lstm_model else "",
         "signal": signal_from_lstm(row),
     }
     return {
@@ -151,6 +153,7 @@ def verdict_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         "models": parsed["models"],
         "social": parsed["social"] or None,
         "market_regime": parsed["market_regime"] or None,
+        "mesh_signal": parsed["mesh_signal"],
         "research": parsed["research"],
         "technical": {
             "score": row["technical_score"],

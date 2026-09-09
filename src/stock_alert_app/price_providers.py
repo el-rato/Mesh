@@ -25,6 +25,7 @@ import os
 import threading
 import time
 import urllib.request
+from contextlib import contextmanager
 from typing import Iterable
 
 import pandas as pd
@@ -108,8 +109,19 @@ class YFinanceProvider(PriceProvider):
             logger.debug("yfinance unavailable: %s", exc)
             return _empty()
         try:
-            df = yf.Ticker(symbol).history(period=period, interval=interval, auto_adjust=True)
+            # Ask yfinance to raise missing-ticker errors so expected 404s can
+            # be classified here instead of being logged as errors upstream.
+            with _quiet_yfinance_miss_logs():
+                df = yf.Ticker(symbol).history(
+                    period=period,
+                    interval=interval,
+                    auto_adjust=True,
+                    raise_errors=True,
+                )
         except Exception as exc:  # noqa: BLE001 - covers YFRateLimitError + network
+            if _is_expected_miss(exc):
+                logger.debug("YFinance has no listing for %s; trying fallback", symbol)
+                return _empty()
             # Re-raise a tagged error so the chain can mark a rate limit.
             _record_failure(self.name, rate_limited=_is_rate_limit(exc))
             raise
@@ -170,6 +182,9 @@ class YahooChartProvider(PriceProvider):
                 return _empty()
             return df
         except Exception as exc:  # noqa: BLE001
+            if _is_expected_miss(exc):
+                logger.debug("Yahoo chart has no listing for %s; trying fallback", symbol)
+                return _empty()
             _record_failure(self.name, rate_limited="rate" in str(exc).lower() or "429" in str(exc))
             logger.debug("Yahoo chart failed for %s: %s", symbol, exc)
             return _empty()
@@ -327,6 +342,39 @@ def _is_rate_limit(exc: Exception) -> bool:
     return False
 
 
+def _is_expected_miss(exc: Exception) -> bool:
+    """Normal provider miss; callers should continue the fallback chain."""
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+    if status == 404:
+        return True
+    return _is_expected_miss_message(str(exc))
+
+
+def _is_expected_miss_message(message: str) -> bool:
+    message = message.lower()
+    return any(
+        token in message
+        for token in ("404", "not found", "no data found", "possibly delisted", "quote not found")
+    )
+
+
+@contextmanager
+def _quiet_yfinance_miss_logs():
+    """Hide yfinance's own error-level logs for expected missing tickers."""
+    yf_logger = logging.getLogger("yfinance")
+
+    class _ExpectedMissFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return not _is_expected_miss_message(record.getMessage())
+
+    miss_filter = _ExpectedMissFilter()
+    yf_logger.addFilter(miss_filter)
+    try:
+        yield
+    finally:
+        yf_logger.removeFilter(miss_filter)
+
+
 def _record_failure(name: str, rate_limited: bool = False) -> None:
     with _cooldown_lock:
         _cooldown_until[name] = time.time() + (_COOLDOWN if rate_limited else _ERROR_COOLDOWN)
@@ -383,8 +431,11 @@ def fetch_ohlcv(
         try:
             df = p.fetch(symbol, period, interval)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Provider %s failed for %s: %s", p.name, symbol, exc)
-            _record_failure(p.name, rate_limited=_is_rate_limit(exc))
+            if _is_expected_miss(exc):
+                logger.debug("Provider %s has no listing for %s; trying fallback", p.name, symbol)
+            else:
+                logger.warning("Provider %s failed for %s: %s", p.name, symbol, exc)
+                _record_failure(p.name, rate_limited=_is_rate_limit(exc))
             continue
         if df is not None and not df.empty and len(df) >= 2 and "Close" in df.columns:
             _record_success(p.name)

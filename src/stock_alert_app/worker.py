@@ -5,7 +5,7 @@ stateless-friendly (API + worker share the database; either can restart without
 affecting the other):
 
 * fast loop  — price snapshots + technicals (STOCK_ALERT_REFRESH_FAST, default 300s)
-* slow loop  — LSTM / news / 13F refresh (STOCK_ALERT_REFRESH_SLOW, default 1800s)
+* deep analysis — runs only through the explicit Mesh analysis endpoint
 * notifications scan — deterministic event keys, safe to repeat (every cycle)
 * decision evaluations — committee performance measurement (throttled)
 
@@ -89,24 +89,19 @@ def run_forever(once: bool = False) -> int:
     from . import notifications, paper, refresh
 
     fast_interval = max(30, settings.scanner_refresh_fast)
-    slow_interval = max(60, settings.scanner_refresh_slow)
-    eval_every = max(1, slow_interval // max(fast_interval, 1))
+    eval_every = max(1, settings.scanner_refresh_slow // max(fast_interval, 1))
 
     logger.info(
-        "worker started: env=%s db=%s fast=%ss slow=%ss",
-        settings.environment, settings.db_path, fast_interval, slow_interval,
+        "worker started: env=%s db=%s fast=%ss deep=on-demand",
+        settings.environment, settings.db_path, fast_interval,
     )
 
     cycle = 0
-    last_slow = -slow_interval  # run the slow loop on the first cycle
     while not _stop["flag"]:
         cycle_start = time.monotonic()
         cycle += 1
         try:
             _run_task("fast_refresh", lambda: refresh.run_fast_refresh(db), db)
-            if cycle_start - last_slow >= slow_interval:
-                last_slow = cycle_start
-                _run_task("slow_refresh", lambda: refresh.run_slow_refresh(db), db)
             _run_task("notifications_scan", lambda: notifications.scan(db), db)
             if cycle % eval_every == 0:
                 _run_task("decision_evaluations", lambda: paper.refresh_evaluations(db), db)
@@ -115,6 +110,7 @@ def run_forever(once: bool = False) -> int:
 
         if once:
             logger.info("--once complete after %s cycle(s)", cycle)
+            refresh.shutdown_warm_workers()
             return 0
 
         # Sleep in small slices so SIGTERM is honoured promptly.
@@ -123,6 +119,7 @@ def run_forever(once: bool = False) -> int:
         while not _stop["flag"] and time.monotonic() < deadline:
             time.sleep(min(1.0, max(0.1, deadline - time.monotonic())))
 
+    refresh.shutdown_warm_workers()
     logger.info("worker stopped cleanly at %s", datetime.now(UTC).isoformat())
     return 0
 

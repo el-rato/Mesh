@@ -118,6 +118,10 @@ def build_price_state(market: str, symbol: str, df: pd.DataFrame) -> PriceState 
     trend_50_200 = (sma_50 - sma_200) / sma_200 if sma_200 else 0.0
     above_sma_50 = close > sma_50 if sma_50 else False
     change_pct = (close - open_) / open_ if open_ else 0.0
+    try:
+        data_as_of = pd.Timestamp(df_valid.index[-1]).isoformat()
+    except (TypeError, ValueError):
+        data_as_of = ""
 
     return PriceState(
         market=market,
@@ -134,6 +138,7 @@ def build_price_state(market: str, symbol: str, df: pd.DataFrame) -> PriceState 
         trend_50_200=trend_50_200,
         price_above_sma_50=above_sma_50,
         change_pct=change_pct,
+        as_of=data_as_of,
     )
 
 

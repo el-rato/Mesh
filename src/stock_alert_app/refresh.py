@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import logging
 import queue
 import threading
@@ -36,28 +37,59 @@ _in_flight: set[tuple[str, str]] = set()
 # deduplicated (in-flight + queued) and bounded so a single scanner open can
 # never hammer the price/news/LSTM providers.
 # ---------------------------------------------------------------------------
-_warm_queue: "queue.Queue[dict[str, object]]" = queue.Queue(maxsize=4000)
+_warm_sentinel = object()
+_warm_queue: "queue.Queue[object]" = queue.Queue(maxsize=4000)
 _warm_pending: set[tuple[str, str]] = set()
 _warm_lock = threading.Lock()
+_warm_lifecycle_lock = threading.Lock()
+_warm_stop = threading.Event()
+_warm_threads: list[threading.Thread] = []
 _warm_started = False
+_warm_accepting = False
+_warm_enabled = False
+
+
+def enable_warm_workers() -> None:
+    """Allow lazy worker startup while the application lifespan is active."""
+    global _warm_enabled
+    with _warm_lifecycle_lock:
+        _warm_enabled = True
 
 
 def _start_warm_workers() -> None:
-    global _warm_started
-    if _warm_started:
-        return
-    _warm_started = True
-    workers = max(1, min(8, settings.scanner_refresh_batch or 4))
-    for _ in range(workers):
-        threading.Thread(target=_warm_worker, name="analysis-warmer", daemon=True).start()
+    global _warm_started, _warm_accepting, _warm_threads
+    with _warm_lifecycle_lock:
+        if not _warm_enabled:
+            return
+        _warm_threads = [thread for thread in _warm_threads if thread.is_alive()]
+        if _warm_threads:
+            _warm_started = _warm_accepting = True
+            return
+        _warm_stop.clear()
+        _warm_accepting = True
+        workers = max(1, min(8, settings.scanner_refresh_batch or 4))
+        _warm_threads = [
+            threading.Thread(
+                target=_warm_worker,
+                name=f"analysis-warmer-{index + 1}",
+                daemon=True,
+            )
+            for index in range(workers)
+        ]
+        for thread in _warm_threads:
+            thread.start()
+        _warm_started = True
 
 
 def _warm_worker() -> None:
     while True:
         item = _warm_queue.get()
-        if item is None:
+        if item is _warm_sentinel:
             _warm_queue.task_done()
-            break
+            return
+        if not isinstance(item, dict):
+            _warm_queue.task_done()
+            continue
         market = str(item["market"])
         ticker = str(item["ticker"])
         company = str(item.get("company") or "")
@@ -65,14 +97,17 @@ def _warm_worker() -> None:
         db_path = item.get("db_path")
         key = (market, ticker.upper())
         try:
-            from .resolve import resolve_for_fetch
+            if _warm_stop.is_set():
+                resolved = None
+            else:
+                from .resolve import resolve_for_fetch
 
-            resolved = resolve_for_fetch(market, ticker, company)
+                resolved = resolve_for_fetch(market, ticker, company)
         except Exception as exc:  # never let one bad symbol kill the worker
             logger.debug("Warm resolve failed for %s:%s: %s", market, ticker, exc)
             resolved = None
         try:
-            if resolved:
+            if resolved and not _warm_stop.is_set():
                 if key not in _in_flight:
                     _in_flight.add(key)
                     try:
@@ -95,6 +130,37 @@ def _warm_worker() -> None:
             _warm_queue.task_done()
 
 
+def shutdown_warm_workers() -> None:
+    """Stop accepting work, cancel queued items, and join every warmer thread."""
+    global _warm_started, _warm_accepting, _warm_enabled, _warm_threads
+    with _warm_lifecycle_lock:
+        threads = [thread for thread in _warm_threads if thread.is_alive()]
+        _warm_accepting = False
+        _warm_enabled = False
+        _warm_stop.set()
+        while True:
+            try:
+                item = _warm_queue.get_nowait()
+            except queue.Empty:
+                break
+            if isinstance(item, dict):
+                key = (str(item["market"]), str(item["ticker"]).upper())
+                with _warm_lock:
+                    _warm_pending.discard(key)
+            _warm_queue.task_done()
+        for _ in threads:
+            _warm_queue.put_nowait(_warm_sentinel)
+    for thread in threads:
+        thread.join()
+    with _warm_lifecycle_lock:
+        _warm_threads = []
+        _warm_started = False
+        _warm_stop.clear()
+
+
+atexit.register(shutdown_warm_workers)
+
+
 def enqueue_analysis(
     db_path: str,
     market: str,
@@ -110,26 +176,29 @@ def enqueue_analysis(
     """
     _start_warm_workers()
     key = (market, ticker.upper())
-    with _warm_lock:
-        if key in _in_flight or key in _warm_pending:
+    with _warm_lifecycle_lock:
+        if not _warm_accepting:
             return False
-        if _warm_queue.qsize() >= 4000:
-            return False
-        _warm_pending.add(key)
-    try:
-        _warm_queue.put_nowait(
-            {
-                "market": market,
-                "ticker": ticker,
-                "company": company,
-                "yahoo_symbol": yahoo_symbol,
-                "db_path": db_path,
-            }
-        )
-    except Exception:
         with _warm_lock:
-            _warm_pending.discard(key)
-        return False
+            if key in _in_flight or key in _warm_pending:
+                return False
+            if _warm_queue.qsize() >= 4000:
+                return False
+            _warm_pending.add(key)
+        try:
+            _warm_queue.put_nowait(
+                {
+                    "market": market,
+                    "ticker": ticker,
+                    "company": company,
+                    "yahoo_symbol": yahoo_symbol,
+                    "db_path": db_path,
+                }
+            )
+        except queue.Full:
+            with _warm_lock:
+                _warm_pending.discard(key)
+            return False
     return True
 
 
@@ -249,9 +318,8 @@ def run_slow_refresh(db: Database) -> dict[str, object]:
     }
 
 
-def run_refresh(db: Database) -> dict[str, object]:
-    """Run the refresh cycle. Fast refresh always when due; slow refresh only
-    when its interval has elapsed. Never runs concurrently with itself."""
+def run_refresh(db: Database, include_slow: bool = False) -> dict[str, object]:
+    """Refresh lightweight market data; deep analysis is explicit by default."""
     acquired = _lock.acquire(blocking=False)
     if not acquired or _state.get("running"):
         if acquired:
@@ -272,7 +340,7 @@ def run_refresh(db: Database) -> dict[str, object]:
             except Exception as exc:
                 _state["last_error"] = f"fast refresh: {exc}"
                 logger.warning("Fast refresh failed: %s", exc)
-        if slow_due:
+        if include_slow and slow_due:
             try:
                 run_slow_refresh(db)
                 _state["last_slow_at"] = now

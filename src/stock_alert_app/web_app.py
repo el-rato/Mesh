@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import re
 import secrets
+import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Request
@@ -22,7 +26,19 @@ setup_logging()
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="StockVerdict", version="0.1.0")
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    _startup_validation()
+    from . import refresh
+
+    refresh.enable_warm_workers()
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(refresh.shutdown_warm_workers)
+
+
+app = FastAPI(title="StockVerdict", version="0.1.0", lifespan=_lifespan)
 
 # ---- Production hardening: request ids, structured errors, startup checks ----
 
@@ -70,7 +86,6 @@ async def _unhandled(request: Request, exc: Exception):
     )
 
 
-@app.on_event("startup")
 def _startup_validation() -> None:
     """Fail fast on misconfiguration instead of serving broken traffic."""
     settings.validate_runtime()
@@ -175,6 +190,13 @@ class AckRequest(BaseModel):
     keys: list[str]
 
 
+class MeshAnalysisRequest(BaseModel):
+    symbol: str = ""
+    market: str = ""
+    ticker: str = ""
+    timeframe: str = "1d"
+
+
 class PriceAlertCreate(BaseModel):
     market: str
     ticker: str
@@ -205,6 +227,9 @@ _initialized_dbs: set[str] = set()
 #: cache already dedups network calls; this prevents redundant ingest work.
 _GLOBAL_NEWS_INTERVAL = 600
 _last_global_news_at: float = 0.0
+
+_mesh_cache_lock = threading.Lock()
+_mesh_cache: dict[tuple[str, str, str, str], dict[str, object]] = {}
 
 
 def _db() -> Database:
@@ -442,6 +467,115 @@ def _dossier_target(
     raise HTTPException(status_code=422, detail="Provide symbol OR market + ticker")
 
 
+def _latest_verdict_row(db: Database, market: str, ticker: str) -> dict[str, object] | None:
+    try:
+        rows = db.latest_verdicts(market=market)
+        return next((r for r in rows if r["ticker"].upper() == ticker.upper()), None)
+    except Exception:
+        return None
+
+
+def _mesh_meta(verdict_dict: dict[str, object] | None) -> dict[str, object]:
+    mesh = (verdict_dict or {}).get("mesh_signal") or {}
+    status = str(mesh.get("analysis_status") or "").upper()
+    if status not in {"IDLE", "ANALYZING", "READY", "PARTIAL", "ERROR"}:
+        status = "READY" if mesh.get("direction") and mesh.get("direction") != "NO_DATA" else "IDLE"
+    return {
+        "status": status,
+        "timeframe": mesh.get("analysis_timeframe") or "1d",
+        "data_timestamp": mesh.get("analysis_data_timestamp") or "",
+        "analyzed_at": mesh.get("analysis_completed_at") or verdict_dict.get("decided_at") or "",
+    }
+
+
+def _market_data_timestamp(db: Database, market: str, ticker: str) -> str:
+    snap = db.latest_price_snapshot(market, ticker) or {}
+    return str(snap.get("as_of") or snap.get("fetched_at") or "")
+
+
+def _dossier_response(
+    item: dict[str, object],
+    db: Database,
+    stored: dict[str, object] | None = None,
+    mesh_meta: dict[str, object] | None = None,
+) -> dict[str, object]:
+    from .analysis import apply_canonical, snapshot_price, technical_from_snapshot, verdict_row_to_dict
+    from .dossier import committee_decision
+    from .markets import load_markets
+
+    market = str(item["market"])
+    ticker = str(item["ticker"])
+    snap = db.latest_price_snapshot(market, ticker)
+    price = snapshot_price(snap)
+    if stored:
+        verdict_dict = verdict_row_to_dict(stored)
+        if price is not None:
+            verdict_dict["price"] = price
+            technical_score, technical_reasons = technical_from_snapshot(snap)
+            verdict_dict["technical"] = {"score": technical_score, "reasons": technical_reasons}
+        apply_canonical(verdict_dict)
+        meta = mesh_meta or _mesh_meta(verdict_dict)
+    else:
+        technical_score, technical_reasons = technical_from_snapshot(snap)
+        verdict_dict = {
+            "market": market,
+            "ticker": ticker,
+            "verdict": None,
+            "confidence": None,
+            "combined_score": None,
+            "reason": ["Lightweight market data only"],
+            "decided_at": "",
+            "forecast_horizon": "",
+            "signal_agreement": "unknown",
+            "lstm": {},
+            "quantitative": {},
+            "models": [],
+            "social": None,
+            "market_regime": None,
+            "mesh_signal": {},
+            "research": None,
+            "technical": {"score": technical_score, "reasons": technical_reasons},
+            "news_available": False,
+            "news": None,
+            "price": price,
+            "committee": {"verdict": None, "score": None, "confidence": None, "signals": [], "why": []},
+            "factors": {"bull": [], "bear": []},
+            "decision": None,
+        }
+        meta = mesh_meta or {"status": "IDLE", "timeframe": "1d", "data_timestamp": "", "analyzed_at": ""}
+
+    completed_at = str(meta.get("analyzed_at") or "")
+    stale = False
+    if meta.get("status") in {"READY", "PARTIAL"} and completed_at:
+        try:
+            from datetime import UTC, datetime
+
+            stale = (datetime.now(UTC) - datetime.fromisoformat(completed_at)).total_seconds() > settings.scanner_refresh_slow
+        except Exception:
+            stale = False
+        verdict_dict["decision"] = committee_decision(verdict_dict, stale=stale)
+
+    capabilities: dict[str, object] = {}
+    market_cfg = load_markets(settings.markets_dir).get(market.upper())
+    if market_cfg is not None:
+        capabilities = market_cfg.as_dict()["capabilities"]
+    return {
+        "instrument": item,
+        "verdict": verdict_dict,
+        "committee": verdict_dict["committee"],
+        "factors": verdict_dict["factors"],
+        "institutional": None,
+        "news": db.recent_news(market, ticker, limit=50),
+        "computed_at": completed_at,
+        "analyzed_at": completed_at,
+        "market_data_at": _market_data_timestamp(db, market, ticker),
+        "mesh_analysis": meta,
+        "stale": stale,
+        "fresh": False,
+        "capabilities": capabilities,
+    }
+
+
 @app.get("/api/dossier")
 def stock_dossier(
     symbol: str = "",
@@ -449,143 +583,110 @@ def stock_dossier(
     ticker: str = "",
     fresh: bool = False,
 ) -> dict[str, object]:
-    """Full stock dossier: verdict + committee + bull/bear + model + news + 13F.
-
-    ``fresh=false`` (default) reuses a stored verdict when one exists (fast, no
-    network); ``fresh=true`` runs the complete live pipeline via ``live_verdict``.
-    """
-    from . import institutional
-
-    item, full = _dossier_target(symbol, market, ticker)
+    """Return lightweight ticker data; deep Mesh analysis is POST-only."""
+    del fresh  # Retained for old clients; GET never starts the deep pipeline.
+    item, _ = _dossier_target(symbol, market, ticker)
     if not item.get("supported"):
         raise HTTPException(
             status_code=422,
             detail=f"{item.get('symbol')} ({item.get('exchange') or 'unknown exchange'}) is not on a supported exchange",
         )
-
-    mkt = item["market"]
-    tkr = item["ticker"]
     db = _db()
+    stored = _latest_verdict_row(db, str(item["market"]), str(item["ticker"]))
+    return _dossier_response(item, db, stored=stored)
 
-    stored = None
-    try:
-        rows = db.latest_verdicts(market=mkt)
-        stored = next((r for r in rows if r["ticker"].upper() == tkr.upper()), None)
-    except Exception:
-        stored = None
 
-    verdict_dict: dict[str, object]
-    computed_at = ""
-    if fresh or stored is None:
-        from .analysis import apply_canonical
-        from .verdict import live_verdict
+@app.post("/api/mesh-analysis")
+def run_mesh_analysis(body: MeshAnalysisRequest) -> dict[str, object]:
+    """Run deep Mesh analysis for exactly one requested security."""
+    item, full = _dossier_target(body.symbol, body.market, body.ticker)
+    if not item.get("supported"):
+        raise HTTPException(status_code=422, detail=f"{full} is not on a supported exchange")
+    market = str(item["market"])
+    ticker = str(item["ticker"])
+    timeframe = (body.timeframe or "1d").strip().lower()
+    db = _db()
+    data_timestamp = _market_data_timestamp(db, market, ticker)
+    cache_key = (str(item.get("symbol") or full), market, ticker.upper(), timeframe)
 
+    with _mesh_cache_lock:
+        cached = _mesh_cache.get(cache_key)
+    if cached and (cached.get("mesh_analysis") or {}).get("data_timestamp") == data_timestamp:
+        result = dict(cached)
+        result["mesh_analysis"] = {**(cached.get("mesh_analysis") or {}), "cache_hit": True}
+        return result
+
+    stored = _latest_verdict_row(db, market, ticker)
+    if stored:
         try:
-            # No forced symbol: live_verdict validates through the symbol
-            # resolution layer before any price/LSTM work.
-            v = live_verdict(mkt, tkr, item.get("company") or "")
-        except Exception as exc:
-            logger.exception("Dossier live verdict failed for %s", full)
-            raise HTTPException(
-                status_code=503, detail=f"Analysis failed for {full}: {exc}"
-            )
-        if v is None:
-            detail = "no data available"
-            try:
-                from .resolve import resolution, status_label
+            stored_verdict = json.loads(stored.get("signals") or "{}")
+        except (TypeError, ValueError):
+            stored_verdict = {}
+        stored_mesh = stored_verdict.get("mesh_signal") or {}
+        if (
+            stored_mesh.get("analysis_timeframe") == timeframe
+            and stored_mesh.get("analysis_data_timestamp") == data_timestamp
+        ):
+            result = _dossier_response(item, db, stored=stored)
+            result["mesh_analysis"] = {**(result["mesh_analysis"] or {}), "cache_hit": True}
+            with _mesh_cache_lock:
+                _mesh_cache[cache_key] = result
+            return result
 
-                res = resolution(mkt, tkr, item.get("company") or "")
-                note = res.get("note") or status_label(str(res.get("status")))
-                if note:
-                    detail = note
-            except Exception:
-                pass
-            raise HTTPException(
-                status_code=404,
-                detail=f"Data unavailable: {detail}",
-            )
-        # A resolvable-but-unknown symbol (e.g. a delisted ticker) yields a
-        # no-data verdict: treat it as not found rather than a bogus 200.
-        if v.price is None and not v.news_available:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Data unavailable for {full}",
-            )
-        verdict_dict = v.as_dict()
-        apply_canonical(verdict_dict)  # canonical committee verdict, consistent with scanner
-        computed_at = utc_now()
-        fresh = True
-    else:
-        from .analysis import (
-            apply_canonical,
-            snapshot_price,
-            technical_from_snapshot,
-            verdict_row_to_dict,
-        )
+    from .analysis import apply_canonical
+    from .verdict import live_verdict
 
-        verdict_dict = verdict_row_to_dict(stored)
-        snap = None
-        try:
-            snap = db.latest_price_snapshot(mkt, tkr)
-        except Exception:
-            snap = None
-        price = snapshot_price(snap)
-        if price is not None:
-            verdict_dict["price"] = price
-            technical_score, technical_reasons = technical_from_snapshot(snap)
-            verdict_dict["technical"] = {
-                "score": technical_score,
-                "reasons": technical_reasons,
-            }
-        apply_canonical(verdict_dict)  # canonical committee verdict, consistent with scanner
-        decided_at = stored.get("decided_at") or ""
-        price_fetched_at = (snap or {}).get("fetched_at") or ""
-        computed_at = max(decided_at, price_fetched_at) or decided_at
-
-    institutional_data = institutional.ticker_institutional(tkr, db)
-
-    # A result older than the slow (LSTM/news) refresh interval is considered
-    # stale: the UI prioritizes re-analysis of the currently viewed stock and
-    # shows STALE rather than presenting it as fresh.
     try:
-        from datetime import UTC, datetime
+        verdict = live_verdict(market, ticker, str(item.get("company") or ""))
+    except Exception as exc:
+        logger.exception("Mesh analysis failed for %s", full)
+        raise HTTPException(status_code=503, detail=f"Analysis failed for {full}: {exc}")
+    if verdict is None or (verdict.price is None and not verdict.news_available):
+        raise HTTPException(status_code=404, detail=f"Data unavailable for {full}")
 
-        now = datetime.now(UTC).isoformat()
-        stale = computed_at < now and (now[:19] > computed_at[:19]) and (
-            (datetime.now(UTC) - datetime.fromisoformat(computed_at)).total_seconds()
-            > settings.scanner_refresh_slow
-        )
-    except Exception:
-        stale = False
+    verdict_dict = verdict.as_dict()
+    apply_canonical(verdict_dict)
+    mesh = verdict_dict.get("mesh_signal") or {}
+    forecasts = mesh.get("forecasts") or []
+    mesh_status = (
+        "READY"
+        if mesh.get("direction") and mesh.get("direction") != "NO_DATA"
+        and mesh.get("regime") not in (None, "UNKNOWN")
+        and all(row.get("status") == "ok" for row in forecasts)
+        else "PARTIAL"
+    )
+    data_timestamp = _market_data_timestamp(db, market, ticker) or str((verdict_dict.get("price") or {}).get("as_of") or "")
+    completed_at = utc_now()
+    mesh.update({
+        "analysis_status": mesh_status,
+        "analysis_timeframe": timeframe,
+        "analysis_data_timestamp": data_timestamp,
+        "analysis_completed_at": completed_at,
+    })
+    verdict_dict["mesh_signal"] = mesh
+    try:
+        payload = json.loads(verdict.signals_json or "{}")
+    except (TypeError, ValueError):
+        payload = {}
+    payload["mesh_signal"] = mesh
+    db.update_verdict_signals(market, ticker, json.dumps(payload))
 
-    # Re-derive the structured decision with STALE awareness. Keep the committee
-    # in its canonical signals shape (committee_signals, a list of signals) —
-    # the UI renders it as a list, so it must never be replaced by the
-    # committee_decision dict (whose "signals" is a key->signal map).
-    from .dossier import committee_decision
-
-    verdict_dict["decision"] = committee_decision(verdict_dict, stale=stale)
-
-    from .markets import load_markets
-
-    capabilities: dict[str, object] = {}
-    market_cfg = load_markets(settings.markets_dir).get(mkt.upper())
-    if market_cfg is not None:
-        capabilities = market_cfg.as_dict()["capabilities"]
-
-    return {
-        "instrument": item,
-        "verdict": verdict_dict,
-        "committee": verdict_dict["committee"],
-        "factors": verdict_dict["factors"],
-        "institutional": institutional_data,
-        "news": db.recent_news(mkt, tkr, limit=50),
-        "computed_at": computed_at,
-        "analyzed_at": computed_at,
-        "stale": stale,
-        "fresh": fresh,
-        "capabilities": capabilities,
-    }
+    stored = _latest_verdict_row(db, market, ticker)
+    result = _dossier_response(
+        item,
+        db,
+        stored=stored,
+        mesh_meta={
+            "status": mesh_status,
+            "timeframe": timeframe,
+            "data_timestamp": data_timestamp,
+            "analyzed_at": completed_at,
+            "cache_hit": False,
+        },
+    )
+    with _mesh_cache_lock:
+        _mesh_cache[cache_key] = result
+    return result
 
 
 @app.get("/api/scanner")
@@ -628,10 +729,8 @@ def scanner(
             analysis["security"] = sec
             analysis["security_id"] = f"{key[0]}:{sec['ticker']}"
         elif snap:
-            # Security has a price snapshot but no stored committee verdict: build a
-            # real technical-based verdict from the snapshot (so the SCANNER shows an
-            # actual BULL/BEAR/NEUTRAL call instead of a wall of N/A), and warm the
-            # security in the background so it later gets the full quant/news verdict.
+            # Security has a price snapshot but no stored committee verdict: keep the
+            # scanner lightweight and show technical data only.
             tech_score, _ = technical_from_snapshot(snap)
             synth_row = {
                 "market": sec["market"],
@@ -654,40 +753,14 @@ def scanner(
             analysis["security"] = sec
             analysis["security_id"] = f"{key[0]}:{sec['ticker']}"
             analysis["verdict_source"] = "technical_only"
-            # Warm it so the full committee verdict (quant + news) replaces this.
-            try:
-                from . import refresh
-
-                analysis["warming"] = bool(
-                    refresh.is_warming(sec["market"], sec["ticker"])
-                ) or bool(
-                    refresh.enqueue_analysis(
-                        str(db.path), sec["market"], sec["ticker"],
-                        sec.get("company") or "", sec.get("symbol") or None,
-                    )
-                )
-            except Exception:
-                analysis["warming"] = False
+            analysis["warming"] = False
         else:
             # Security is known but has no verdict yet. If a price snapshot exists,
             # surface its REAL price/technical data (READY or STALE) instead of
             # discarding it and showing N/A across the whole panel. The committee
             # verdict stays NO_DATA (per-metric), but the card is not blank.
             analysis = _no_data_analysis(sec, snap)
-            # Warm it in the background so the next scan shows a real verdict.
-            try:
-                from . import refresh
-
-                analysis["warming"] = bool(
-                    refresh.is_warming(sec["market"], sec["ticker"])
-                ) or bool(
-                    refresh.enqueue_analysis(
-                        str(db.path), sec["market"], sec["ticker"],
-                        sec.get("company") or "", sec.get("symbol") or None,
-                    )
-                )
-            except Exception:
-                analysis["warming"] = False
+            analysis["warming"] = False
         return analysis
 
     analyzed: list[dict[str, object]] = []
@@ -792,7 +865,7 @@ def _no_data_analysis(sec: dict[str, object], snap: dict[str, object] | None = N
 
 @app.post("/api/refresh")
 def refresh_data() -> dict[str, object]:
-    """Run the background refresh cycle (fast price refresh + slow LSTM/news)."""
+    """Run the lightweight market refresh cycle; Mesh analysis is on-demand."""
     from . import refresh
 
     db = _db()

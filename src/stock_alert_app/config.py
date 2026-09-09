@@ -197,6 +197,15 @@ class Settings:
     regime_weight: float = field(
         default_factory=lambda: _env_float("STOCK_ALERT_REGIME_WEIGHT", 0.05)
     )
+    mesh_meta_model_enabled: bool = field(
+        default_factory=lambda: os.getenv("MESH_META_MODEL_ENABLED", "0") == "1"
+    )
+    mesh_meta_min_brier_improvement: float = field(
+        default_factory=lambda: _env_float("MESH_META_MIN_BRIER_IMPROVEMENT", 0.02)
+    )
+    mesh_reliability_min_samples: int = field(
+        default_factory=lambda: _env_int("MESH_RELIABILITY_MIN_SAMPLES", 30)
+    )
 
     # Verdict thresholds applied to the combined score in [-1, +1].
     bull_threshold: float = field(

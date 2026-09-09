@@ -155,6 +155,30 @@ CREATE TABLE IF NOT EXISTS verdicts (
     UNIQUE(market, ticker, decided_at)
 );
 
+-- Predictions are inserted before any outcome fields are known. Settlement is
+-- a later update and must carry an outcome timestamp after the prediction bar.
+CREATE TABLE IF NOT EXISTS prediction_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model TEXT NOT NULL,
+    model_version TEXT NOT NULL DEFAULT '',
+    symbol TEXT NOT NULL,
+    horizon INTEGER NOT NULL,
+    as_of TEXT NOT NULL,
+    probability_up REAL NOT NULL,
+    direction TEXT NOT NULL,
+    confidence_bucket TEXT NOT NULL,
+    regime TEXT NOT NULL DEFAULT 'UNKNOWN',
+    predicted_at TEXT NOT NULL,
+    outcome_at TEXT,
+    actual_direction INTEGER,
+    realized_return REAL,
+    mfe REAL,
+    mae REAL,
+    UNIQUE(model, model_version, symbol, horizon, as_of)
+);
+CREATE INDEX IF NOT EXISTS idx_prediction_ledger_eval
+ON prediction_ledger(model, horizon, symbol, regime, confidence_bucket, outcome_at);
+
 CREATE TABLE IF NOT EXISTS watchlist (
     market TEXT NOT NULL,
     ticker TEXT NOT NULL,
@@ -910,6 +934,17 @@ class Database:
                     technical,
                     signals,
                 ),
+            )
+
+    def update_verdict_signals(self, market: str, ticker: str, signals: str) -> None:
+        """Attach explicit Mesh-analysis cache metadata to the latest verdict."""
+        with self.connect() as conn:
+            conn.execute(
+                """UPDATE verdicts SET signals = ?
+                   WHERE market = ? AND ticker = ?
+                     AND decided_at = (SELECT MAX(decided_at) FROM verdicts
+                                       WHERE market = ? AND ticker = ?)""",
+                (signals, market, ticker.upper(), market, ticker.upper()),
             )
 
     def recent_news(

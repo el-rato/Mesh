@@ -49,6 +49,11 @@ class SignalResult:
     status: str = NO_DATA
     analyzed_at: str = ""
     explanation: list[str] = field(default_factory=list)
+    probability_up: float | None = None
+    metrics: dict[str, float] = field(default_factory=dict)
+    model_version: str = ""
+    forecast_horizon: str = ""
+    as_of: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -60,6 +65,11 @@ class SignalResult:
             "status": self.status,
             "analyzed_at": self.analyzed_at,
             "explanation": list(self.explanation),
+            "probability_up": self.probability_up,
+            "metrics": dict(self.metrics),
+            "model_version": self.model_version,
+            "forecast_horizon": self.forecast_horizon,
+            "as_of": self.as_of,
         }
 
 
@@ -120,14 +130,25 @@ def lstm_signal(symbol: str) -> SignalResult:
     if _finite(ret):
         explanation.append(f"predicted return {float(ret):+.2%}")
     return SignalResult(
-        "lstm",
-        direction_of(score),
-        round(score, 4),
-        round(float(conf), 4) if _finite(conf) else None,
-        float(ret) if _finite(ret) else None,
-        OK,
-        analyzed_at,
-        explanation,
+        model_name="lstm",
+        direction=direction_of(score),
+        score=round(score, 4),
+        confidence=round(float(conf), 4) if _finite(conf) else None,
+        prediction=float(ret) if _finite(ret) else None,
+        status=OK,
+        analyzed_at=analyzed_at,
+        explanation=explanation,
+        probability_up=float(prob) if _finite(prob) else None,
+        metrics={
+            "mse": float(getattr(result, "mse", 0.0)),
+            "mae": float(getattr(result, "mae", 0.0)),
+            "directional_accuracy": float(
+                getattr(result, "directional_accuracy", 0.0)
+            ),
+        },
+        model_version=str(getattr(result, "model_version", "")),
+        forecast_horizon=str(getattr(result, "forecast_horizon", "")),
+        as_of=str(getattr(result, "as_of", "")),
     )
 
 
@@ -136,6 +157,16 @@ def _mom(series, lag: int, idx: int) -> float:
         return 0.0
     base = abs(series[idx - lag]) + 1e-9
     return (series[idx] - series[idx - lag]) / base
+
+
+def _causal_rolling_mean(values, window: int):
+    """Trailing mean that never reads values after the current row."""
+    import numpy as np
+
+    values = np.asarray(values, dtype=float)
+    cumulative = np.cumsum(values, dtype=float)
+    cumulative[window:] -= cumulative[:-window]
+    return cumulative / np.minimum(np.arange(len(values)) + 1, window)
 
 
 def _stump_predict(x, stump, lr):
@@ -171,7 +202,7 @@ def gbm_signal(df: Any) -> SignalResult:
         ]
     )
     ret1 = np.diff(closes, prepend=closes[0]) / (np.abs(closes) + 1e-9)
-    X = np.column_stack([X, np.convolve(np.abs(ret1), np.ones(10) / 10, mode="same")])
+    X = np.column_stack([X, _causal_rolling_mean(np.abs(ret1), 10)])
     y = np.sign(np.diff(closes, prepend=closes[0]))  # next-day sign (aligned)
 
     train_end = n - 30
@@ -219,7 +250,8 @@ def gbm_signal(df: Any) -> SignalResult:
 
     latest = sum(_stump_predict(X[-1], t, 1.0) for t in trees)
     score = _clamp(latest * 2.0)
-    conf = min(1.0, 0.35 + 0.65 * max(0.0, abs(acc - 0.5) * 2.0))
+    # Below-chance performance is not evidence for the emitted (uninverted) score.
+    conf = min(1.0, 0.5 + 0.5 * max(0.0, (acc - 0.5) * 2.0))
     return SignalResult(
         "gbm",
         direction_of(score),
@@ -553,6 +585,7 @@ def market_regime_signal(market_code: str) -> SignalResult:
             OK,
             analyzed_at,
             explanation,
+            metrics={"momentum_20": mom20, "sma_50": sma50, "sma_200": sma200},
         )
         _regime_cache[market_code] = (now, result)
         return result

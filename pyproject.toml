@@ -22,6 +22,7 @@ stock-alert-app = "stock_alert_app:main"
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.0",
     "pytest>=8.0",
 ]
 

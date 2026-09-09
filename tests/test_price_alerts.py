@@ -14,7 +14,9 @@ def client(tmp_path, monkeypatch):
     db.init_schema()
     db.insert_price_snapshot("NYSE", "AAPL", close=195.0)
     monkeypatch.setattr(web_app, "_db", lambda: db)
-    return TestClient(web_app.app), db
+    monkeypatch.setattr(web_app, "_startup_validation", lambda: None)
+    with TestClient(web_app.app) as api:
+        yield api, db
 
 
 def test_price_alert_crud_and_quote_enrichment(client):

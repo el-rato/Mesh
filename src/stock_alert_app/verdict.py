@@ -71,6 +71,7 @@ class Verdict:
     forecast_horizon: str = FORECAST_HORIZON
     signal_agreement: str = "unknown"
     signals_json: str = ""
+    mesh_signal: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -84,6 +85,7 @@ class Verdict:
             "reason": [self.reason] if self.reason else [],
             "forecast_horizon": self.forecast_horizon,
             "signal_agreement": self.signal_agreement,
+            "mesh_signal": dict(self.mesh_signal),
             "lstm": {
                 "score": round(self.lstm_score, 4),
                 "probability_up": (
@@ -123,6 +125,7 @@ class Verdict:
                 d["models"] = payload.get("models")
                 d["social"] = payload.get("social")
                 d["market_regime"] = payload.get("market_regime")
+                d["mesh_signal"] = payload.get("mesh_signal") or d["mesh_signal"]
             except (ValueError, TypeError):
                 pass
         return d
@@ -391,20 +394,13 @@ def build_verdict(
         lstm_available = True
         lstm_ret = lstm_res.prediction
         lstm_conf = lstm_res.confidence
-        prob = getattr(lstm_res, "prediction", None)
-        lstm_prob = None
-        for expl in lstm_res.explanation:
-            if expl.startswith("P(up)"):
-                try:
-                    lstm_prob = float(expl.split("P(up)")[1].replace("%", "").strip()) / 100.0
-                except (ValueError, IndexError):
-                    lstm_prob = None
+        lstm_prob = getattr(lstm_res, "probability_up", None)
         if not _is_finite(lstm_prob):
             lstm_prob = None
 
     # ---- Model explainability: pass out fit metrics + version ----
-    lstm_metrics: dict[str, float] = {}
-    lstm_version = ""
+    lstm_metrics = dict(getattr(lstm_res, "metrics", {}) or {})
+    lstm_version = str(getattr(lstm_res, "model_version", "") or "")
 
     # ---- Signal 2: Technical (price) ----
     technical_score, technical_reasons = _normalize_price(price)
@@ -430,6 +426,103 @@ def build_verdict(
         regime = signals.SignalResult("market_regime", status="error", explanation=[f"regime failed: {exc}"])
     regime_score = regime.score if regime.score is not None else 0.0
     regime_available = regime.status == "ok" and regime.score is not None
+
+    # ---- Mesh evidence + regime-aware fusion ----
+    from .market_evidence import SignalEvidence, build_market_evidence
+    from .signal_fusion import fuse_signals
+
+    evidence = build_market_evidence(history_df) if history_df is not None else []
+    market_context = None
+    relative_strength = None
+    if regime_available:
+        market_context = SignalEvidence(
+            engine="market_context",
+            signal=regime.direction or "NEUTRAL",
+            score=float(regime_score),
+            confidence=float(regime.confidence or abs(regime_score)),
+            metrics={"source": "benchmark_index"},
+            reasons=tuple(regime.explanation),
+        )
+        benchmark_momentum = (regime.metrics or {}).get("momentum_20")
+        if price is not None and _is_finite(benchmark_momentum):
+            relative = float(price.momentum_20) - float(benchmark_momentum)
+            relative_score = _clamp(relative * 5.0)
+            relative_strength = SignalEvidence(
+                engine="relative_strength",
+                signal="BULL" if relative_score > 0.05 else "BEAR" if relative_score < -0.05 else "NEUTRAL",
+                score=relative_score,
+                confidence=min(1.0, 0.4 + abs(relative_score) * 0.4),
+                metrics={"symbol_momentum_20": price.momentum_20, "benchmark_momentum_20": benchmark_momentum},
+                reasons=(f"20d relative return {relative:+.1%}",),
+            )
+    probabilities: dict[str, dict[str, Any]] = {}
+    if lstm_prob is not None:
+        probabilities["1D"] = {
+            "probability_up": lstm_prob,
+            "calibrated": True,
+            "reliability": lstm_metrics.get("directional_accuracy", lstm_conf or 0.0),
+            "model": "lstm",
+            "model_version": lstm_version,
+            "as_of": getattr(lstm_res, "as_of", ""),
+        }
+    # Each horizon has its own artifact, calibration parameters, and NO_DATA
+    # behavior; an unavailable long-horizon artifact never falls back to 1D.
+    if yahoo_symbol:
+        try:
+            from .models.price_lstm import predict_price_lstm
+
+            for horizon, key in ((5, "5D"), (20, "20D")):
+                try:
+                    result = predict_price_lstm(yahoo_symbol, horizon=horizon)
+                except TypeError:
+                    result = None
+                if result is None or not _is_finite(getattr(result, "probability_up", None)):
+                    continue
+                probabilities[key] = {
+                    "probability_up": float(result.probability_up),
+                    "calibrated": True,
+                    "reliability": float(getattr(result, "directional_accuracy", 0.0) or getattr(result, "confidence", 0.0) or 0.0),
+                    "model": "lstm",
+                    "model_version": str(getattr(result, "model_version", "")),
+                    "as_of": str(getattr(result, "as_of", "")),
+                }
+        except Exception as exc:
+            logger.warning("Long-horizon predictions unavailable for %s: %s", yahoo_symbol, exc)
+    mesh = fuse_signals(
+        probabilities,
+        evidence,
+        relative_strength=relative_strength,
+        market_context=market_context,
+    ).as_dict()
+    mesh["reliability"] = {
+        "model": "lstm" if lstm_prob is not None else None,
+        "model_version": lstm_version or None,
+        "calibration_status": "CALIBRATED" if lstm_prob is not None else "NO_DATA",
+        "status": "INSUFFICIENT_DATA" if lstm_prob is not None else "NO_DATA",
+        "historical_hit_rate": None,
+        "sample_count": 0,
+        "minimum_samples": settings.mesh_reliability_min_samples,
+        "last_evaluated_at": None,
+    }
+    mesh["meta_model"] = {
+        "enabled": settings.mesh_meta_model_enabled,
+        "selected": False,
+        "reason": "no materially better walk-forward artifact",
+        "minimum_brier_improvement": settings.mesh_meta_min_brier_improvement,
+    }
+    mesh["reliability_by_horizon"] = {
+        key: {
+            "calibration_status": "CALIBRATED" if value.get("calibrated") else "NO_DATA",
+            "model": value.get("model"),
+            "model_version": value.get("model_version"),
+            "status": "INSUFFICIENT_DATA",
+            "historical_hit_rate": None,
+            "sample_count": 0,
+            "minimum_samples": settings.mesh_reliability_min_samples,
+            "last_evaluated_at": None,
+        }
+        for key, value in probabilities.items()
+    }
 
     combined = combine_signals(
         quant_score,
@@ -495,6 +588,8 @@ def build_verdict(
         "models": [m.as_dict() for m in models],
         "social": social.as_dict(),
         "market_regime": regime.as_dict(),
+        "evidence": [item.as_dict() for item in evidence],
+        "mesh_signal": mesh,
         "research": research,
         "analyzed_at": signals._now_iso(),
     }
@@ -523,6 +618,7 @@ def build_verdict(
         forecast_horizon=FORECAST_HORIZON,
         signal_agreement=agreement,
         signals_json=_json.dumps(signals_payload),
+        mesh_signal=mesh,
     )
 
 
@@ -654,6 +750,12 @@ def _live_verdict_impl(
         price = build_price_state(market.code, ticker, df)
         if price:
             store_price_state(db, price)
+        try:
+            from .validation import PredictionLedger
+
+            PredictionLedger(db).settle_due(yahoo_symbol, df)
+        except Exception as exc:
+            logger.warning("Prediction settlement failed for %s: %s", yahoo_symbol, exc)
     except Exception as exc:
         logger.warning("live_verdict: no price data for %s: %s", yahoo_symbol, exc)
 
@@ -756,6 +858,40 @@ def _live_verdict_impl(
         history_df=df,
         research=research,
     )
+    # Immutable prediction row first; outcome fields are populated only by the
+    # later evaluator after the horizon has elapsed.
+    forecasts = [row for row in verdict.mesh_signal.get("forecasts", []) if row.get("status") == "ok" and row.get("as_of")]
+    if forecasts:
+        try:
+            import json as _json
+
+            from .validation import PredictionLedger
+
+            ledger = PredictionLedger(db)
+            regime_name = str(verdict.mesh_signal.get("regime") or "UNKNOWN")
+            for forecast in forecasts:
+                model = str(forecast.get("model") or "lstm")
+                version = str(forecast.get("model_version") or "")
+                probability = float(forecast["probability_up"])
+                horizon = int(str(forecast["horizon"]).rstrip("D"))
+                reliability = ledger.reliability(
+                    model=model, model_version=version, symbol=yahoo_symbol,
+                    horizon=horizon, probability_up=probability, regime=regime_name,
+                    minimum_samples=settings.mesh_reliability_min_samples,
+                )
+                if horizon == 1:
+                    verdict.mesh_signal["reliability"].update(reliability)
+                verdict.mesh_signal.setdefault("reliability_by_horizon", {}).setdefault(forecast["horizon"], {}).update(reliability)
+                ledger.record(
+                    model=model, model_version=version, symbol=yahoo_symbol,
+                    horizon=horizon, as_of=str(forecast["as_of"]),
+                    probability_up=probability, regime=regime_name,
+                )
+            signals_payload = _json.loads(verdict.signals_json)
+            signals_payload["mesh_signal"] = verdict.mesh_signal
+            verdict.signals_json = _json.dumps(signals_payload)
+        except Exception as exc:
+            logger.warning("Prediction ledger write failed for %s: %s", yahoo_symbol, exc)
     db.insert_verdict(
         market=verdict.market,
         ticker=verdict.ticker,

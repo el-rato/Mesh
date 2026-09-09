@@ -49,6 +49,20 @@ export async function dossier(params) {
   return fetchJSON(`/api/dossier?${qs.toString()}`);
 }
 
+export async function meshAnalysis(params, opts = {}) {
+  return fetchJSON("/api/mesh-analysis", {
+    ...opts,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+    body: JSON.stringify({
+      symbol: params.symbol || "",
+      market: params.market || "",
+      ticker: params.ticker || "",
+      timeframe: params.timeframe || "1d",
+    }),
+  });
+}
+
 export async function scanner(params = {}) {
   const qs = new URLSearchParams();
   Object.entries(params).forEach(([k, v]) => {

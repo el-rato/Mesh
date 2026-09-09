@@ -101,7 +101,9 @@ def client(tmp_path, monkeypatch):
     db = Database(tmp_path / "t.db")
     db.init_schema()
     monkeypatch.setattr(web_app, "_db", lambda: db)
-    return TestClient(web_app.app)
+    monkeypatch.setattr(web_app, "_startup_validation", lambda: None)
+    with TestClient(web_app.app) as api:
+        yield api
 
 
 def test_register_login_me_logout(client):
