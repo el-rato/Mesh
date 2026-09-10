@@ -62,11 +62,11 @@ class PriceState:
 
 
 def fetch_history(
-    symbol: str, period: str = "6mo", interval: str = "1d"
+    symbol: str, period: str = "6mo", interval: str = "1d", *, priority: str = "foreground"
 ) -> pd.DataFrame:
     from .price_providers import fetch_ohlcv
 
-    return fetch_ohlcv(symbol, period=period, interval=interval)
+    return fetch_ohlcv(symbol, period=period, interval=interval, priority=priority)
 
 
 def _safe_mean(values: list[float]) -> float:
@@ -200,7 +200,7 @@ def _fetch_one(market: Market, db: Database, symbol: str) -> tuple[str, PriceSta
         return symbol, _stale_from_snapshot(market.code, symbol, db)
     yahoo_symbol = res["symbol"]
     try:
-        df = fetch_history(yahoo_symbol, period="6mo")
+        df = fetch_history(yahoo_symbol, period="6mo", priority="background")
     except Exception as exc:
         logger.warning("Failed to fetch %s: %s", yahoo_symbol, exc)
         return symbol, _stale_from_snapshot(market.code, symbol, db)
@@ -221,25 +221,46 @@ def fetch_market_prices(
     whole universe at once. A short-lived pool is created per market so its
     lifecycle is tied to the fetch and no thread lingers between cycles.
     """
+    from .price_providers import fetch_market_data_many
+    from .resolve import OK, resolve
+
     states: dict[str, PriceState] = {}
+    resolved: dict[str, str] = {}
+
+    def resolve_one(symbol: str) -> tuple[str, str | None]:
+        ticker = market.tickers[symbol]
+        item = resolve(market.code, symbol, ticker.name)
+        return symbol, str(item["symbol"]) if item["status"] == OK else None
+
     symbols = list(market.tickers.keys())
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = [pool.submit(_fetch_one, market, db, s) for s in symbols]
-        for fut in as_completed(futures):
+        futures = [pool.submit(resolve_one, symbol) for symbol in symbols]
+        for future in as_completed(futures):
             try:
-                res = fut.result()
-            except Exception as exc:  # noqa: BLE001 - one ticker never aborts the batch
-                logger.warning("Price worker failed: %s", exc)
+                symbol, provider_symbol = future.result()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Price resolution failed: %s", exc)
                 continue
-            if res is None:
-                continue
-            symbol, state = res
-            if state is None:
-                # Genuinely no usable data has ever been obtained: leave as
-                # NO_DATA (no snapshot row), never fabricate a value.
-                continue
-            store_price_state(db, state)
+            if provider_symbol:
+                resolved[symbol] = provider_symbol
+            else:
+                stale = _stale_from_snapshot(market.code, symbol, db)
+                if stale is not None:
+                    states[symbol] = stale
+
+    snapshots = fetch_market_data_many(
+        resolved.values(), period="6mo", interval="1d", priority="background"
+    )
+    for symbol, provider_symbol in resolved.items():
+        snapshot = snapshots.get(provider_symbol.upper())
+        state = build_price_state(market.code, symbol, snapshot.frame) if snapshot is not None else None
+        if state is None:
+            state = _stale_from_snapshot(market.code, symbol, db)
+        if state is not None:
             states[symbol] = state
+
+    for state in states.values():
+        store_price_state(db, state)
     return states
 
 

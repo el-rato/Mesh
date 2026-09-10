@@ -637,7 +637,13 @@ def run_mesh_analysis(body: MeshAnalysisRequest) -> dict[str, object]:
     from .verdict import live_verdict
 
     try:
-        verdict = live_verdict(market, ticker, str(item.get("company") or ""))
+        verdict = live_verdict(
+            market,
+            ticker,
+            str(item.get("company") or ""),
+            yahoo_symbol=full,
+            priority="deep_analysis",
+        )
     except Exception as exc:
         logger.exception("Mesh analysis failed for %s", full)
         raise HTTPException(status_code=503, detail=f"Analysis failed for {full}: {exc}")

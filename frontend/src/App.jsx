@@ -514,6 +514,7 @@ export default function App() {
     error: "",
   });
   const [theme, setTheme] = useState(() => localStorage.getItem("sv-theme") || "system");
+  const [accent, setAccent] = useState(() => localStorage.getItem("sv-accent") || "ember");
   const [resolvedTheme, setResolvedTheme] = useState("dark");
   const [portfolioIds, setPortfolioIds] = useState(new Set());
   const [moreOpen, setMoreOpen] = useState(false);
@@ -736,6 +737,12 @@ export default function App() {
     media.addEventListener("change", apply);
     return () => media.removeEventListener("change", apply);
   }, [theme]);
+
+  // Configurable accent (ember/cobalt/mint/violet) applied to <html data-accent>.
+  useEffect(() => {
+    document.documentElement.setAttribute("data-accent", accent);
+    localStorage.setItem("sv-accent", accent);
+  }, [accent]);
 
   const loadPortfolio = useCallback(() => {
     fetchJSON("/api/watchlist")
@@ -1041,9 +1048,9 @@ export default function App() {
         <div className={`terminal fintech-shell ${appMode === "workspace" ? "is-workspace" : ""}`}>
           <a className="skip-link" href="#main-content">Skip to main content</a>
           <header className="topbar" onClickCapture={interceptWorkspaceSecurityLink}>
-            <button className="logo" onClick={() => openStandardTab("overview")} aria-label="Open overview">
-              <span className="brand-mark">M</span>
-              <span className="brand-copy">MESH<small>MARKET INTELLIGENCE</small></span>
+            <button className="logo" onClick={() => openStandardTab("overview")} aria-label="MESH Market Intelligence — open overview" title="MESH · Market Intelligence">
+              <span className="brand-mark" aria-hidden="true">M</span>
+              <span className="brand-copy">MESH</span>
             </button>
             <TickerTape tickers={tickers} />
             <SearchBox />
@@ -1055,6 +1062,12 @@ export default function App() {
               <option value="dark">Dark</option>
               <option value="light">Light</option>
               <option value="system">System</option>
+            </select>
+            <select className="theme-toggle" value={accent} onChange={(e) => setAccent(e.target.value)} title="Accent" aria-label="Accent color">
+              <option value="ember">Ember</option>
+              <option value="cobalt">Cobalt</option>
+              <option value="mint">Mint</option>
+              <option value="violet">Violet</option>
             </select>
             <div className="user-menu" title={auth.user?.email || ""}>
               <span className="user-email">{auth.user?.email || "ACCOUNT"}</span>

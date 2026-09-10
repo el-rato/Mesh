@@ -273,11 +273,14 @@ def scale_features(
 
 
 def _validated_history(
-    symbol: str, period: str
+    symbol: str, period: str, history_df: pd.DataFrame | None = None
 ) -> tuple[np.ndarray, str, np.ndarray] | None:
-    from ..price_providers import fetch_ohlcv
+    if history_df is None:
+        from ..price_providers import fetch_ohlcv
 
-    hist = fetch_ohlcv(symbol, period=period, interval="1d")
+        hist = fetch_ohlcv(symbol, period=period, interval="1d")
+    else:
+        hist = history_df
     required = ["Open", "High", "Low", "Close", "Volume"]
     if hist is None or hist.empty or len(hist) < 60 or any(c not in hist for c in required):
         return None
@@ -763,7 +766,11 @@ def _ensure_global(period: str, window: int, horizon: int = 1) -> tuple["PriceLS
 
 
 def predict_price_lstm(
-    symbol: str, period: str = "2y", window: int = 30, horizon: int = 1
+    symbol: str,
+    period: str = "2y",
+    window: int = 30,
+    horizon: int = 1,
+    history_df: pd.DataFrame | None = None,
 ) -> LSTMResult | None:
     """Predict next-day direction for ``symbol`` using the SINGLE shared model.
 
@@ -777,7 +784,11 @@ def predict_price_lstm(
         return None
 
     try:
-        validated = _validated_history(symbol, period)
+        validated = (
+            _validated_history(symbol, period, history_df)
+            if history_df is not None
+            else _validated_history(symbol, period)
+        )
     except Exception as exc:
         logger.warning("Failed to fetch history for %s: %s", symbol, exc)
         return None

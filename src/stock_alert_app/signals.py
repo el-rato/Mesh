@@ -103,13 +103,21 @@ def direction_of(score: float | None) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def lstm_signal(symbol: str) -> SignalResult:
+def lstm_signal(symbol: str, history_df: Any = None) -> SignalResult:
     """LSTM price model (one model inside the quantitative ensemble)."""
     from .models.price_lstm import predict_price_lstm
 
     analyzed_at = _now_iso()
     try:
-        result = predict_price_lstm(symbol)
+        if history_df is not None:
+            try:
+                result = predict_price_lstm(symbol, history_df=history_df)
+            except TypeError as exc:
+                if "history_df" not in str(exc):
+                    raise
+                result = predict_price_lstm(symbol)
+        else:
+            result = predict_price_lstm(symbol)
     except Exception as exc:
         logger.warning("LSTM model failed for %s: %s", symbol, exc)
         return SignalResult("lstm", status=ERROR, analyzed_at=analyzed_at, explanation=[f"LSTM failed: {exc}"])
@@ -314,8 +322,12 @@ def quantitative_ensemble(
     (``score * confidence * weight`` normalised by available weight). Missing
     models are excluded, never treated as a directional vote.
     """
+    try:
+        lstm = lstm_signal(yahoo_symbol, history_df=history_df) if history_df is not None else lstm_signal(yahoo_symbol)
+    except TypeError:
+        lstm = lstm_signal(yahoo_symbol)
     models = [
-        lstm_signal(yahoo_symbol),
+        lstm,
         gbm_signal(history_df),
         momentum_signal(price),
     ]
@@ -538,7 +550,7 @@ _regime_cache: dict[str, tuple[float, SignalResult]] = {}
 _REGIME_TTL = 15 * 60
 
 
-def market_regime_signal(market_code: str) -> SignalResult:
+def market_regime_signal(market_code: str, *, priority: str = "foreground") -> SignalResult:
     """Simple regime from the market's primary benchmark index trend (real data)."""
     analyzed_at = _now_iso()
     now = time.time()
@@ -551,7 +563,7 @@ def market_regime_signal(market_code: str) -> SignalResult:
         indexes = MARKET_INDEXES.get(market_code, [])
         if not indexes:
             return SignalResult("market_regime", status=NO_DATA, analyzed_at=analyzed_at, explanation=["no benchmark configured"])
-        rows = index_history(indexes[0]["symbol"], "6mo")
+        rows = index_history(indexes[0]["symbol"], "6mo", priority=priority)
         closes = [r["close"] for r in rows if r.get("close") is not None]
         if len(closes) < 60:
             result = SignalResult("market_regime", status=NO_DATA, analyzed_at=analyzed_at, explanation=["insufficient index history"])

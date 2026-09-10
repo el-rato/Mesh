@@ -267,7 +267,12 @@ def _df_to_rows(df: Any) -> list[dict[str, Any]]:
     return rows
 
 
-def index_history(symbol: str, range_key: str = "1mo") -> list[dict[str, Any]]:
+def index_history(
+    symbol: str,
+    range_key: str = "1mo",
+    *,
+    priority: str = "foreground",
+) -> list[dict[str, Any]]:
     """Return OHLC + volume series for an index/stock at a given range.
 
     Resilient by design: it walks a per-range fallback chain of (period,
@@ -287,29 +292,13 @@ def index_history(symbol: str, range_key: str = "1mo") -> list[dict[str, Any]]:
 
     candidates = _RANGE_FALLBACKS.get(range_key, _RANGE_FALLBACKS["1mo"])
     df = None
+    from .price_providers import fetch_ohlcv
+
     for period, interval in candidates:
-        df = _fetch_yf(symbol, period, interval)
+        df = fetch_ohlcv(symbol, period=period, interval=interval, priority=priority)
         if df is not None and not getattr(df, "empty", True):
             break
     rows = _df_to_rows(df) if df is not None else []
-
-    # Backup provider when yfinance returns nothing (rate-limited / offline):
-    # call Yahoo's chart API directly (no yfinance wrapper). This recovers the
-    # chart for symbols Yahoo still serves even when yfinance is throttled.
-    if not rows:
-        sdf = _fetch_yahoo_direct(symbol, range_key)
-        if sdf is not None:
-            rows = _df_to_rows(sdf)
-
-    # Tier 3: keyed Alpha Vantage fallback. Covers symbols Yahoo doesn't serve
-    # (e.g. some Indian/UK listings) without burning the yfinance quota. Cached so
-    # the free 25-requests/day quota lasts.
-    if not rows:
-        av_key = settings.alpha_vantage_key or os.environ.get("ALPHA_VANTAGE_KEY") or ""
-        if av_key:
-            adf = _fetch_alpha_vantage(symbol, range_key, av_key)
-            if adf is not None:
-                rows = _df_to_rows(adf)
 
     if rows:
         _HISTORY_CACHE[cache_key] = (now, rows)

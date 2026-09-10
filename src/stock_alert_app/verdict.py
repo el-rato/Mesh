@@ -356,6 +356,8 @@ def build_verdict(
     yahoo_symbol: str = "",
     history_df: Any | None = None,
     research: dict[str, Any] | None = None,
+    market_data_snapshot: Any | None = None,
+    request_priority: str = "foreground",
 ) -> Verdict:
     """Combine the quantitative ensemble, technical, and news signals.
 
@@ -367,6 +369,9 @@ def build_verdict(
     import json as _json
 
     from . import signals
+
+    if market_data_snapshot is not None:
+        history_df = market_data_snapshot.frame
 
     # ---- Signal 1: Quantitative ensemble ----
     price_dict = price.as_dict() if price is not None else None
@@ -420,7 +425,11 @@ def build_verdict(
 
     # ---- Signal 5: Market regime ----
     try:
-        regime = signals.market_regime_signal(market)
+        regime = (
+            signals.market_regime_signal(market, priority=request_priority)
+            if request_priority != "foreground"
+            else signals.market_regime_signal(market)
+        )
     except Exception as exc:
         logger.warning("Market regime failed for %s: %s", market, exc)
         regime = signals.SignalResult("market_regime", status="error", explanation=[f"regime failed: {exc}"])
@@ -473,9 +482,16 @@ def build_verdict(
 
             for horizon, key in ((5, "5D"), (20, "20D")):
                 try:
-                    result = predict_price_lstm(yahoo_symbol, horizon=horizon)
+                    result = predict_price_lstm(
+                        yahoo_symbol,
+                        horizon=horizon,
+                        history_df=history_df,
+                    )
                 except TypeError:
-                    result = None
+                    try:
+                        result = predict_price_lstm(yahoo_symbol, horizon=horizon)
+                    except TypeError:
+                        result = None
                 if result is None or not _is_finite(getattr(result, "probability_up", None)):
                     continue
                 probabilities[key] = {
@@ -666,6 +682,7 @@ def live_verdict(
     company: str = "",
     db_path: str | None = None,
     yahoo_symbol: str | None = None,
+    priority: str = "foreground",
 ) -> Verdict | None:
     """Compute (and store) a verdict for an arbitrary ticker on demand.
 
@@ -682,8 +699,14 @@ def live_verdict(
         future: Future = Future()
         _live_inflight[key] = future
     try:
+        impl_kwargs = {"db_path": db_path, "yahoo_symbol": yahoo_symbol}
+        if priority != "foreground":
+            impl_kwargs["priority"] = priority
         result = _live_verdict_impl(
-            market_code, ticker, company, db_path=db_path, yahoo_symbol=yahoo_symbol
+            market_code,
+            ticker,
+            company,
+            **impl_kwargs,
         )
         future.set_result(result)
         return result
@@ -701,6 +724,7 @@ def _live_verdict_impl(
     company: str = "",
     db_path: str | None = None,
     yahoo_symbol: str | None = None,
+    priority: str = "foreground",
 ) -> Verdict | None:
     """Compute (and store) a verdict for an arbitrary ticker on demand.
 
@@ -714,7 +738,8 @@ def _live_verdict_impl(
     price/LSTM work and skips unavailable securities).
     """
     from .ingest import _load_markets
-    from .price import build_price_state, fetch_history, store_price_state
+    from .price import build_price_state, store_price_state
+    from .price_providers import fetch_market_data
     from .resolve import resolve_for_fetch, resolution, status_label
     from .sentiment.aggregate import aggregate_sentiment
     from .sentiment.scorers import default_scorer
@@ -745,8 +770,15 @@ def _live_verdict_impl(
             )
             return None
     df = None
+    market_data_snapshot = None
     try:
-        df = fetch_history(yahoo_symbol, period="6mo")
+        market_data_snapshot = fetch_market_data(
+            yahoo_symbol,
+            period="2y",
+            interval="1d",
+            priority=priority,
+        )
+        df = market_data_snapshot.frame
         price = build_price_state(market.code, ticker, df)
         if price:
             store_price_state(db, price)
@@ -857,6 +889,8 @@ def _live_verdict_impl(
         yahoo_symbol=yahoo_symbol,
         history_df=df,
         research=research,
+        market_data_snapshot=market_data_snapshot,
+        request_priority=priority,
     )
     # Immutable prediction row first; outcome fields are populated only by the
     # later evaluator after the horizon has elapsed.

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import gsap from "gsap";
 import { fetchJSON, newsFeed, watchlist, tickerStrip, events } from "../api.js";
 import { loadSessions, deleteSession } from "../agentHistory.js";
 import { useApp } from "../App.jsx";
@@ -100,6 +101,26 @@ export default function OverviewTab({ marketRows = [] }) {
   const [wlTicker, setWlTicker] = useState("");
   const [wlMarket, setWlMarket] = useState("US");
   const [wlBusy, setWlBusy] = useState(false);
+  const rootRef = useRef(null);
+
+  // Cinematic entrance: staggered fade-up on mount only (never on live ticks).
+  useEffect(() => {
+    if (!rootRef.current) return undefined;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return undefined;
+    const ctx = gsap.context(() => {
+      gsap.fromTo(
+        ".market-index",
+        { y: 14, autoAlpha: 0 },
+        { y: 0, autoAlpha: 1, duration: 0.5, stagger: 0.04, ease: "power3.out", overwrite: "auto" }
+      );
+      gsap.fromTo(
+        ".market-chart-section, .market-movers, .ov-rail-box",
+        { y: 18, autoAlpha: 0 },
+        { y: 0, autoAlpha: 1, duration: 0.6, stagger: 0.08, ease: "power3.out", delay: 0.1, overwrite: "auto" }
+      );
+    }, rootRef);
+    return () => ctx.revert();
+  }, []);
 
   useEffect(() => {
     if (markets?.length && !markets.some((m) => m.code === wlMarket)) {
@@ -239,7 +260,7 @@ export default function OverviewTab({ marketRows = [] }) {
     });
 
   return (
-    <div className="overview market-home">
+    <div className="overview market-home" ref={rootRef}>
       <header className="market-heading">
         <div><h1>Markets</h1><p>Your view of the trading day.</p></div>
         <details className="exchange-menu"><summary>Exchange status</summary>        {/* Command center strip: market status + regime (existing data only) */}

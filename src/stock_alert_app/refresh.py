@@ -119,6 +119,7 @@ def _warm_worker() -> None:
                             company,
                             db_path=db_path,
                             yahoo_symbol=resolved,
+                            priority="background",
                         )
                     except Exception as exc:
                         logger.warning("Warm analysis failed for %s:%s: %s", market, ticker, exc)
@@ -302,7 +303,13 @@ def run_slow_refresh(db: Database) -> dict[str, object]:
             continue
         _in_flight.add(key)
         try:
-            verdict = live_verdict(market, ticker, company, yahoo_symbol=resolved)
+            verdict = live_verdict(
+                market,
+                ticker,
+                company,
+                yahoo_symbol=resolved,
+                priority="background",
+            )
             if verdict is not None:
                 analyzed += 1
         except Exception as exc:

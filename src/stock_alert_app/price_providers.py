@@ -6,10 +6,11 @@ pipeline stalls. This module introduces a small provider abstraction with
 several real backends and a **fallback chain** with a per-provider circuit
 breaker:
 
-* ``yfinance``   — primary (as before)
+* ``yfinance``   — primary (fast batch path, tried first)
+* ``twelvedata`` / ``alphavantage`` — keyed backups, active only when
+  ``TWELVE_DATA_API_KEY`` / ``ALPHA_VANTAGE_KEY`` is configured
+* ``yahoo_chart`` — key-free direct Yahoo chart API (same upstream as yfinance)
 * ``stooq``      — key-free CSV download, works for most global exchanges
-* ``alphavantage`` / ``twelvedata`` — optional API-key backends (used only
-  when a key is configured in the environment)
 
 ``fetch_ohlcv`` tries each enabled provider in order and returns the first
 non-empty frame. A provider that throws (or is explicitly rate-limited) is
@@ -29,6 +30,8 @@ from contextlib import contextmanager
 from typing import Iterable
 
 import pandas as pd
+
+from .request_coordinator import MarketDataSnapshot, ProviderPolicy, RequestCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +84,8 @@ class PriceProvider:
     Open/High/Low/Close/Volume indexed by Date, or an empty frame on failure."""
 
     name: str = "base"
+    supports_batch: bool = False
+    supported_intervals: frozenset[str] | None = None
 
     def fetch(self, symbol: str, period: str, interval: str) -> pd.DataFrame:  # pragma: no cover - interface
         raise NotImplementedError
@@ -88,9 +93,31 @@ class PriceProvider:
     def enabled(self) -> bool:
         return True
 
+    def supports(self, period: str, interval: str) -> bool:
+        del period
+        return self.supported_intervals is None or interval.lower() in self.supported_intervals
+
+    def fetch_many(self, symbols: list[str], period: str, interval: str) -> dict[str, pd.DataFrame]:
+        return {symbol: self.fetch(symbol, period, interval) for symbol in symbols}
+
 
 def _empty() -> pd.DataFrame:
     return pd.DataFrame()
+
+
+def _api_key(setting_name: str, *env_names: str) -> str:
+    """API key from settings first, then environment (both supported)."""
+    try:
+        val = getattr(_settings, setting_name, "") or ""
+    except Exception:  # pragma: no cover - standalone import safety
+        val = ""
+    if val:
+        return val
+    for name in env_names:
+        val = os.getenv(name) or ""
+        if val:
+            return val
+    return ""
 
 
 def _http_text(url: str, timeout: float = _HTTP_TIMEOUT) -> str:
@@ -101,6 +128,7 @@ def _http_text(url: str, timeout: float = _HTTP_TIMEOUT) -> str:
 
 class YFinanceProvider(PriceProvider):
     name = "yfinance"
+    supports_batch = True
 
     def fetch(self, symbol: str, period: str, interval: str) -> pd.DataFrame:
         try:
@@ -122,14 +150,42 @@ class YFinanceProvider(PriceProvider):
             if _is_expected_miss(exc):
                 logger.debug("YFinance has no listing for %s; trying fallback", symbol)
                 return _empty()
-            # Re-raise a tagged error so the chain can mark a rate limit.
-            _record_failure(self.name, rate_limited=_is_rate_limit(exc))
             raise
         if df is None or df.empty or "Close" not in df.columns:
             return _empty()
         if len(df) < 2:
             return _empty()
         return df
+
+    def fetch_many(self, symbols: list[str], period: str, interval: str) -> dict[str, pd.DataFrame]:
+        try:
+            import yfinance as yf
+        except Exception:
+            return {}
+        if len(symbols) == 1:
+            return {symbols[0]: self.fetch(symbols[0], period, interval)}
+        with _quiet_yfinance_miss_logs():
+            frame = yf.download(
+                tickers=" ".join(symbols),
+                period=period,
+                interval=interval,
+                auto_adjust=True,
+                group_by="ticker",
+                threads=True,
+                progress=False,
+            )
+        if frame is None or frame.empty:
+            return {}
+        result: dict[str, pd.DataFrame] = {}
+        for symbol in symbols:
+            try:
+                item = frame[symbol] if isinstance(frame.columns, pd.MultiIndex) else frame
+            except KeyError:
+                continue
+            item = item.dropna(subset=["Close"]) if "Close" in item else _empty()
+            if len(item) >= 2:
+                result[symbol] = item
+        return result
 
 
 class YahooChartProvider(PriceProvider):
@@ -142,6 +198,7 @@ class YahooChartProvider(PriceProvider):
     """
 
     name = "yahoo_chart"
+    supported_intervals = frozenset({"1d"})
 
     @staticmethod
     def _range(period: str) -> str:
@@ -185,13 +242,12 @@ class YahooChartProvider(PriceProvider):
             if _is_expected_miss(exc):
                 logger.debug("Yahoo chart has no listing for %s; trying fallback", symbol)
                 return _empty()
-            _record_failure(self.name, rate_limited="rate" in str(exc).lower() or "429" in str(exc))
-            logger.debug("Yahoo chart failed for %s: %s", symbol, exc)
-            return _empty()
+            raise
 
 
 class StooqProvider(PriceProvider):
     name = "stooq"
+    supported_intervals = frozenset({"1d"})
 
     @staticmethod
     def _candidates(symbol: str) -> list[str]:
@@ -249,13 +305,16 @@ class StooqProvider(PriceProvider):
 
 
 class AlphaVantageProvider(PriceProvider):
+    """Keyed backup behind yfinance (active only when an API key is set)."""
+
     name = "alphavantage"
+    supported_intervals = frozenset({"1d"})
 
     def enabled(self) -> bool:
-        return bool(os.getenv("ALPHA_VANTAGE_API_KEY"))
+        return bool(_api_key("alpha_vantage_key", "ALPHA_VANTAGE_API_KEY", "ALPHA_VANTAGE_KEY"))
 
     def fetch(self, symbol: str, period: str, interval: str) -> pd.DataFrame:
-        key = os.getenv("ALPHA_VANTAGE_API_KEY")
+        key = _api_key("alpha_vantage_key", "ALPHA_VANTAGE_API_KEY", "ALPHA_VANTAGE_KEY")
         if not key:
             return _empty()
         url = (
@@ -268,25 +327,43 @@ class AlphaVantageProvider(PriceProvider):
             payload = json.loads(_http_text(url))
             series = payload.get("Time Series (Daily)")
             if not series:
+                note = payload.get("Note") or payload.get("Information")
+                if note:
+                    raise RuntimeError(str(note))
                 return _empty()
-            rows = [{"Date": d, **{k.title(): float(v[k]) for k in v}} for d, v in series.items()]
+            rows = []
+            for d, ohlc in series.items():
+                try:
+                    rows.append({
+                        "Date": d,
+                        "Open": float(ohlc.get("1. open", "nan")),
+                        "High": float(ohlc.get("2. high", "nan")),
+                        "Low": float(ohlc.get("3. low", "nan")),
+                        "Close": float(ohlc.get("4. close", "nan")),
+                        "Volume": float(ohlc.get("5. volume") or 0),
+                    })
+                except (TypeError, ValueError):
+                    continue
+            if not rows:
+                return _empty()
             df = pd.DataFrame(rows).set_index("Date").sort_index()
             df.index = pd.to_datetime(df.index)
             return df
         except Exception as exc:  # noqa: BLE001
-            _record_failure(self.name, rate_limited="rate" in str(exc).lower())
-            logger.debug("Alpha Vantage failed for %s: %s", symbol, exc)
-            return _empty()
+            raise
 
 
 class TwelveDataProvider(PriceProvider):
+    """Keyed backup behind yfinance (active only when an API key is set)."""
+
     name = "twelvedata"
+    supported_intervals = frozenset({"1d"})
 
     def enabled(self) -> bool:
-        return bool(os.getenv("TWELVE_DATA_API_KEY"))
+        return bool(_api_key("twelve_data_key", "TWELVE_DATA_API_KEY"))
 
     def fetch(self, symbol: str, period: str, interval: str) -> pd.DataFrame:
-        key = os.getenv("TWELVE_DATA_API_KEY")
+        key = _api_key("twelve_data_key", "TWELVE_DATA_API_KEY")
         if not key:
             return _empty()
         url = (
@@ -297,31 +374,54 @@ class TwelveDataProvider(PriceProvider):
             import json
 
             payload = json.loads(_http_text(url))
+            if payload.get("status") == "error":
+                raise RuntimeError(str(payload.get("message") or payload.get("code") or "Twelve Data error"))
             vals = payload.get("values")
             if not vals:
                 return _empty()
-            df = pd.DataFrame(vals)
-            df["Date"] = pd.to_datetime(df["datetime"])
-            for c in ["open", "high", "low", "close", "volume"]:
-                df[c] = pd.to_numeric(df[c], errors="coerce")
-            df = df.set_index("Date").sort_index()
-            return df
+            raw = pd.DataFrame(vals)
+            try:
+                dates = pd.to_datetime(raw["datetime"])
+                out = pd.DataFrame(
+                    {
+                        "Open": pd.to_numeric(raw["open"], errors="coerce").to_numpy(),
+                        "High": pd.to_numeric(raw["high"], errors="coerce").to_numpy(),
+                        "Low": pd.to_numeric(raw["low"], errors="coerce").to_numpy(),
+                        "Close": pd.to_numeric(raw["close"], errors="coerce").to_numpy(),
+                        "Volume": pd.to_numeric(raw["volume"], errors="coerce").to_numpy(),
+                    },
+                    index=dates.to_numpy(),
+                )
+            except KeyError:
+                return _empty()
+            out.index = pd.to_datetime(out.index)
+            out.index.name = "Date"
+            return out.sort_index()
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Twelve Data failed for %s: %s", symbol, exc)
-            return _empty()
+            raise
 
 
 # ---------------------------------------------------------------------------
 # Provider registry + circuit breaker
 # ---------------------------------------------------------------------------
 
-_PROVIDERS: list[PriceProvider] = [
-    YFinanceProvider(),
-    YahooChartProvider(),
-    StooqProvider(),
-    AlphaVantageProvider(),
-    TwelveDataProvider(),
+_PROVIDER_REGISTRY: dict[str, PriceProvider] = {
+    provider.name: provider
+    for provider in (
+        TwelveDataProvider(),
+        AlphaVantageProvider(),
+        YFinanceProvider(),
+        YahooChartProvider(),
+        StooqProvider(),
+    )
+}
+_DEFAULT_PROVIDER_ORDER = "yfinance,twelvedata,alphavantage,yahoo_chart,stooq"
+_provider_order = [
+    name.strip().lower()
+    for name in os.getenv("STOCK_ALERT_PROVIDER_ORDER", _DEFAULT_PROVIDER_ORDER).split(",")
+    if name.strip().lower() in _PROVIDER_REGISTRY
 ]
+_PROVIDERS: list[PriceProvider] = [_PROVIDER_REGISTRY[name] for name in dict.fromkeys(_provider_order)]
 _cooldown_until: dict[str, float] = {}
 _cooldown_lock = threading.Lock()
 
@@ -394,21 +494,62 @@ def _provider_available(p: PriceProvider) -> bool:
     return True
 
 
+def _limit(name: str, suffix: str, default: int) -> int:
+    key = f"STOCK_ALERT_{name.upper()}_{suffix}"
+    try:
+        return max(1, int(os.getenv(key, str(default))))
+    except ValueError:
+        return default
+
+
+_POLICY_DEFAULTS = {
+    "twelvedata": (6, 700, 2),
+    "alphavantage": (5, 25, 1),
+    "yfinance": (30, 2000, 5),
+    "yahoo_chart": (30, 2000, 5),
+    "stooq": (20, 1000, 3),
+}
+_POLICIES = {
+    name: ProviderPolicy(
+        per_minute=_limit(name, "PER_MINUTE", defaults[0]),
+        daily_budget=_limit(name, "DAILY_BUDGET", defaults[1]),
+        burst=_limit(name, "BURST", defaults[2]),
+        failure_threshold=_limit(name, "FAILURE_THRESHOLD", 3),
+    )
+    for name, defaults in _POLICY_DEFAULTS.items()
+}
+_COORDINATOR = RequestCoordinator(
+    _PROVIDERS,
+    policies=_POLICIES,
+    fresh_ttl=float(os.getenv("STOCK_ALERT_MARKET_DATA_TTL", "300")),
+    stale_ttl=float(os.getenv("STOCK_ALERT_MARKET_DATA_STALE_TTL", "3600")),
+    cooldown_s=_COOLDOWN,
+)
+
+
 def provider_status() -> list[dict[str, object]]:
     """Human-readable status for each provider (used by the UI/health checks)."""
-    now = time.time()
-    out = []
-    for p in _PROVIDERS:
-        until = _cooldown_until.get(p.name)
-        out.append(
-            {
-                "name": p.name,
-                "enabled": p.enabled(),
-                "cooling_down": bool(until and now < until),
-                "cooldown_remaining_s": round(until - now, 1) if until else 0.0,
-            }
-        )
-    return out
+    return _COORDINATOR.status()
+
+
+def fetch_market_data(
+    symbol: str,
+    period: str = "6mo",
+    interval: str = "1d",
+    *,
+    priority: str = "foreground",
+) -> MarketDataSnapshot:
+    return _COORDINATOR.get_snapshot(symbol, period, interval, priority=priority)
+
+
+def fetch_market_data_many(
+    symbols: Iterable[str],
+    period: str = "6mo",
+    interval: str = "1d",
+    *,
+    priority: str = "background",
+) -> dict[str, MarketDataSnapshot]:
+    return _COORDINATOR.get_many(symbols, period, interval, priority=priority)
 
 
 def fetch_ohlcv(
@@ -416,6 +557,8 @@ def fetch_ohlcv(
     period: str = "6mo",
     interval: str = "1d",
     providers: Iterable[PriceProvider] | None = None,
+    *,
+    priority: str = "foreground",
 ) -> pd.DataFrame:
     """Fetch OHLCV for ``symbol`` from the first provider that returns data.
 
@@ -424,7 +567,9 @@ def fetch_ohlcv(
     that error or are cooling down are skipped. Falls back to an empty frame if
     every backend fails.
     """
-    chain = list(providers) if providers else _PROVIDERS
+    if providers is None:
+        return fetch_market_data(symbol, period, interval, priority=priority).frame
+    chain = list(providers)
     for p in chain:
         if not _provider_available(p):
             continue

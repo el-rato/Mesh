@@ -57,7 +57,7 @@ def test_mesh_analysis_is_explicit_single_symbol_and_cached(monkeypatch):
     monkeypatch.setattr(web_app, "_dossier_response", lambda item, db, **kwargs: {
         "mesh_analysis": kwargs.get("mesh_meta") or {"status": "READY", "data_timestamp": "data-1"},
     })
-    monkeypatch.setattr(verdict_module, "live_verdict", lambda market, ticker, company: calls.append((market, ticker)) or _Verdict())
+    monkeypatch.setattr(verdict_module, "live_verdict", lambda market, ticker, company, **kwargs: calls.append((market, ticker)) or _Verdict())
     monkeypatch.setattr("stock_alert_app.analysis.apply_canonical", lambda payload: payload)
 
     first = web_app.run_mesh_analysis(web_app.MeshAnalysisRequest(market="NYSE", ticker="AAPL"))

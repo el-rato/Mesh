@@ -79,6 +79,7 @@ class Settings:
     )
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     alpha_vantage_key: str = field(default_factory=lambda: os.getenv("ALPHA_VANTAGE_KEY", ""))
+    twelve_data_key: str = field(default_factory=lambda: os.getenv("TWELVE_DATA_API_KEY", ""))
     gemini_model: str = field(
         default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
     )
