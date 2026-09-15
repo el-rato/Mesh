@@ -4,6 +4,7 @@ import itertools
 import logging
 import queue
 import random
+import re
 import threading
 import time
 from concurrent.futures import Future
@@ -16,6 +17,13 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 PRIORITIES = {"deep_analysis": 0, "foreground": 1, "background": 2}
+_SECRET_QUERY_RE = re.compile(
+    r"(?i)(apikey|api_key|access_token|token|key)=([^&\s]+)"
+)
+
+
+def _safe_error(exc: BaseException) -> str:
+    return _SECRET_QUERY_RE.sub(r"\1=<REDACTED>", str(exc))
 
 
 @dataclass(frozen=True)
@@ -81,6 +89,12 @@ class _ProviderState:
     daily_used: int = 0
     minute_window: int = -1
     minute_used: int = 0
+    request_attempts: int = 0
+    successful_calls: int = 0
+    failed_calls: int = 0
+    last_call_at: float = 0.0
+    last_success_at: float = 0.0
+    last_error: str = ""
 
 
 @dataclass(frozen=True)
@@ -218,12 +232,12 @@ class RequestCoordinator:
 
     def _run(self) -> None:
         while True:
-            _, _, requests = self._queue.get()
+            priority, _, requests = self._queue.get()
             if requests is None:
                 self._queue.task_done()
                 return
             try:
-                produced = self._execute(requests)
+                produced = self._execute(requests, priority=priority)
                 for request in requests:
                     snapshot = produced.get(request.key) or self._snapshot(request, pd.DataFrame(), "")
                     with self._lock:
@@ -241,10 +255,19 @@ class RequestCoordinator:
             finally:
                 self._queue.task_done()
 
-    def _execute(self, requests: list[_Request]) -> dict[tuple[str, str, str], MarketDataSnapshot]:
+    def _execute(
+        self,
+        requests: list[_Request],
+        *,
+        priority: int = PRIORITIES["foreground"],
+    ) -> dict[tuple[str, str, str], MarketDataSnapshot]:
         remaining = {request.key: request for request in requests}
         result: dict[tuple[str, str, str], MarketDataSnapshot] = {}
         for provider in self.providers:
+            if priority == PRIORITIES["background"] and not bool(
+                getattr(provider, "background_enabled", True)
+            ):
+                continue
             supported = [request for request in remaining.values() if self._supports(provider, request)]
             if not supported or not self._available(provider):
                 continue
@@ -333,17 +356,22 @@ class RequestCoordinator:
         for attempt in range(self.max_retries + 1):
             if not self._take_budget(provider):
                 return None
+            state = self._states[provider.name]
+            state.request_attempts += 1
+            state.last_call_at = self._clock()
             try:
                 value = operation()
                 self._record_success(provider.name)
                 return value
             except Exception as exc:  # noqa: BLE001
+                state.failed_calls += 1
+                state.last_error = _safe_error(exc)
                 if self._expected_miss(exc):
                     return None
                 retryable = self._retryable(exc)
                 if retryable:
                     self._record_failure(provider.name)
-                logger.warning("Provider %s request failed: %s", provider.name, exc)
+                logger.warning("Provider %s request failed: %s", provider.name, state.last_error)
                 if not retryable or attempt >= self.max_retries or not self._available(provider):
                     return None
                 delay = min(self.backoff_cap_s, self.backoff_base_s * (2 ** attempt))
@@ -384,6 +412,8 @@ class RequestCoordinator:
         state = self._states[name]
         state.failures = 0
         state.open_until = 0.0
+        state.successful_calls += 1
+        state.last_success_at = self._clock()
 
     def status(self) -> list[dict[str, object]]:
         now = self._clock()
@@ -399,6 +429,13 @@ class RequestCoordinator:
                 "per_minute": state.policy.per_minute,
                 "daily_used": state.daily_used,
                 "daily_budget": state.policy.daily_budget,
+                "request_attempts": state.request_attempts,
+                "successful_calls": state.successful_calls,
+                "failed_calls": state.failed_calls,
+                "last_call_at": state.last_call_at or None,
+                "last_success_at": state.last_success_at or None,
+                "last_error": state.last_error,
+                "background_enabled": bool(getattr(provider, "background_enabled", True)),
                 "supports_batch": bool(getattr(provider, "supports_batch", False)),
             })
         return rows

@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import pandas as pd
@@ -188,65 +187,24 @@ def _stale_from_snapshot(market_code: str, ticker: str, db: Database) -> PriceSt
     )
 
 
-def _fetch_one(market: Market, db: Database, symbol: str) -> tuple[str, PriceState] | None:
-    from .resolve import OK, resolve
-
-    tkr = market.tickers[symbol]
-    res = resolve(market.code, symbol, tkr.name)
-    if res["status"] != OK:
-        # Provider could not validate a live symbol (not found / unavailable /
-        # temporary error / possibly delisted). Fall back to last-known-good data
-        # rather than discarding valid history; it is labelled STALE downstream.
-        return symbol, _stale_from_snapshot(market.code, symbol, db)
-    yahoo_symbol = res["symbol"]
-    try:
-        df = fetch_history(yahoo_symbol, period="6mo", priority="background")
-    except Exception as exc:
-        logger.warning("Failed to fetch %s: %s", yahoo_symbol, exc)
-        return symbol, _stale_from_snapshot(market.code, symbol, db)
-    state = build_price_state(market.code, symbol, df)
-    if state is None:
-        logger.warning("No price data for %s", yahoo_symbol)
-        return symbol, _stale_from_snapshot(market.code, symbol, db)
-    return symbol, state
-
-
 def fetch_market_prices(
-    market: Market, db: Database, max_workers: int = 12
+    market: Market,
+    db: Database,
+    max_workers: int = 12,
+    max_symbols: int | None = None,
 ) -> dict[str, PriceState]:
-    """Fetch prices for every ticker in a market concurrently (Fincept-style).
-
-    Sequential per-symbol network calls were the bottleneck that made the
-    scanner "stick" on a large universe; a bounded thread pool fetches the
-    whole universe at once. A short-lived pool is created per market so its
-    lifecycle is tied to the fetch and no thread lingers between cycles.
-    """
+    """Fetch configured symbols in one background yfinance batch."""
     from .price_providers import fetch_market_data_many
-    from .resolve import OK, resolve
 
+    del max_workers  # kept for caller compatibility
     states: dict[str, PriceState] = {}
-    resolved: dict[str, str] = {}
-
-    def resolve_one(symbol: str) -> tuple[str, str | None]:
-        ticker = market.tickers[symbol]
-        item = resolve(market.code, symbol, ticker.name)
-        return symbol, str(item["symbol"]) if item["status"] == OK else None
-
     symbols = list(market.tickers.keys())
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = [pool.submit(resolve_one, symbol) for symbol in symbols]
-        for future in as_completed(futures):
-            try:
-                symbol, provider_symbol = future.result()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Price resolution failed: %s", exc)
-                continue
-            if provider_symbol:
-                resolved[symbol] = provider_symbol
-            else:
-                stale = _stale_from_snapshot(market.code, symbol, db)
-                if stale is not None:
-                    states[symbol] = stale
+    if max_symbols is not None:
+        symbols = symbols[:max(0, max_symbols)]
+    resolved = {
+        symbol: symbol + (market.tickers[symbol].yahoo_suffix or market.yahoo_suffix or "")
+        for symbol in symbols
+    }
 
     snapshots = fetch_market_data_many(
         resolved.values(), period="6mo", interval="1d", priority="background"
@@ -267,6 +225,7 @@ def fetch_market_prices(
 def run_price_fetch(
     market_codes: Iterable[str] | None = None,
     db_path: str | None = None,
+    max_symbols: int | None = 300,
 ) -> dict[str, PriceState]:
     from .ingest import _load_markets  # reuse market loading without duplicating
     from .markets import scan_market_codes
@@ -277,11 +236,21 @@ def run_price_fetch(
 
     codes = list(market_codes) if market_codes else scan_market_codes()
     states: dict[str, PriceState] = {}
+    remaining = None if max_symbols is None else max(0, max_symbols)
     for code in codes:
+        if remaining == 0:
+            break
         market = markets.get(code)
         if not market:
             logger.warning("Unknown market %s, skipping", code)
             continue
-        fetched = fetch_market_prices(market, db)
+        market_limit = (
+            len(market.tickers)
+            if remaining is None
+            else min(remaining, len(market.tickers))
+        )
+        fetched = fetch_market_prices(market, db, max_symbols=market_limit)
         states.update(fetched)
+        if remaining is not None:
+            remaining -= market_limit
     return states

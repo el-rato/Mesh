@@ -130,6 +130,9 @@ def test_circuit_breaker_opens_and_recovers() -> None:
         coordinator.get_snapshot("THREE")
         assert provider.calls == ["ONE", "TWO"]
         assert coordinator.status()[0]["cooling_down"] is True
+        assert coordinator.status()[0]["request_attempts"] == 2
+        assert coordinator.status()[0]["failed_calls"] == 2
+        assert coordinator.status()[0]["last_error"] == "rate limit"
         now[0] += 11
         provider.error = None
         recovered = coordinator.get_snapshot("FOUR")
@@ -154,6 +157,48 @@ def test_stale_cache_serves_while_revalidating() -> None:
         assert stale.cache_status == "stale_cache"
         assert provider.started.wait(timeout=1)
         provider.release.set()
+    finally:
+        coordinator.shutdown()
+
+
+def test_background_requests_do_not_fall_through_to_on_demand_providers() -> None:
+    class EmptyYFinance(_Provider):
+        name = "yfinance"
+        background_enabled = True
+
+        def fetch(self, symbol: str, period: str, interval: str) -> pd.DataFrame:
+            self.calls.append(symbol)
+            return pd.DataFrame()
+
+    class AlphaVantage(_Provider):
+        name = "alphavantage"
+        background_enabled = False
+
+    yfinance = EmptyYFinance()
+    alphavantage = AlphaVantage()
+    coordinator = RequestCoordinator(
+        [yfinance, alphavantage],
+        policies={
+            yfinance.name: ProviderPolicy(600, 1000, 20),
+            alphavantage.name: ProviderPolicy(600, 1000, 20),
+        },
+        max_retries=0,
+    )
+    try:
+        background = coordinator.get_snapshot("AAPL", priority="background")
+        foreground = coordinator.get_snapshot("AAPL", priority="foreground")
+
+        assert background.frame.empty
+        assert yfinance.calls == ["AAPL", "AAPL"]
+        assert alphavantage.calls == ["AAPL"]
+        assert not foreground.frame.empty
+        status = {row["name"]: row for row in coordinator.status()}
+        assert status["yfinance"]["request_attempts"] == 2
+        assert status["alphavantage"]["request_attempts"] == 1
+        assert status["alphavantage"]["successful_calls"] == 1
+        assert status["alphavantage"]["failed_calls"] == 0
+        assert status["yfinance"]["background_enabled"] is True
+        assert status["alphavantage"]["background_enabled"] is False
     finally:
         coordinator.shutdown()
 

@@ -85,6 +85,7 @@ class PriceProvider:
 
     name: str = "base"
     supports_batch: bool = False
+    background_enabled: bool = False
     supported_intervals: frozenset[str] | None = None
 
     def fetch(self, symbol: str, period: str, interval: str) -> pd.DataFrame:  # pragma: no cover - interface
@@ -129,6 +130,7 @@ def _http_text(url: str, timeout: float = _HTTP_TIMEOUT) -> str:
 class YFinanceProvider(PriceProvider):
     name = "yfinance"
     supports_batch = True
+    background_enabled = True
 
     def fetch(self, symbol: str, period: str, interval: str) -> pd.DataFrame:
         try:

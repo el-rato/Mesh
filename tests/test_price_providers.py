@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -11,6 +12,7 @@ from stock_alert_app.price_providers import (
     fetch_ohlcv,
     provider_status,
 )
+from stock_alert_app.request_coordinator import MarketDataSnapshot
 
 
 def _bars() -> pd.DataFrame:
@@ -126,3 +128,82 @@ def test_non_404_provider_error_remains_visible(caplog) -> None:
 
     assert not result.empty
     assert any("test_broken_network" in record.message for record in caplog.records)
+
+
+def test_automatic_price_refresh_has_one_global_300_symbol_budget(monkeypatch) -> None:
+    import stock_alert_app.ingest as ingest
+    import stock_alert_app.price as price
+
+    markets = {
+        "ONE": SimpleNamespace(tickers={f"A{i}": object() for i in range(200)}),
+        "TWO": SimpleNamespace(tickers={f"B{i}": object() for i in range(200)}),
+    }
+    seen: list[tuple[str, int | None]] = []
+
+    class FakeDatabase:
+        def __init__(self, path):
+            self.path = path
+
+        def init_schema(self) -> None:
+            return None
+
+    monkeypatch.setattr(ingest, "_load_markets", lambda: markets)
+    monkeypatch.setattr(price, "Database", FakeDatabase)
+    monkeypatch.setattr(
+        price,
+        "fetch_market_prices",
+        lambda market, db, max_workers=12, max_symbols=None: seen.append(
+            ("ONE" if market is markets["ONE"] else "TWO", max_symbols)
+        )
+        or {},
+    )
+
+    price.run_price_fetch(["ONE", "TWO"], db_path="ignored.db")
+
+    assert seen == [("ONE", 200), ("TWO", 100)]
+
+
+def test_bulk_refresh_uses_one_yfinance_batch_without_symbol_validation(monkeypatch) -> None:
+    import stock_alert_app.price as price
+    import stock_alert_app.price_providers as providers
+    import stock_alert_app.resolve as resolve
+
+    market = SimpleNamespace(
+        code="TEST",
+        yahoo_suffix=".X",
+        tickers={
+            "AAA": SimpleNamespace(name="A", yahoo_suffix=".A"),
+            "BBB": SimpleNamespace(name="B", yahoo_suffix=""),
+        },
+    )
+    requested: list[str] = []
+
+    def fake_many(symbols, period="6mo", interval="1d", priority="background"):
+        requested.extend(symbols)
+        return {
+            symbol: MarketDataSnapshot(
+                symbol=symbol,
+                period=period,
+                interval=interval,
+                frame=_bars(),
+                provider="yfinance",
+                fetched_at=0.0,
+                data_timestamp="2026-01-02T00:00:00",
+            )
+            for symbol in symbols
+        }
+
+    monkeypatch.setattr(
+        resolve,
+        "resolve",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("duplicate validation call")
+        ),
+    )
+    monkeypatch.setattr(providers, "fetch_market_data_many", fake_many)
+    monkeypatch.setattr(price, "store_price_state", lambda *args, **kwargs: None)
+
+    states = price.fetch_market_prices(market, SimpleNamespace(), max_symbols=1)
+
+    assert requested == ["AAA.A"]
+    assert list(states) == ["AAA"]
