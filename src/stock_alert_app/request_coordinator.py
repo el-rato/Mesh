@@ -16,7 +16,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-PRIORITIES = {"deep_analysis": 0, "foreground": 1, "background": 2}
+PRIORITIES = {"deep_analysis": 0, "chart": 1, "foreground": 2, "background": 3}
 _SECRET_QUERY_RE = re.compile(
     r"(?i)(apikey|api_key|access_token|token|key)=([^&\s]+)"
 )
@@ -263,18 +263,34 @@ class RequestCoordinator:
     ) -> dict[tuple[str, str, str], MarketDataSnapshot]:
         remaining = {request.key: request for request in requests}
         result: dict[tuple[str, str, str], MarketDataSnapshot] = {}
-        for provider in self.providers:
+        providers = self.providers
+        if priority == PRIORITIES["chart"]:
+            providers = sorted(
+                self.providers,
+                key=lambda provider: int(getattr(provider, "chart_priority", 100)),
+            )
+        for provider in providers:
             if priority == PRIORITIES["background"] and not bool(
                 getattr(provider, "background_enabled", True)
+            ):
+                continue
+            if priority == PRIORITIES["chart"] and not bool(
+                getattr(provider, "chart_enabled", True)
             ):
                 continue
             supported = [request for request in remaining.values() if self._supports(provider, request)]
             if not supported or not self._available(provider):
                 continue
             if bool(getattr(provider, "supports_batch", False)) and len(supported) > 1:
-                frames = self._call(provider, lambda: provider.fetch_many(
-                    [request.symbol for request in supported], supported[0].period, supported[0].interval
-                )) or {}
+                frames = self._call(
+                    provider,
+                    lambda: provider.fetch_many(
+                        [request.symbol for request in supported],
+                        supported[0].period,
+                        supported[0].interval,
+                    ),
+                    max_retries=0 if priority == PRIORITIES["chart"] else None,
+                ) or {}
                 for request in supported:
                     frame = frames.get(request.symbol)
                     if self._valid(frame):
@@ -284,9 +300,13 @@ class RequestCoordinator:
                 for request in supported:
                     if not self._available(provider):
                         break
-                    frame = self._call(provider, lambda request=request: provider.fetch(
-                        request.symbol, request.period, request.interval
-                    ))
+                    frame = self._call(
+                        provider,
+                        lambda request=request: provider.fetch(
+                            request.symbol, request.period, request.interval
+                        ),
+                        max_retries=0 if priority == PRIORITIES["chart"] else None,
+                    )
                     if self._valid(frame):
                         result[request.key] = self._snapshot(request, frame, provider.name)
                         remaining.pop(request.key, None)
@@ -352,8 +372,15 @@ class RequestCoordinator:
         state.minute_used += 1
         return True
 
-    def _call(self, provider: Any, operation: Callable[[], Any]) -> Any:
-        for attempt in range(self.max_retries + 1):
+    def _call(
+        self,
+        provider: Any,
+        operation: Callable[[], Any],
+        *,
+        max_retries: int | None = None,
+    ) -> Any:
+        retry_limit = self.max_retries if max_retries is None else max(0, max_retries)
+        for attempt in range(retry_limit + 1):
             if not self._take_budget(provider):
                 return None
             state = self._states[provider.name]
@@ -372,7 +399,7 @@ class RequestCoordinator:
                 if retryable:
                     self._record_failure(provider.name)
                 logger.warning("Provider %s request failed: %s", provider.name, state.last_error)
-                if not retryable or attempt >= self.max_retries or not self._available(provider):
+                if not retryable or attempt >= retry_limit or not self._available(provider):
                     return None
                 delay = min(self.backoff_cap_s, self.backoff_base_s * (2 ** attempt))
                 self._sleep(delay * (0.5 + self._rng.random()))
@@ -436,6 +463,7 @@ class RequestCoordinator:
                 "last_success_at": state.last_success_at or None,
                 "last_error": state.last_error,
                 "background_enabled": bool(getattr(provider, "background_enabled", True)),
+                "chart_enabled": bool(getattr(provider, "chart_enabled", True)),
                 "supports_batch": bool(getattr(provider, "supports_batch", False)),
             })
         return rows

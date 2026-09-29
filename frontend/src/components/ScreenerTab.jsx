@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchJSON, screener } from "../api.js";
 import { useApp } from "../App.jsx";
 import SecurityLink from "./SecurityLink.jsx";
+import NumberInput from "./NumberInput.jsx";
 
 const PRESETS = [
   { key: "strong_bullish", label: "STRONG BULLISH" },
@@ -174,10 +175,10 @@ export default function ScreenerTab() {
             <option value="NEUTRAL">NEUTRAL</option>
           </select>
         </div>
-        <div className="field"><label>Conviction ≥</label><input type="number" step="0.05" min="0" max="1" value={filters.min_conviction} placeholder="0.60" onChange={(e) => set("min_conviction", e.target.value)} /></div>
-        <div className="field"><label>Momentum ≥</label><input type="number" step="0.01" value={filters.min_momentum} placeholder="0.02" onChange={(e) => set("min_momentum", e.target.value)} /></div>
-        <div className="field"><label>Price move ≥</label><input type="number" step="0.01" value={filters.min_move} placeholder="0.03" onChange={(e) => set("min_move", e.target.value)} /></div>
-        <div className="field"><label>Volume ≥ (x)</label><input type="number" step="0.1" value={filters.min_volume_ratio} placeholder="1.5" onChange={(e) => set("min_volume_ratio", e.target.value)} /></div>
+        <div className="field"><label>Conviction ≥</label><NumberInput stepperLabel="minimum conviction" step="0.05" min="0" max="1" value={filters.min_conviction} placeholder="0.60" onChange={(e) => set("min_conviction", e.target.value)} /></div>
+        <div className="field"><label>Momentum ≥</label><NumberInput stepperLabel="minimum momentum" step="0.01" value={filters.min_momentum} placeholder="0.02" onChange={(e) => set("min_momentum", e.target.value)} /></div>
+        <div className="field"><label>Price move ≥</label><NumberInput stepperLabel="minimum price move" step="0.01" value={filters.min_move} placeholder="0.03" onChange={(e) => set("min_move", e.target.value)} /></div>
+        <div className="field"><label>Volume ≥ (x)</label><NumberInput stepperLabel="minimum volume ratio" step="0.1" value={filters.min_volume_ratio} placeholder="1.5" onChange={(e) => set("min_volume_ratio", e.target.value)} /></div>
         <div className="field"><label>Signal</label>
           <select value={filters.signal_key} onChange={(e) => set("signal_key", e.target.value)}>
             {SIG_KEYS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchJSON, CHART_RANGES, rangeLabel, dossier, meshAnalysis } from "../api.js";
 import { useApp } from "../App.jsx";
 import PriceChart from "./PriceChart.jsx";
+import NumberInput from "./NumberInput.jsx";
 import AddToPortfolioButton from "./AddToPortfolioButton.jsx";
 import { reasonText, RefreshStatus } from "./ui.jsx";
 
@@ -236,24 +237,24 @@ function ChartSection({ v, symbol, dossierData }) {
               </button>
               {bollinger && (
                 <>
-                  <label className="chart-tools-num">P<input type="number" min="2" max="100" value={bollinger.period} onChange={(e) => setBollinger({ ...bollinger, period: Number(e.target.value) || 20 })} /></label>
-                  <label className="chart-tools-num">σ<input type="number" min="1" max="5" step="0.5" value={bollinger.std} onChange={(e) => setBollinger({ ...bollinger, std: Number(e.target.value) || 2 })} /></label>
+                  <span className="chart-tools-num"><label htmlFor="bb-period">P</label><NumberInput id="bb-period" stepperLabel="Bollinger period" min="2" max="100" value={bollinger.period} onChange={(e) => setBollinger({ ...bollinger, period: Number(e.target.value) || 20 })} /></span>
+                  <span className="chart-tools-num"><label htmlFor="bb-deviation">σ</label><NumberInput id="bb-deviation" stepperLabel="Bollinger deviation" min="1" max="5" step="0.5" value={bollinger.std} onChange={(e) => setBollinger({ ...bollinger, std: Number(e.target.value) || 2 })} /></span>
                 </>
               )}
             </div>
             <div className="chart-tools-row">
               <span className="chart-tools-label">RSI</span>
               <button className={`chip ${rsi ? "on" : ""}`} onClick={() => setRsi(rsi ? null : { period: 14 })}>{rsi ? `RSI ${rsi.period}` : "OFF"}</button>
-              {rsi && <label className="chart-tools-num">P<input type="number" min="2" max="50" value={rsi.period} onChange={(e) => setRsi({ period: Number(e.target.value) || 14 })} /></label>}
+              {rsi && <span className="chart-tools-num"><label htmlFor="rsi-period">P</label><NumberInput id="rsi-period" stepperLabel="RSI period" min="2" max="50" value={rsi.period} onChange={(e) => setRsi({ period: Number(e.target.value) || 14 })} /></span>}
             </div>
             <div className="chart-tools-row">
               <span className="chart-tools-label">MACD</span>
               <button className={`chip ${macd ? "on" : ""}`} onClick={() => setMacd(macd ? null : { fast: 12, slow: 26, signal: 9 })}>{macd ? `${macd.fast},${macd.slow},${macd.signal}` : "OFF"}</button>
               {macd && (
                 <>
-                  <label className="chart-tools-num">F<input type="number" min="2" max="50" value={macd.fast} onChange={(e) => setMacd({ ...macd, fast: Number(e.target.value) || 12 })} /></label>
-                  <label className="chart-tools-num">S<input type="number" min="2" max="100" value={macd.slow} onChange={(e) => setMacd({ ...macd, slow: Number(e.target.value) || 26 })} /></label>
-                  <label className="chart-tools-num">Sig<input type="number" min="2" max="50" value={macd.signal} onChange={(e) => setMacd({ ...macd, signal: Number(e.target.value) || 9 })} /></label>
+                  <span className="chart-tools-num"><label htmlFor="macd-fast">F</label><NumberInput id="macd-fast" stepperLabel="MACD fast period" min="2" max="50" value={macd.fast} onChange={(e) => setMacd({ ...macd, fast: Number(e.target.value) || 12 })} /></span>
+                  <span className="chart-tools-num"><label htmlFor="macd-slow">S</label><NumberInput id="macd-slow" stepperLabel="MACD slow period" min="2" max="100" value={macd.slow} onChange={(e) => setMacd({ ...macd, slow: Number(e.target.value) || 26 })} /></span>
+                  <span className="chart-tools-num"><label htmlFor="macd-signal">Sig</label><NumberInput id="macd-signal" stepperLabel="MACD signal period" min="2" max="50" value={macd.signal} onChange={(e) => setMacd({ ...macd, signal: Number(e.target.value) || 9 })} /></span>
                 </>
               )}
             </div>

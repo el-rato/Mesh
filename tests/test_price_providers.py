@@ -207,3 +207,63 @@ def test_bulk_refresh_uses_one_yfinance_batch_without_symbol_validation(monkeypa
 
     assert requested == ["AAA.A"]
     assert list(states) == ["AAA"]
+
+
+def test_data_health_returns_market_coverage(tmp_path) -> None:
+    from stock_alert_app.analytics import data_health
+    from stock_alert_app.db import Database
+
+    db = Database(tmp_path / "health.db")
+    db.init_schema()
+    db.upsert_security("NYSE", "AAPL", symbol="AAPL", company="Apple")
+
+    result = data_health(db)
+
+    assert result["market_coverage"] == [
+        {"market": "NYSE", "securities": 1, "with_data": 0}
+    ]
+
+
+def test_chart_rows_are_sorted_deduplicated_and_timezone_safe() -> None:
+    from stock_alert_app.indexes import _df_to_rows
+
+    frame = pd.DataFrame(
+        {
+            "Open": [102.0, 100.0, 101.0],
+            "High": [103.0, 101.0, 102.0],
+            "Low": [101.0, 99.0, 100.0],
+            "Close": [102.5, 100.5, 101.5],
+            "Volume": [1200, 1000, 1100],
+        },
+        index=pd.to_datetime(
+            ["2026-01-02T00:00:00Z", "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"]
+        ),
+    )
+
+    rows = _df_to_rows(frame)
+
+    assert [row["date"] for row in rows] == [
+        "2026-01-01T00:00:00+00:00",
+        "2026-01-02T00:00:00+00:00",
+    ]
+    assert rows[-1]["close"] == 101.5
+
+
+def test_chart_uses_fresh_persisted_history_before_network(tmp_path, monkeypatch) -> None:
+    import stock_alert_app.indexes as indexes
+    import stock_alert_app.price_providers as providers
+    from stock_alert_app.db import Database
+
+    db = Database(tmp_path / "chart.db")
+    db.init_schema()
+    stored = [{"date": "2026-01-01T00:00:00+00:00", "open": 100, "high": 102, "low": 99, "close": 101, "volume": 1000}]
+    db.upsert_price_history("AAPL", "1mo", stored)
+    indexes._HISTORY_CACHE.clear()
+    monkeypatch.setattr(indexes, "Database", lambda path: db)
+    monkeypatch.setattr(
+        providers,
+        "fetch_ohlcv",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("network called")),
+    )
+
+    assert indexes.index_history("AAPL", "1mo") == stored

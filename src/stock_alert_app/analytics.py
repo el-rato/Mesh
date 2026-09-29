@@ -265,7 +265,7 @@ def data_health(db: Database) -> dict[str, Any]:
             **cov,
         },
         "market_coverage": [
-            {"market": r["market"], "securities": r["securities"], "with_data": r["analyzed"]}
+            {"market": r["market"], "securities": r["securities"], "with_data": r["with_data"]}
             for r in markets_rows
         ],
         "last_price_snapshot": last_snap or "",

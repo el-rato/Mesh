@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   paperPortfolios,
   paperCreatePortfolio,
+  paperConfigurePortfolio,
   paperDeletePortfolio,
   paperResetPortfolio,
   paperPortfolio,
@@ -21,11 +22,16 @@ import {
 } from "../api.js";
 import { useApp } from "../App.jsx";
 import SecurityLink from "./SecurityLink.jsx";
+import NumberInput from "./NumberInput.jsx";
 
 function money(n, digits = 2) {
   const v = Number(n || 0);
   const sign = v > 0 ? "+" : "";
   return `${sign}${v.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+}
+
+function amount(n, currency = "USD") {
+  return num(n).toLocaleString(currency === "INR" ? "en-IN" : "en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function num(v, d = 0) {
@@ -63,8 +69,10 @@ const STATUS_CLASS = {
   pending: "neutral", partial: "neutral", filled: "up", cancelled: "dim", rejected: "down",
 };
 
-export default function PaperTab() {
-  const { refreshToken, openPaperTicket } = useApp();
+export default function PaperTab({ marketRows = [] }) {
+  const { refreshToken, openPaperTicket, market, markets } = useApp();
+  const symbolInput = useRef(null);
+  const activeIdRef = useRef("");
   const [portfolios, setPortfolios] = useState([]);
   const [activeId, setActiveId] = useState("");
   const [pf, setPf] = useState(null);
@@ -79,22 +87,44 @@ export default function PaperTab() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newBalance, setNewBalance] = useState("100000");
+  const [newBalance, setNewBalance] = useState("");
+  const [newCurrency, setNewCurrency] = useState("");
+  const [showNewPortfolio, setShowNewPortfolio] = useState(false);
+  const [startingBalance, setStartingBalance] = useState("");
+  const [startingCurrency, setStartingCurrency] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState("holdings");
+  const [tradeMarket, setTradeMarket] = useState("");
+  const [tradeTicker, setTradeTicker] = useState("");
 
   const load = useCallback(() => {
     setError("");
     paperPortfolios()
-      .then((ps) => {
-        setPortfolios(ps || []);
-        const active = (ps && ps[0] && ps[0].id) || "";
-        setActiveId((cur) => cur || active);
+      .then(async (ps) => {
+        const list = ps?.length ? ps : [await paperPortfolio()].map((p) => ({ id: p.portfolio_id, name: p.name, currency: p.currency }));
+        setPortfolios(list);
+        const active = list[0]?.id || "";
+        setActiveId((cur) => {
+          const preferred = cur || window.localStorage.getItem("paperPortfolioId");
+          return list.some((p) => p.id === preferred) ? preferred : active;
+        });
       })
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (activeId) {
+      window.localStorage.setItem("paperPortfolioId", activeId);
+      setPf(null);
+      setOrders([]);
+      setTrades([]);
+    }
+  }, [activeId]);
 
   const reloadPortfolio = useCallback(() => {
     if (!activeId) return;
@@ -111,6 +141,7 @@ export default function PaperTab() {
       paperPerformance(),
     ])
       .then(([p, o, pos, tr, st, rk, bd, eq, dec, perf2]) => {
+        if (activeIdRef.current !== activeId) return;
         setPf(p); setOrders(o || []); setTrades(tr || []); setStats(st);
         setRisk(rk); setBoard(bd); setEquity(eq || []); setDecisions(dec || []); setPerf(perf2);
       })
@@ -126,6 +157,14 @@ export default function PaperTab() {
   useEffect(() => {
     if (refreshToken) reloadPortfolio();
   }, [refreshToken, reloadPortfolio]);
+
+  useEffect(() => {
+    if (pf?.portfolio_id !== activeId) return;
+    setStartingBalance(String(pf.starting_cash));
+    setStartingCurrency(pf.currency);
+    // Refreshes for the same account should not overwrite an amount being edited.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, pf?.portfolio_id]);
 
   const decById = useMemo(() => {
     const m = {};
@@ -146,11 +185,17 @@ export default function PaperTab() {
 
   function createPortfolio() {
     const name = newName.trim();
-    if (!name) return;
+    const balance = Number(newBalance);
+    if (!name || !Number.isFinite(balance) || balance <= 0) {
+      setError("Enter a portfolio name and a positive starting balance.");
+      return;
+    }
     setBusy(true);
-    paperCreatePortfolio({ name, balance: num(newBalance, 100000) })
+    paperCreatePortfolio({ name, balance, currency: newCurrency || defaultCurrency })
       .then((p) => {
         setNewName("");
+        setNewBalance("");
+        setShowNewPortfolio(false);
         load();
         setActiveId(p.id);
       })
@@ -200,100 +245,142 @@ export default function PaperTab() {
     paperCancelOrder(orderId).then(reloadPortfolio).catch((e) => setError(e.message));
   }
 
-  if (error && !pf && !portfolios.length) return <div className="error">ERROR: {error}</div>;
-  if (!portfolios.length) {
-    return (
-      <div>
-        <div className="empty" style={{ padding: 20 }}>NO PAPER PORTFOLIOS YET — CREATE ONE TO START SIMULATING.</div>
-        <div className="controls" style={{ gap: 8 }}>
-          <div className="field"><label>NAME</label>
-            <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Aggressive" />
-          </div>
-          <div className="field"><label>BALANCE</label>
-            <input type="number" min="1" value={newBalance} onChange={(e) => setNewBalance(e.target.value)} />
-          </div>
-          <button className="primary" disabled={busy || !newName.trim()} onClick={createPortfolio}>+ CREATE PORTFOLIO</button>
-        </div>
-      </div>
-    );
+  function configurePortfolio(e) {
+    e.preventDefault();
+    const balance = Number(startingBalance);
+    if (!Number.isFinite(balance) || balance <= 0) {
+      setError("Enter a positive starting balance.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    paperConfigurePortfolio(activeId, balance, startingCurrency || pf.currency)
+      .then(() => { load(); reloadPortfolio(); })
+      .catch((e) => setError(e.message))
+      .finally(() => setBusy(false));
   }
+
+  function startTrade(e) {
+    e.preventDefault();
+    const ticker = tradeTicker.trim().toUpperCase();
+    const exchange = tradeMarket || market || markets?.[0]?.code;
+    if (!ticker || !exchange) return;
+    openPaperTicket({ market: exchange, ticker, company: ticker, action: "BUY", portfolio_id: activeId });
+    setTradeTicker("");
+  }
+
+  const selectedMarket = tradeMarket || market || markets?.[0]?.code || "";
+  activeIdRef.current = activeId;
+  const defaultCurrency = markets?.find((m) => m.code === selectedMarket)?.currency || "USD";
+  const currencyOptions = [...new Set([pf?.currency, defaultCurrency, ...(markets || []).map((m) => m.currency)].filter(Boolean))];
+  const canConfigure = Boolean(pf && !orders.length && !trades.length && !pf.positions?.length);
+  const hasCapitalChange = pf && (Number(startingBalance) !== num(pf.starting_cash) || startingCurrency !== pf.currency);
+  const marketPicks = marketRows.filter((row) => row.market === selectedMarket && row.ticker && Number(row.close) > 0).slice(0, 4);
+
+  if (loading) return <div className="empty">Loading paper portfolio…</div>;
+  if (error && !pf && !portfolios.length) return <div className="error">ERROR: {error}</div>;
 
   const openT = (p, side) =>
     openPaperTicket({ market: p.market, ticker: p.ticker, company: p.ticker, action: side, portfolio_id: activeId });
+
 
   return (
     <>
       {error && <div className="scan-warning">⚠ {error}</div>}
 
-      <div className="controls" style={{ gap: 8, flexWrap: "wrap" }}>
-        <div className="field"><label>PORTFOLIO</label>
-          <select value={activeId} onChange={(e) => setActiveId(e.target.value)}>
+      <div className="paper-dashboard-head">
+        <div><div className="paper-eyebrow">PRACTICE ACCOUNT</div><h2>Paper trading</h2><p>Try a trade, follow your positions, and learn as you go.</p></div>
+        <div className="paper-account-switch">
+          <label htmlFor="paper-portfolio-select">Portfolio</label>
+          <select id="paper-portfolio-select" value={activeId} onChange={(e) => setActiveId(e.target.value)}>
             {portfolios.map((p) => <option key={p.id} value={p.id}>{p.name} · {p.currency}</option>)}
           </select>
+          <button type="button" className="ghost" onClick={() => setShowNewPortfolio((open) => !open)}>{showNewPortfolio ? "Close" : "+ New portfolio"}</button>
         </div>
-        <div className="field"><label>NEW</label>
-          <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="name" />
-        </div>
-        <div className="field"><label>BALANCE</label>
-          <input type="number" min="1" value={newBalance} onChange={(e) => setNewBalance(e.target.value)} />
-        </div>
-        <button className="primary" disabled={busy || !newName.trim()} onClick={createPortfolio}>+ CREATE</button>
-        <button className="ghost" disabled={busy || !activeId} onClick={resetPortfolio}>RESET</button>
-        <button className="ghost" disabled={busy || !activeId} onClick={removePortfolio}>DELETE</button>
-        <button className="ghost" disabled={busy || !activeId} onClick={settleIntraday}>SETTLE INTRADAY</button>
       </div>
 
-      {pf && (
-        <div className="landing-stats">
-          <div className="landing-stat"><div className="k">PORTFOLIO</div><div className="v">{pf.name}</div></div>
-          <div className="landing-stat"><div className="k">EQUITY</div><div className="v" style={{ color: "var(--amber)" }}>{money(pf.equity)}</div></div>
-          <div className="landing-stat"><div className="k">CASH</div><div className="v">{money(pf.cash)}</div></div>
-          <div className="landing-stat"><div className="k">TOTAL P&L</div><div className="v" style={{ color: pf.total_pnl >= 0 ? "var(--bull)" : "var(--bear)" }}>{money(pf.total_pnl)} ({num(pf.day_pct).toFixed(2)}%)</div></div>
-          <div className="landing-stat"><div className="k">GROSS / NET</div><div className="v">{money(pf.gross_exposure)} / {money(pf.net_exposure)}</div></div>
-          <div className="landing-stat"><div className="k">POSITIONS</div><div className="v">{pf.open_positions}</div></div>
-          <div className="landing-stat"><div className="k">LEVERAGE</div><div className="v">{num(pf.leverage).toFixed(1)}x</div></div>
-          <div className="landing-stat"><div className="k">REALIZED</div><div className="v" style={{ color: pf.realized_pnl >= 0 ? "var(--bull)" : "var(--bear)" }}>{money(pf.realized_pnl)}</div></div>
-        </div>
-      )}
+      {showNewPortfolio && <form className="paper-new-portfolio" onSubmit={(e) => { e.preventDefault(); createPortfolio(); }}>
+        <div><strong>Create a portfolio</strong><span>Choose your own starting amount and currency.</span></div>
+        <label>Portfolio name<input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. My practice account" autoFocus /></label>
+        <div className="paper-number-field"><label htmlFor="paper-new-balance">Starting balance</label><NumberInput id="paper-new-balance" stepperLabel="starting balance" stepperStep={1000} min="0.01" step="0.01" value={newBalance} onChange={(e) => setNewBalance(e.target.value)} placeholder="Enter amount" /></div>
+        <label>Currency<select value={newCurrency || defaultCurrency} onChange={(e) => setNewCurrency(e.target.value)}>{currencyOptions.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
+        <button className="primary" disabled={busy || !newName.trim() || !(Number(newBalance) > 0)}>Create</button>
+      </form>}
 
-      <div className="landing-h" style={{ marginTop: 14 }}>POSITIONS
-        <button className="ghost" style={{ marginLeft: 12, padding: "2px 8px", fontSize: 10 }} disabled={busy || !activeId} onClick={endSession}>END SESSION (LIQUIDATE ALL)</button>
+      <div className="paper-workspace-hero">
+        <section className="paper-account-hero" aria-label="Portfolio balance">
+          <div className="paper-hero-label"><span>PORTFOLIO VALUE</span><span className="paper-sim-badge">SIMULATED</span></div>
+          <div className="paper-hero-balance">{pf ? amount(pf.equity, pf.currency) : "—"}<small>{pf?.currency || ""}</small></div>
+          <div className="paper-hero-metrics">
+            <div><span>Available cash</span><strong>{pf ? amount(pf.cash, pf.currency) : "—"}</strong></div>
+            <div><span>Total return</span><strong className={num(pf?.total_pnl) >= 0 ? "up" : "down"}>{pf ? money(pf.total_pnl) : "—"}</strong></div>
+            <div><span>Positions</span><strong>{pf?.open_positions ?? "—"}</strong></div>
+          </div>
+          {canConfigure ? (
+            <form className="paper-capital-form" onSubmit={configurePortfolio}>
+              <div><strong>Make it your account</strong><span>Set the starting amount before your first order.</span></div>
+              <div className="paper-number-field"><label htmlFor="paper-starting-balance">Starting balance</label><NumberInput id="paper-starting-balance" stepperLabel="starting balance" stepperStep={1000} min="0.01" step="0.01" value={startingBalance} onChange={(e) => setStartingBalance(e.target.value)} /></div>
+              <label>Currency<select value={startingCurrency || pf.currency} onChange={(e) => setStartingCurrency(e.target.value)}>{currencyOptions.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
+              <button type="submit" disabled={busy || !hasCapitalChange || !(Number(startingBalance) > 0)}>Save balance</button>
+            </form>
+          ) : <div className="paper-capital-locked">Starting balance is locked after the first order. Use <button type="button" onClick={() => setShowNewPortfolio(true)}>New portfolio</button> for a fresh account.</div>}
+        </section>
+
+        <section className="paper-trade-card" aria-label="Find a stock to trade">
+          <div className="paper-trade-card-head"><span className="paper-eyebrow">YOUR NEXT MOVE</span><h3>{pf?.open_positions ? "Find your next trade" : "Start with a stock"}</h3><p>Choose a market and enter a symbol. Review the price, quantity, and order type before placing a simulated order.</p></div>
+          <form className="paper-trade-search" onSubmit={startTrade}>
+            <label>Market<select aria-label="Market" value={selectedMarket} onChange={(e) => setTradeMarket(e.target.value)}>{markets?.map((m) => <option key={m.code} value={m.code}>{m.code} · {m.currency}</option>)}</select></label>
+            <label>Stock symbol<input ref={symbolInput} aria-label="Stock symbol" value={tradeTicker} onChange={(e) => setTradeTicker(e.target.value)} placeholder="Type a ticker" autoComplete="off" /></label>
+            <button className="primary" disabled={!activeId || !tradeTicker.trim() || !selectedMarket}>Review trade <span aria-hidden="true">→</span></button>
+          </form>
+          {marketPicks.length > 0 && <div className="paper-market-picks"><div className="paper-market-picks-title">From {selectedMarket} market</div>{marketPicks.map((row) => <button type="button" key={`${row.market}:${row.ticker}`} onClick={() => openPaperTicket({ market: row.market, ticker: row.ticker, company: row.company || row.ticker, action: "BUY", portfolio_id: activeId })}><strong>{row.ticker}</strong><span>{amount(row.close, defaultCurrency)}</span><small className={num(row.change_pct) >= 0 ? "up" : "down"}>{num(row.change_pct) > 0 ? "+" : ""}{(num(row.change_pct) * 100).toFixed(2)}%</small><span aria-hidden="true">→</span></button>)}</div>}
+        </section>
       </div>
+
+      <nav className="paper-view-tabs" aria-label="Paper trading views">
+        {[['holdings', 'Holdings'], ['orders', 'Orders'], ['history', 'History'], ['insights', 'Insights']].map(([key, label]) =>
+          <button key={key} type="button" className={view === key ? "active" : ""} aria-current={view === key ? "page" : undefined} onClick={() => setView(key)}>{label}{key === "holdings" ? ` (${pf?.positions?.length || 0})` : key === "orders" ? ` (${orders.length})` : ""}</button>
+        )}
+      </nav>
+
+      {view === "holdings" && <>
+
+      <div className="paper-section-heading"><div><span className="paper-eyebrow">YOUR PORTFOLIO</span><h3>Holdings & positions</h3></div>{pf?.positions?.length > 0 && <span>{pf.positions.length} open</span>}</div>
       {!pf?.positions?.length ? (
-        <div className="empty">NO OPEN POSITIONS — USE BUY/SELL ON ANY STOCK VIEW TO OPEN A SIMULATED TRADE.</div>
+        <div className="paper-empty-positions"><div className="paper-empty-mark">↗</div><div><strong>Nothing here yet. Your first trade changes that.</strong><p>Choose a stock, set a quantity, and see how your idea plays out without using real money.</p></div><button type="button" onClick={() => symbolInput.current?.focus()}>Find a stock <span aria-hidden="true">→</span></button></div>
       ) : (
-        <div className="paper-table">
+        <div className="paper-table paper-holdings-table">
           <div className="paper-row paper-row-head">
-            <span>SECURITY</span><span>SIDE</span><span>QTY</span><span>ENTRY</span><span>CURRENT</span><span>MV</span><span>UNREALIZED</span><span>MARGIN</span><span>PRODUCT</span><span>ACTIONS</span>
+            <span>Stock</span><span>Shares</span><span>Avg. price</span><span>Current</span><span>Value</span><span>Returns</span><span>Type</span><span>Action</span>
           </div>
           {pf.positions.map((p) => {
             const conv = entryConviction[`${p.market}:${p.ticker}`];
             return (
               <div className="paper-row" key={`${p.market}:${p.ticker}:${p.side}`}>
-                <span className="sym"><SecurityLink market={p.market} ticker={p.ticker}>{p.ticker}</SecurityLink></span>
-                <span className={p.side === "long" ? "up" : "down"}>{p.side.toUpperCase()}</span>
+                <span className="sym"><SecurityLink market={p.market} ticker={p.ticker}>{p.ticker}</SecurityLink><small>{p.market} · {p.side}</small></span>
                 <span>{p.quantity}</span>
                 <span>{num(p.entry_price).toFixed(4)}</span>
                 <span>{num(p.current_price).toFixed(4)}</span>
-                <span>{money(p.value)}</span>
+                <span>{amount(p.value)}</span>
                 <span style={{ color: p.unrealized_pnl >= 0 ? "var(--bull)" : "var(--bear)" }}>{money(p.unrealized_pnl)}</span>
-                <span>{money(p.held_margin)}</span>
-                <span className="dim">{p.product || "MIS"}{conv != null ? ` · ${Math.round(conv * 100)}%` : ""}</span>
+                <span className="dim">{p.product === "CNC" ? "Delivery" : "Intraday"}{conv != null ? ` · ${Math.round(conv * 100)}%` : ""}</span>
                 <span className="paper-actions">
-                  <button className="paper-buy" onClick={() => openT(p, "buy")}>BUY</button>
-                  <button className="paper-short" onClick={() => openT(p, "sell")}>SELL</button>
+                  <button className="paper-buy" onClick={() => openT(p, p.side === "short" ? "COVER" : "BUY")}>{p.side === "short" ? "Cover" : "Buy"}</button>
+                  <button className="paper-short" onClick={() => openT(p, "CLOSE")}>Exit</button>
                 </span>
               </div>
             );
           })}
         </div>
       )}
+      </>}
 
-      <div className="landing-h" style={{ marginTop: 14 }}>ORDER BOOK</div>
+      {view === "orders" && <>
+      <div className="landing-h" style={{ marginTop: 14 }}>Orders</div>
       {!orders.length ? (
-        <div className="empty">NO ORDERS YET.</div>
+        <div className="empty">No orders yet. Place a practice trade to get started.</div>
       ) : (
-        <div className="paper-table">
+        <div className="paper-table paper-orders-table">
           <div className="paper-row paper-row-head"><span>TIME</span><span>SIDE</span><span>TYPE</span><span>SECURITY</span><span>QTY</span><span>FILLED</span><span>AVG</span><span>STATUS</span><span></span></div>
           {orders.slice(0, 40).map((o) => (
             <div className="paper-row" key={o.id}>
@@ -310,15 +397,17 @@ export default function PaperTab() {
           ))}
         </div>
       )}
+      </>}
 
-      <div className="landing-h" style={{ marginTop: 14 }}>EQUITY</div>
+      {view === "history" && <>
+      <div className="landing-h" style={{ marginTop: 14 }}>Portfolio value over time</div>
       <Sparkline points={equity} />
 
-      <div className="landing-h" style={{ marginTop: 14 }}>TRADE HISTORY</div>
+      <div className="landing-h" style={{ marginTop: 14 }}>Completed trades</div>
       {!trades.length ? (
         <div className="empty">NO SIMULATED TRADES YET.</div>
       ) : (
-        <div className="paper-table">
+        <div className="paper-table paper-trades-table">
           <div className="paper-row paper-row-head"><span>TIME</span><span>SIDE</span><span>SECURITY</span><span>QTY @ PRICE</span><span>FEE</span><span>P&L</span></div>
           {trades.slice(0, 40).map((t) => (
             <div className="paper-row" key={t.id}>
@@ -332,7 +421,9 @@ export default function PaperTab() {
           ))}
         </div>
       )}
+      </>}
 
+      {view === "insights" && <>
       <div className="landing-h" style={{ marginTop: 14 }}>TRADE STATS (REALIZED)</div>
       {!stats || stats.total_trades < 3 ? (
         <div className="empty" style={{ padding: 20 }}>TOO FEW CLOSED TRADES ({stats?.total_trades || 0}) — STATS SHOWN AFTER 3+.</div>
@@ -371,7 +462,7 @@ export default function PaperTab() {
       )}
 
       <div className="landing-h" style={{ marginTop: 14 }}>PAPER TRADING LEADERBOARD</div>
-      <div className="paper-table">
+      <div className="paper-table paper-leaderboard-table">
         <div className="paper-row paper-row-head"><span>RANK</span><span>TRADER</span><span>EQUITY</span><span>RETURN</span><span>POS</span><span>TRADES</span></div>
         {(board?.rows || []).map((r) => (
           <div className="paper-row" key={r.name}>
@@ -385,7 +476,18 @@ export default function PaperTab() {
         ))}
       </div>
       {board?.demo_label && <div className="team-note">{board.demo_label}</div>}
-      <div className="team-note" style={{ marginTop: 8 }}>PAPER TRADING — SIMULATION ONLY. NO REAL ORDERS, NO REAL MONEY. Leverage/margin/fees are configurable simulation assumptions.</div>
+      </>}
+
+      <details className="paper-settings">
+        <summary>Session controls</summary>
+        <div className="controls">
+          <button className="ghost" disabled={busy || !activeId} onClick={settleIntraday}>Settle intraday</button>
+          <button className="ghost" disabled={busy || !activeId} onClick={endSession}>End session & liquidate</button>
+          <button className="ghost" disabled={busy || !activeId} onClick={resetPortfolio}>Reset portfolio</button>
+          <button className="ghost" disabled={busy || !activeId} onClick={removePortfolio}>Delete portfolio</button>
+        </div>
+      </details>
+      <div className="team-note" style={{ marginTop: 8 }}>Paper trading is a simulation. No real orders or money are used.</div>
     </>
   );
 }

@@ -141,6 +141,26 @@ CREATE TABLE IF NOT EXISTS price_snapshots (
     UNIQUE(market, ticker, fetched_at)
 );
 
+-- Canonical normalized market events. Payloads are immutable JSON snapshots;
+-- event_id makes refresh delivery idempotent across process restarts.
+CREATE TABLE IF NOT EXISTS market_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    exchange TEXT NOT NULL,
+    event_timestamp TEXT NOT NULL,
+    received_timestamp TEXT NOT NULL,
+    source TEXT NOT NULL,
+    sequence INTEGER NOT NULL DEFAULT 0,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_market_events_symbol_time
+ON market_events(symbol, event_timestamp, sequence, event_id);
+CREATE INDEX IF NOT EXISTS idx_market_events_type_time
+ON market_events(event_type, event_timestamp);
+
 CREATE TABLE IF NOT EXISTS verdicts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     market TEXT NOT NULL,
@@ -2092,6 +2112,93 @@ class Database:
                 ).fetchall()
             return [dict(r) for r in rows]
 
+    def append_market_event(self, event: Any) -> bool:
+        """Append one normalized event exactly once, preserving its envelope."""
+        with self.connect() as conn:
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO market_events
+                   (event_id, event_type, symbol, exchange, event_timestamp,
+                    received_timestamp, source, sequence, payload_json,
+                    metadata_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    event.event_id,
+                    event.event_type,
+                    event.symbol.upper(),
+                    event.exchange.upper(),
+                    event.event_timestamp,
+                    event.received_timestamp,
+                    event.source,
+                    int(event.sequence),
+                    json.dumps(dict(event.payload), sort_keys=True),
+                    json.dumps(dict(event.metadata), sort_keys=True),
+                    event.received_timestamp,
+                ),
+            )
+            return cur.rowcount == 1
+
+    def market_events(
+        self,
+        symbol: str = "",
+        from_timestamp: str = "",
+        to_timestamp: str = "",
+        types: Any = None,
+        limit: int = 500,
+        descending: bool = False,
+    ) -> list[Any]:
+        """Read normalized events in deterministic timestamp/sequence order."""
+        from .market.events import MarketEvent
+
+        clauses = ["1=1"]
+        args: list[Any] = []
+        if symbol:
+            clauses.append("symbol = ?")
+            args.append(symbol.upper())
+        if from_timestamp:
+            clauses.append("event_timestamp >= ?")
+            args.append(from_timestamp)
+        if to_timestamp:
+            clauses.append("event_timestamp <= ?")
+            args.append(to_timestamp)
+        wanted = [str(item).upper() for item in types] if types else []
+        if wanted:
+            placeholders = ",".join("?" for _ in wanted)
+            clauses.append(f"event_type IN ({placeholders})")
+            args.extend(wanted)
+        args.append(max(1, min(int(limit), 5000)))
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""SELECT * FROM market_events WHERE {' AND '.join(clauses)}
+                    ORDER BY event_timestamp {"DESC" if descending else "ASC"},
+                             sequence {"DESC" if descending else "ASC"},
+                             event_id {"DESC" if descending else "ASC"} LIMIT ?""",
+                args,
+            ).fetchall()
+        out = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except (TypeError, ValueError):
+                payload = {}
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (TypeError, ValueError):
+                metadata = {}
+            out.append(MarketEvent(
+                event_id=row["event_id"], event_type=row["event_type"],
+                symbol=row["symbol"], exchange=row["exchange"],
+                event_timestamp=row["event_timestamp"],
+                received_timestamp=row["received_timestamp"],
+                source=row["source"], sequence=int(row["sequence"]),
+                payload=payload if isinstance(payload, dict) else {},
+                metadata=metadata if isinstance(metadata, dict) else {},
+            ))
+        return out
+
+    def latest_market_event(self, symbol: str, event_type: str = "QUOTE") -> Any | None:
+        events = self.market_events(symbol=symbol, types=[event_type], limit=1, descending=True)
+        return events[0] if events else None
+
     def latest_index_snapshots(self, market: str | None = None) -> list[dict[str, Any]]:
         with self.connect() as conn:
             if market:
@@ -2140,16 +2247,28 @@ class Database:
             )
 
     def get_price_history(
-        self, symbol: str, range_key: str
+        self,
+        symbol: str,
+        range_key: str,
+        max_age_s: float | None = None,
     ) -> list[dict[str, Any]] | None:
         self._ensure_price_history()
         with self.connect() as conn:
             row = conn.execute(
-                "SELECT payload FROM price_history WHERE symbol = ? AND range_key = ?",
+                "SELECT fetched_at, payload FROM price_history WHERE symbol = ? AND range_key = ?",
                 (symbol.upper(), range_key),
             ).fetchone()
         if not row:
             return None
+        if max_age_s is not None:
+            try:
+                fetched_at = datetime.fromisoformat(row["fetched_at"])
+                if fetched_at.tzinfo is None:
+                    fetched_at = fetched_at.replace(tzinfo=UTC)
+                if (datetime.now(UTC) - fetched_at).total_seconds() > max_age_s:
+                    return None
+            except (TypeError, ValueError):
+                return None
         try:
             data = json.loads(row["payload"])
         except (ValueError, TypeError):

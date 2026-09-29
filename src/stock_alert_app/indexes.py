@@ -226,12 +226,17 @@ def _fetch_yahoo_direct(symbol: str, range_key: str) -> Any | None:
 
 def _df_to_rows(df: Any) -> list[dict[str, Any]]:
     """Convert a yfinance DataFrame into the chart row shape used by the UI."""
+    try:
+        df = df.loc[~df.index.duplicated(keep="last")].sort_index()
+    except (AttributeError, TypeError):
+        return []
     rows: list[dict[str, Any]] = []
     closes: list[float | None] = []
     for _, row in df.iterrows():
         close = row.get("Close")
         try:
-            closes.append(float(close) if close is not None else None)
+            value = float(close) if close is not None else None
+            closes.append(value if value is not None and math.isfinite(value) else None)
         except (TypeError, ValueError):
             closes.append(None)
     for position, (idx, row) in enumerate(df.iterrows()):
@@ -254,7 +259,7 @@ def _df_to_rows(df: Any) -> list[dict[str, Any]]:
 
         rows.append(
             {
-                "date": idx.strftime("%Y-%m-%d %H:%M"),
+                "date": idx.isoformat(),
                 "open": round(open_, 4),
                 "high": round(high, 4),
                 "low": round(low, 4),
@@ -290,12 +295,31 @@ def index_history(
     if cached and now - cached[0] < _HISTORY_TTL:
         return cached[1]
 
+    try:
+        stored = Database(settings.db_path).get_price_history(
+            symbol,
+            range_key,
+            max_age_s=_HISTORY_TTL,
+        )
+    except Exception as exc:
+        logger.warning("Failed to read fresh cached price history for %s: %s", symbol, exc)
+        stored = None
+    if stored:
+        _HISTORY_CACHE[cache_key] = (now, stored)
+        return stored
+
     candidates = _RANGE_FALLBACKS.get(range_key, _RANGE_FALLBACKS["1mo"])
     df = None
     from .price_providers import fetch_ohlcv
 
+    request_priority = "chart" if priority == "foreground" else priority
     for period, interval in candidates:
-        df = fetch_ohlcv(symbol, period=period, interval=interval, priority=priority)
+        df = fetch_ohlcv(
+            symbol,
+            period=period,
+            interval=interval,
+            priority=request_priority,
+        )
         if df is not None and not getattr(df, "empty", True):
             break
     rows = _df_to_rows(df) if df is not None else []

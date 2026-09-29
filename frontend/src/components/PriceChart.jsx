@@ -251,6 +251,7 @@ export default function PriceChart({
   const rsiCanvas = useRef(null);
   const macdCanvas = useRef(null);
   const charts = useRef({ main: null, rsi: null, macd: null });
+  const lastRowsKey = useRef("");
   const dataExtent = useRef(null);
   const dragRef = useRef(null);
   const [visible, setVisible] = useState(false);
@@ -286,26 +287,43 @@ export default function PriceChart({
   useEffect(() => {
     if (!visible) return undefined;
     let cancelled = false;
+    let firstLoad = true;
+    let requestId = 0;
+    lastRowsKey.current = "";
     setLoading(true);
     setError(false);
     setRows(null);
     setView(null);
-    fetchJSON(url)
-      .then((payload) => {
-        if (cancelled) return;
-        const parsed = parseRows(payload.data);
-        if (!parsed.length) setError(true);
-        else setRows(parsed);
-        setLoading(false);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setError(true);
-          setLoading(false);
-        }
-      });
-    return () => { cancelled = true; };
-  }, [url, visible, refreshKey]);
+    const load = () => {
+      const currentRequest = ++requestId;
+      fetchJSON(url)
+        .then((payload) => {
+          if (cancelled || currentRequest !== requestId) return;
+          const parsed = parseRows(payload.data);
+          if (parsed.length) {
+            const key = JSON.stringify(parsed.map((r) => [r.time.getTime(), r.open, r.high, r.low, r.close, r.volume]));
+            if (key !== lastRowsKey.current) {
+              lastRowsKey.current = key;
+              setRows(parsed);
+            }
+            setError(false);
+          } else if (firstLoad) setError(true);
+          if (firstLoad) setLoading(false);
+          firstLoad = false;
+        })
+        .catch(() => {
+          if (cancelled || currentRequest !== requestId) return;
+          if (firstLoad) {
+            setError(true);
+            setLoading(false);
+          }
+          firstLoad = false;
+        });
+    };
+    load();
+    const interval = setInterval(load, 30000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [url, visible]);
 
   // Rebuild all charts when data or config changes.
   useEffect(() => {

@@ -12,6 +12,7 @@ import pytest
 
 from stock_alert_app import replay
 from stock_alert_app.db import Database
+from stock_alert_app.market import SQLiteEventStore, event_from_bar
 
 
 def _db(tmp_path):
@@ -92,6 +93,26 @@ def _run(db, **kw):
 
 
 class TestReplayEngine:
+    def test_replay_uses_persisted_candles_when_provider_is_empty(self, tmp_path, monkeypatch):
+        db = _db(tmp_path)
+        bars = _bars_from_closes(_osc_closes())
+        store = SQLiteEventStore(db)
+        for bar in bars:
+            store.append(event_from_bar({**bar, "timeframe": "1d"}, "NYSE", "TEST"))
+
+        class _EmptySource:
+            error = "provider unavailable"
+
+            def as_dict(self):
+                return {"status": "NO_DATA", "provider": "", "rows": [], "error": self.error}
+
+        monkeypatch.setattr(replay, "_load_dataset", lambda *args: ([], _EmptySource()))
+        monkeypatch.setattr(replay, "_load_regime_rows", lambda *args, **kwargs: [])
+        result = _run(db)
+        assert result["status"] == "ok"
+        assert result["data_source"]["provider"] == "event_store"
+        assert result["replay_events"]
+
     def test_user_defined_dates_respected(self, tmp_path, patch_data):
         bars = _bars_from_closes(_osc_closes())
         patch_data(bars)

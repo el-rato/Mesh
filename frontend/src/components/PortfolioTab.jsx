@@ -20,7 +20,7 @@ function agreement(analysis) {
   return `${sigs.filter((s) => s.available).length}/5`;
 }
 
-export default function PortfolioTab() {
+export default function PortfolioTab({ marketRows = [] }) {
   const { refreshToken, openDrawer, openPaperTicket, removeFromPortfolio } = useApp();
   const [tracked, setTracked] = useState(null);
   const [analysisMap, setAnalysisMap] = useState({});
@@ -51,20 +51,21 @@ export default function PortfolioTab() {
   const rows = useMemo(() => {
     return (tracked || []).map((w) => {
       const a = analysisMap[`${w.market}:${w.ticker}`] || {};
+      const live = marketRows.find((item) => item.market === w.market && item.ticker === w.ticker);
       return {
         market: w.market,
         ticker: w.ticker,
         company: w.company || a.company || "",
         verdict: a.verdict || w.verdict,
         confidence: a.confidence ?? w.confidence,
-        close: a.close,
+        close: live?.close ?? w.close ?? a.close,
         momentum: a.momentum_20,
         agreement: agreement(a),
         status: a.data_status || "ok",
         decided_at: a.updated_at || w.decided_at || "",
       };
     });
-  }, [tracked, analysisMap]);
+  }, [tracked, analysisMap, marketRows]);
 
   if (error && !tracked) return <div className="error">ERROR: {error}</div>;
   if (!tracked) return <div className="empty">LOADING PORTFOLIO…</div>;

@@ -14,6 +14,7 @@ export default function SearchBox() {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
   const [open, setOpen] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState(0);
   const boxRef = useRef(null);
 
   useEffect(() => {
@@ -30,6 +31,7 @@ export default function SearchBox() {
       fetchJSON(`/api/search?q=${encodeURIComponent(query)}`)
         .then((r) => {
           setResults(Array.isArray(r) ? r : []);
+          setSelectedIndex(0);
           setSearching(false);
         })
         .catch((e) => {
@@ -40,6 +42,10 @@ export default function SearchBox() {
     }, 250);
     return () => clearTimeout(t);
   }, [q]);
+
+  useEffect(() => {
+    setSelectedIndex((index) => Math.max(0, Math.min(index, Math.max(0, (results?.length || 1) - 1))));
+  }, [results]);
 
   useEffect(() => {
     const onDoc = (e) => {
@@ -90,10 +96,19 @@ export default function SearchBox() {
         }}
         onFocus={() => hasQuery && setOpen(true)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && results && results.length) choose(results[0]);
+          if (e.key === "ArrowDown" && results?.length) {
+            e.preventDefault();
+            setSelectedIndex((index) => Math.min(index + 1, results.length - 1));
+          }
+          if (e.key === "ArrowUp" && results?.length) {
+            e.preventDefault();
+            setSelectedIndex((index) => Math.max(index - 1, 0));
+          }
+          if (e.key === "Enter" && results && results.length) choose(results[selectedIndex] || results[0]);
           if (e.key === "Escape") setOpen(false);
         }}
         aria-label="Search stocks"
+        aria-activedescendant={results?.[selectedIndex] ? `search-result-${selectedIndex}` : undefined}
       />
       {open && hasQuery && (
         <div className="search-drop">
@@ -103,15 +118,18 @@ export default function SearchBox() {
             <div className="search-msg">NO MATCHES FOR “{q.trim()}”</div>
           )}
           {!error && !searching && results && results.length > 0 && (
-            <div className="search-results">
-              {results.map((r) => {
+            <div className="search-results" role="listbox" aria-label="Asset matches">
+              {results.map((r, index) => {
                 const unsupported = r.supported === false;
                 return (
                   <div
                     key={`${r.market || ""}:${r.ticker || ""}:${r.symbol || ""}`}
-                    className={`search-item ${unsupported ? "disabled" : ""}`}
-                    role="button"
+                    id={`search-result-${index}`}
+                    className={`search-item ${unsupported ? "disabled" : ""} ${selectedIndex === index ? "active" : ""}`}
+                    role="option"
+                    aria-selected={selectedIndex === index}
                     tabIndex={unsupported ? -1 : 0}
+                    onMouseEnter={() => setSelectedIndex(index)}
                     onMouseDown={(e) => {
                       if (unsupported) return;
                       e.preventDefault();
@@ -157,6 +175,7 @@ export default function SearchBox() {
           )}
         </div>
       )}
+      {open && hasQuery && results?.length > 0 && <div className="search-hint">↑↓ MOVE <span>ENTER OPEN</span> <span>ESC CLOSE</span></div>}
     </div>
   );
 }

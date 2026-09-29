@@ -99,6 +99,14 @@ export async function paperSetBalance(portfolioId, balance) {
   });
 }
 
+export async function paperConfigurePortfolio(portfolioId, balance, currency) {
+  return fetchJSON(`/api/paper/portfolios/${encodeURIComponent(portfolioId)}/setup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ balance, currency }),
+  });
+}
+
 export async function paperSetMarketHours(portfolioId, enforce) {
   return fetchJSON(`/api/paper/portfolios/${encodeURIComponent(portfolioId)}/market-hours`, {
     method: "POST",
@@ -208,8 +216,8 @@ export async function paperEvaluate() {
   return fetchJSON("/api/paper/evaluate", { method: "POST" });
 }
 
-export async function simulate(params) {
-  return fetchJSON("/api/simulate", {
+export async function replay(params) {
+  return fetchJSON("/api/replay", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
@@ -261,6 +269,14 @@ export async function notificationsAck(keys) {
   });
 }
 
+export async function replaySeek(params) {
+  return fetchJSON("/api/replay/seek", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+}
+
 export async function priceAlerts() {
   return fetchJSON("/api/price-alerts");
 }
@@ -287,6 +303,14 @@ export async function deletePriceAlert(id) {
 
 export async function tickerStrip() {
   return fetchJSON("/api/ticker-strip");
+}
+
+export async function marketEvents(params = {}) {
+  const qs = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") qs.set(key, value);
+  });
+  return fetchJSON(`/api/market-events?${qs.toString()}`);
 }
 
 export async function watchlist() {

@@ -203,6 +203,36 @@ def test_background_requests_do_not_fall_through_to_on_demand_providers() -> Non
         coordinator.shutdown()
 
 
+def test_chart_requests_prefer_the_direct_yahoo_provider() -> None:
+    class YFinance(_Provider):
+        name = "yfinance"
+        chart_enabled = True
+        chart_priority = 1
+
+    class YahooChart(_Provider):
+        name = "yahoo_chart"
+        chart_enabled = True
+        chart_priority = 0
+
+    yfinance = YFinance()
+    yahoo_chart = YahooChart()
+    coordinator = RequestCoordinator(
+        [yfinance, yahoo_chart],
+        policies={
+            yfinance.name: ProviderPolicy(600, 1000, 20),
+            yahoo_chart.name: ProviderPolicy(600, 1000, 20),
+        },
+        max_retries=0,
+    )
+    try:
+        snapshot = coordinator.get_snapshot("AAPL", priority="chart")
+        assert snapshot.provider == "yahoo_chart"
+        assert yahoo_chart.calls == ["AAPL"]
+        assert yfinance.calls == []
+    finally:
+        coordinator.shutdown()
+
+
 def test_mesh_analysis_models_share_one_snapshot(monkeypatch) -> None:
     from stock_alert_app import signals, verdict
     from stock_alert_app.models import price_lstm

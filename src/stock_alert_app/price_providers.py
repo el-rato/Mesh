@@ -86,6 +86,8 @@ class PriceProvider:
     name: str = "base"
     supports_batch: bool = False
     background_enabled: bool = False
+    chart_enabled: bool = False
+    chart_priority: int = 100
     supported_intervals: frozenset[str] | None = None
 
     def fetch(self, symbol: str, period: str, interval: str) -> pd.DataFrame:  # pragma: no cover - interface
@@ -131,6 +133,8 @@ class YFinanceProvider(PriceProvider):
     name = "yfinance"
     supports_batch = True
     background_enabled = True
+    chart_enabled = True
+    chart_priority = 1
 
     def fetch(self, symbol: str, period: str, interval: str) -> pd.DataFrame:
         try:
@@ -200,7 +204,14 @@ class YahooChartProvider(PriceProvider):
     """
 
     name = "yahoo_chart"
-    supported_intervals = frozenset({"1d"})
+    chart_enabled = True
+    chart_priority = 0
+    supported_intervals = frozenset(
+        {
+            "1m", "2m", "5m", "15m", "30m", "60m", "90m",
+            "1h", "1d", "5d", "1wk", "1mo", "3mo",
+        }
+    )
 
     @staticmethod
     def _range(period: str) -> str:
@@ -213,7 +224,7 @@ class YahooChartProvider(PriceProvider):
     def fetch(self, symbol: str, period: str, interval: str) -> pd.DataFrame:
         url = (
             "https://query1.finance.yahoo.com/v8/finance/chart/"
-            f"{symbol}?range={self._range(period)}&interval=1d"
+            f"{symbol}?range={self._range(period)}&interval={interval.lower()}"
         )
         try:
             import json
@@ -234,7 +245,7 @@ class YahooChartProvider(PriceProvider):
                     "Close": q.get("close") or [],
                     "Volume": q.get("volume") or [],
                 },
-                index=pd.to_datetime(pd.Series(ts), unit="s"),
+                index=pd.to_datetime(pd.Series(ts), unit="s", utc=True),
             )
             df = df.dropna(subset=["Close"])
             if df.empty or len(df) < 2:

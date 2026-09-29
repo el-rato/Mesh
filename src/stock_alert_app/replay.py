@@ -18,6 +18,7 @@ A trader operates the terminal during a user-defined historical period:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -29,6 +30,7 @@ import pandas as pd
 from . import historical
 from .config import settings
 from .db import Database
+from .market import InMemoryEventStore, SQLiteEventStore, event_from_bar
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +80,38 @@ def _load_regime_rows(db: Database, market: str, start: str, end: str) -> list[d
     except Exception as exc:
         logger.warning("Replay regime preload failed for %s: %s", market, exc)
         return []
+
+
+def _stored_candle_rows(db: Database, market: str, ticker: str, timeframe: str) -> list[dict[str, Any]]:
+    """Recover normalized candles when the provider chain is temporarily unavailable."""
+    try:
+        from .market import SQLiteEventStore
+
+        events = SQLiteEventStore(db).get_events(symbol=ticker, types=["CANDLE"], limit=5000)
+    except Exception as exc:
+        logger.warning("Stored replay event load failed for %s:%s: %s", market, ticker, exc)
+        return []
+    rows: list[dict[str, Any]] = []
+    for event in events:
+        if event.exchange != market.upper():
+            continue
+        stored_timeframe = str(event.metadata.get("timeframe") or "")
+        if stored_timeframe and stored_timeframe != timeframe:
+            continue
+        payload = event.payload
+        if not all(key in payload for key in ("open", "high", "low", "close")):
+            continue
+        stored_timestamp = datetime.fromisoformat(event.event_timestamp.replace("Z", "+00:00")).replace(tzinfo=None)
+        rows.append({
+            "date": stored_timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "open": payload["open"],
+            "high": payload["high"],
+            "low": payload["low"],
+            "close": payload["close"],
+            "volume": payload.get("volume", 0),
+            "timeframe": stored_timeframe or timeframe,
+        })
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -853,12 +887,47 @@ def run(
     rows, source = _load_dataset(db, market, ticker, timeframe, start, end)
     data_source = source.as_dict() if source else {"status": "error", "provider": "", "rows": []}
     if not rows:
+        rows = _stored_candle_rows(db, market, ticker, timeframe)
+        if rows:
+            source = None
+            data_source = {
+                "status": "STORED",
+                "provider": "event_store",
+                "rows": rows,
+                "requested_start": start,
+                "requested_end": end,
+                "timeframe": timeframe,
+                "fallback_used": True,
+                "error": "",
+            }
+    if not rows:
         return {
             "status": "no_data",
             "security_id": f"{market}:{ticker}",
             "reason": (source.error or "no provider returned data for the requested range") if source else "no provider returned data",
             "data_source": data_source,
         }
+
+    # The historical provider output becomes the canonical replay stream at
+    # one seam. The UI and future live consumers never need provider fields.
+    normalized_events = [
+        event_from_bar(
+            {**row, "timeframe": timeframe},
+            market,
+            ticker,
+            source=(getattr(source, "provider", "") or "historical"),
+        )
+        for row in rows
+    ]
+    event_store = SQLiteEventStore(db)
+    for event in normalized_events:
+        event_store.append(event)
+    candle_events = [
+        event for event in event_store.get_events(symbol=ticker, types=["CANDLE"], limit=5000)
+        if event.exchange == market.upper()
+        and event.metadata.get("timeframe", timeframe) in ("", timeframe)
+    ]
+    candle_events = InMemoryEventStore(candle_events).get_events(symbol=ticker)
 
     df = _indicator_frame(rows)
     if len(df) < _MIN_HISTORY_BARS:
@@ -886,7 +955,20 @@ def run(
         short_margin=float(settings.paper_short_margin),
     )
 
-    run_id = f"RP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{ticker.upper()}"
+    replay_fingerprint = json.dumps({
+        "market": market.upper(),
+        "ticker": ticker.upper(),
+        "start": start,
+        "end": end,
+        "timeframe": timeframe,
+        "decision_interval": decision_interval,
+        "capital": float(capital),
+        "bull_threshold": float(bull_threshold),
+        "bear_threshold": float(bear_threshold),
+        "size_ratio": float(size_ratio),
+        "events": [event.event_id for event in candle_events],
+    }, sort_keys=True, separators=(",", ":"))
+    run_id = "RP-" + hashlib.sha256(replay_fingerprint.encode()).hexdigest()[:20]
     decisions: list[dict[str, Any]] = []
     gbm_cache: dict[str, Any] = {}
     n = len(df)
@@ -1048,4 +1130,60 @@ def run(
         **summary,
         "equity_curve": [{"t": d["ts"], "equity": d["equity"]} for d in decisions],
         "decisions_log": decisions,
+        "replay_events": [
+            event.to_dict() for event in candle_events
+            if start_dt <= datetime.fromisoformat(event.event_timestamp.replace("Z", "+00:00")).replace(tzinfo=None) <= end_dt + timedelta(days=1)
+        ],
+    }
+
+
+def seek(
+    db: Database,
+    market: str,
+    ticker: str,
+    start: str,
+    end: str,
+    timestamp: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Reconstruct replay state at a timestamp by replaying from the origin.
+
+    Seeking never mutates the persisted paper portfolio. Re-running the same
+    dataset and parameters produces the same causal state as continuous play.
+    """
+    result = run(db, market, ticker, start, end, store=False, **kwargs)
+    if result.get("status") != "ok":
+        return result
+    try:
+        target = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00")).replace(tzinfo=None)
+    except (TypeError, ValueError):
+        return {"status": "error", "reason": "timestamp must be ISO-8601"}
+    decisions = [
+        decision for decision in result["decisions_log"]
+        if datetime.fromisoformat(str(decision["ts"]).replace("Z", "+00:00")).replace(tzinfo=None) <= target
+    ]
+    if decisions:
+        portfolio = decisions[-1]["portfolio_after"]
+    else:
+        portfolio = {
+            "ts": timestamp,
+            "cash": result["starting_capital"],
+            "equity": result["starting_capital"],
+            "position_direction": None,
+            "position_qty": 0.0,
+            "realized_pnl": 0.0,
+            "exposure_pct": 0.0,
+            "gross_exposure": 0.0,
+        }
+    return {
+        "status": "ok",
+        "mode": "replay",
+        "run_id": result["run_id"],
+        "current_time": timestamp,
+        "cursor": len(decisions),
+        "portfolio": portfolio,
+        "released_event_ids": [
+            event["eventId"] for event in result.get("replay_events", [])
+            if str(event["eventTimestamp"]).replace("Z", "") <= str(timestamp).replace("Z", "")
+        ],
     }

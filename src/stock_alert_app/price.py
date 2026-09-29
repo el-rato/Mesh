@@ -156,6 +156,10 @@ def store_price_state(db: Database, state: PriceState) -> None:
         data_status=state.data_status,
         as_of=state.as_of,
     )
+    from .market import event_from_price_state
+    from .market.runtime import publish
+
+    publish(db, event_from_price_state(state))
 
 
 def _stale_from_snapshot(market_code: str, ticker: str, db: Database) -> PriceState | None:

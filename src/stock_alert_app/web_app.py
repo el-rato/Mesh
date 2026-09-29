@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -173,6 +173,11 @@ class PaperPortfolioCreate(BaseModel):
     exchange: str = ""
 
 
+class PaperPortfolioSetup(BaseModel):
+    balance: float
+    currency: str
+
+
 class ReplayRequest(BaseModel):
     market: str
     ticker: str
@@ -184,6 +189,10 @@ class ReplayRequest(BaseModel):
     bull_threshold: float = 70.0
     bear_threshold: float = 70.0
     size_ratio: float = 0.25
+
+
+class ReplaySeekRequest(ReplayRequest):
+    timestamp: str
 
 
 class AckRequest(BaseModel):
@@ -994,6 +1003,20 @@ def paper_set_balance(
     return paper.pt_get_portfolio(db, portfolio_id)
 
 
+@app.post("/api/paper/portfolios/{portfolio_id}/setup")
+def paper_setup_portfolio(
+    portfolio_id: str, body: PaperPortfolioSetup, user: dict = Depends(auth.current_user)
+) -> dict[str, object]:
+    from . import paper
+
+    db = _paper_db()
+    try:
+        pid = _resolve_portfolio(db, user["id"], portfolio_id)
+        return paper.pt_configure_portfolio(db, pid, body.balance, body.currency)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 @app.post("/api/paper/portfolios/{portfolio_id}/market-hours")
 def paper_set_market_hours(
     portfolio_id: str, body: dict[str, bool], user: dict = Depends(auth.current_user)
@@ -1211,8 +1234,8 @@ def paper_evaluate(force: bool = False, user: dict = Depends(auth.current_user))
     return paper.refresh_evaluations(_paper_db(), force=force)
 
 
-@app.post("/api/simulate")
-def simulate(body: ReplayRequest) -> dict[str, object]:
+@app.post("/api/replay")
+def replay_market(body: ReplayRequest) -> dict[str, object]:
     """Chronological historical replay (isolated; never touches the paper portfolio)."""
     from . import replay
 
@@ -1229,6 +1252,19 @@ def simulate(body: ReplayRequest) -> dict[str, object]:
         capital=body.capital,
         bull_threshold=body.bull_threshold,
         bear_threshold=body.bear_threshold,
+        size_ratio=body.size_ratio,
+    )
+
+
+@app.post("/api/replay/seek")
+def replay_seek(body: ReplaySeekRequest) -> dict[str, object]:
+    from . import replay
+
+    return replay.seek(
+        _db(), body.market, body.ticker, body.start_date, body.end_date,
+        body.timestamp, timeframe=body.timeframe,
+        decision_interval=body.decision_interval, capital=body.capital,
+        bull_threshold=body.bull_threshold, bear_threshold=body.bear_threshold,
         size_ratio=body.size_ratio,
     )
 
@@ -1292,6 +1328,71 @@ def ack_notifications(body: AckRequest) -> dict[str, object]:
     from . import notifications
 
     return notifications.ack(_db(), body.keys)
+
+
+@app.get("/api/market-events")
+def market_events(
+    ticker: str = "", from_timestamp: str = "", to_timestamp: str = "",
+    event_type: str = "", limit: int = 500,
+) -> list[dict[str, object]]:
+    """Persistent normalized event query for charts and portfolio consumers."""
+    types = [item for item in event_type.split(",") if item.strip()] if event_type else None
+    return [event.to_dict() for event in _db().market_events(
+        symbol=ticker, from_timestamp=from_timestamp, to_timestamp=to_timestamp,
+        types=types, limit=limit,
+    )]
+
+
+@app.get("/api/market-events/stream")
+async def market_event_stream(request: Request, ticker: str = "") -> StreamingResponse:
+    """Stream persisted normalized quotes, including events from other workers."""
+    from queue import Empty, Queue
+
+    db = _db()
+    seen = {
+        event.event_id
+        for event in db.market_events(symbol=ticker, types=["QUOTE"], limit=500, descending=True)
+    }
+    from .market.runtime import subscribe
+
+    pending: Queue = Queue()
+    unsubscribe = subscribe(symbol=ticker or None, types=["QUOTE"], handler=pending.put)
+
+    async def body():
+        nonlocal seen
+        try:
+            while not await request.is_disconnected():
+                try:
+                    event = await asyncio.to_thread(pending.get, True, 0.5)
+                except Empty:
+                    event = None
+                if event is not None and event.event_id not in seen:
+                    seen.add(event.event_id)
+                    payload = json.dumps(event.to_dict(), separators=(",", ":"))
+                    yield f"data: {payload}\n\n"
+                events = await asyncio.to_thread(
+                    db.market_events,
+                    ticker,
+                    "",
+                    "",
+                    ["QUOTE"],
+                    500,
+                    True,
+                )
+                fresh = [event for event in reversed(events) if event.event_id not in seen]
+                for event in fresh:
+                    seen.add(event.event_id)
+                    payload = json.dumps(event.to_dict(), separators=(",", ":"))
+                    yield f"data: {payload}\n\n"
+                if len(seen) > 5000:
+                    seen = {event.event_id for event in events}
+                if not fresh:
+                    await asyncio.sleep(0.05)
+        finally:
+            unsubscribe()
+            seen.clear()
+
+    return StreamingResponse(body(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive"})
 
 
 def _price_alert_view(db: Database, rule: dict[str, object]) -> dict[str, object]:
@@ -1536,6 +1637,11 @@ def get_watchlist() -> list[dict[str, object]]:
             "company": w["company"],
             "added_at": w["added_at"],
         }
+        quote = db.latest_market_event(w["ticker"], "QUOTE")
+        if quote and quote.exchange == str(w["market"]).upper():
+            item["close"] = quote.payload.get("price")
+            item["change_pct"] = quote.payload.get("change_pct")
+            item["price_timestamp"] = quote.event_timestamp
         row = latest.get((w["market"], w["ticker"].upper()))
         if row:
             analysis = stock_analysis(
@@ -2043,7 +2149,21 @@ def chart_data(
         m = markets.get(market.upper())
         suffix = m.yahoo_suffix if m else ""
         sym = f"{ticker.upper()}{suffix}"
-    rows = fetch_history(sym, range)
+    rows = list(fetch_history(sym, range))
+    # The historical chart remains the source for the series; the latest
+    # normalized quote event supplies the live edge without a second provider
+    # fetch or a separate quote transformation.
+    quote = _db().latest_market_event(ticker, "QUOTE")
+    if quote and quote.exchange == market.upper() and quote.payload.get("price"):
+        payload = quote.payload
+        rows.append({
+            "date": quote.event_timestamp,
+            "open": payload.get("open", payload["price"]),
+            "high": payload.get("high", payload["price"]),
+            "low": payload.get("low", payload["price"]),
+            "close": payload["price"],
+            "volume": payload.get("volume", 0),
+        })
     return {
         "market": market.upper(),
         "ticker": ticker.upper(),

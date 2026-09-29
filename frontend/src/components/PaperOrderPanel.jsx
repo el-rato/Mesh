@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { paperQuote, paperPortfolio, paperPlaceOrder, paperDecisions } from "../api.js";
+import { paperQuote, paperPortfolio, paperPortfolios, paperPlaceOrder, paperDecisions } from "../api.js";
 import { useApp } from "../App.jsx";
 import SecurityLink from "./SecurityLink.jsx";
+import NumberInput from "./NumberInput.jsx";
 
 function num(v, d = 0) {
   const n = Number(v);
@@ -27,13 +28,15 @@ export default function PaperOrderPanel({ ticket, onClose }) {
   const { refreshAll } = useApp();
   const [quote, setQuote] = useState(null);
   const [pf, setPf] = useState(null);
+  const [portfolios, setPortfolios] = useState([]);
+  const [portfolioId, setPortfolioId] = useState("");
   const [side, setSide] = useState("buy");
   const [orderType, setOrderType] = useState("market");
   const [qty, setQty] = useState("");
   const [price, setPrice] = useState("");
   const [stopPrice, setStopPrice] = useState("");
   const [reduceOnly, setReduceOnly] = useState(false);
-  const [product, setProduct] = useState("MIS");
+  const [product, setProduct] = useState("CNC");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [decision, setDecision] = useState(ticket?.decision || null);
@@ -41,24 +44,43 @@ export default function PaperOrderPanel({ ticket, onClose }) {
   const market = ticket?.market;
   const ticker = ticket?.ticker;
   const company = ticket?.company || ticker || "";
-  const portfolioId = ticket?.portfolio_id || "";
-
   useEffect(() => {
     if (!market || !ticker) return;
     setError("");
+    setQuote(null);
+    setPf(null);
+    setQty("");
+    setReduceOnly(false);
+    setProduct("CNC");
+    setPortfolioId("");
     setSide(sideFromAction(ticket?.action, null));
-    Promise.all([paperQuote(market, ticker), paperPortfolio(portfolioId)])
-      .then(([q, p]) => {
-        setQuote(q);
-        setPf(p);
-        const pos = (p.positions || []).find((x) => x.market === market && x.ticker === ticker);
-        setSide(sideFromAction(ticket?.action, pos));
-        const action = String(ticket?.action || "").toUpperCase();
-        if (pos && (action === "CLOSE" || (action === "SELL" && pos.side === "long") || (action === "COVER" && pos.side === "short"))) {
-          setReduceOnly(true);
-        }
-      })
-      .catch((e) => setError(e.message));
+    paperQuote(market, ticker).then((q) => { setQuote(q); if (q.price == null) setOrderType("limit"); }).catch((e) => setError(e.message));
+    paperPortfolios().then(async (list) => {
+      const accounts = list?.length ? list : [await paperPortfolio()].map((p) => ({ id: p.portfolio_id, name: p.name, currency: p.currency }));
+      setPortfolios(accounts);
+      const preferred = ticket?.portfolio_id || window.localStorage.getItem("paperPortfolioId");
+      setPortfolioId(accounts.some((p) => p.id === preferred) ? preferred : accounts[0].id);
+    }).catch((e) => setError(e.message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [market, ticker, ticket?.portfolio_id]);
+
+  useEffect(() => {
+    if (!market || !ticker || !portfolioId) return;
+    let active = true;
+    setPf(null);
+    paperPortfolio(portfolioId).then((p) => {
+      if (!active) return;
+      setPf(p);
+      window.localStorage.setItem("paperPortfolioId", p.portfolio_id);
+      const pos = (p.positions || []).find((x) => x.market === market && x.ticker === ticker);
+      const nextSide = sideFromAction(ticket?.action, pos);
+      setSide(nextSide);
+      const closing = pos && ((nextSide === "sell" && pos.side === "long") || (nextSide === "buy" && pos.side === "short"));
+      setReduceOnly(Boolean(closing));
+      setProduct(pos?.product || (nextSide === "sell" ? "MIS" : "CNC"));
+      setQty(String(ticket?.action || "").toUpperCase() === "CLOSE" && pos ? String(pos.quantity) : "");
+    }).catch((e) => { if (active) setError(e.message); });
+    return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [market, ticker, portfolioId]);
 
@@ -84,12 +106,21 @@ export default function PaperOrderPanel({ ticket, onClose }) {
   const position = (pf?.positions || []).find((x) => x.market === market && x.ticker === ticker);
   const priceNum = quote?.price;
   const q = num(qty, 0);
-  const refPrice = orderType === "limit" ? num(price, 0) : orderType === "stop" || orderType === "stop_limit" ? num(stopPrice, 0) : num(priceNum, 0);
-  const estValue = priceNum != null ? q * priceNum : null;
+  const refPrice = orderType === "limit" || orderType === "stop_limit" ? num(price, 0) : orderType === "stop" ? num(stopPrice, 0) : num(priceNum, 0);
+  const estValue = refPrice > 0 ? q * refPrice : null;
+  const closing = position && ((side === "sell" && position.side === "long") || (side === "buy" && position.side === "short"));
 
   function confirm() {
-    if (q <= 0) {
-      setError("enter a valid quantity");
+    if (!Number.isInteger(q) || q <= 0) {
+      setError("Enter a whole number of shares.");
+      return;
+    }
+    if (reduceOnly && (!closing || q > num(position.quantity))) {
+      setError("Closing quantity exceeds your open position.");
+      return;
+    }
+    if (side === "sell" && product === "CNC" && (!position || position.side !== "long" || q > num(position.quantity))) {
+      setError("Delivery sells need owned shares. Choose Intraday to short sell.");
       return;
     }
     if (orderType === "limit" && num(price, 0) <= 0) {
@@ -98,6 +129,10 @@ export default function PaperOrderPanel({ ticket, onClose }) {
     }
     if ((orderType === "stop" || orderType === "stop_limit") && num(stopPrice, 0) <= 0) {
       setError("stop order requires a stop price");
+      return;
+    }
+    if (orderType === "stop_limit" && num(price, 0) <= 0) {
+      setError("Stop-limit order requires a limit price.");
       return;
     }
     setBusy(true);
@@ -132,73 +167,71 @@ export default function PaperOrderPanel({ ticket, onClose }) {
       <div className="overlay open" onClick={onClose} />
       <aside className={`paper-order-panel ${isBuy ? "is-buy" : "is-sell"}`} role="dialog" aria-label="Paper order entry">
         <div className="paper-order-head">
-          <span className={`paper-order-title ${isBuy ? "bull" : "bear"}`}>ORDER ENTRY</span>
-          <button className="close" onClick={onClose} title="Close">✕</button>
+          <span className="paper-order-title">PAPER TRADE <small>· SIMULATED</small></span>
+          <button className="close" onClick={onClose} title="Close" aria-label="Close order ticket">✕</button>
         </div>
-
-        <div className="paper-side-tabs">
-          <button className={`side-tab ${isBuy ? "active buy" : ""}`} onClick={() => setSide("buy")}>BUY</button>
-          <button className={`side-tab ${!isBuy ? "active sell" : ""}`} onClick={() => setSide("sell")}>SELL</button>
-        </div>
-
         <div className="paper-order-sec">
           <SecurityLink market={market} ticker={ticker} className="symbol-lg">{ticker}</SecurityLink>
           <div className="dossier-company">{company} · {market}</div>
         </div>
 
+        <div className="paper-side-tabs">
+          <button className={`side-tab ${isBuy ? "active buy" : ""}`} onClick={() => { setSide("buy"); setReduceOnly(position?.side === "short"); setProduct(position?.product || "CNC"); }}>Buy</button>
+          <button className={`side-tab ${!isBuy ? "active sell" : ""}`} onClick={() => { setSide("sell"); setReduceOnly(position?.side === "long"); setProduct(position?.product || "MIS"); }}>Sell</button>
+        </div>
+
         {error && <div className="scan-warning">⚠ {error}</div>}
         {!quote ? (
           <div className="empty" style={{ padding: 24 }}>LOADING QUOTE…</div>
-        ) : quote.status === "no_data" ? (
-          <div className="empty" style={{ padding: 24 }}>NO_DATA — no valid market price for {market}:{ticker}.</div>
         ) : (
           <>
-            <div className="paper-info-row"><span>PRICE</span><strong>{num(priceNum).toFixed(4)}</strong></div>
-            <div className="paper-info-row">
-              <span>POSITION</span>
-              <strong>{position ? `${position.side.toUpperCase()} ${position.quantity} @ ${num(position.entry_price).toFixed(4)}` : "NONE"}</strong>
+            <div className="paper-quote"><span>Reference price</span><strong>{priceNum != null ? num(priceNum).toFixed(2) : "Unavailable"}</strong><small>Simulated quote · execution may differ</small></div>
+            {priceNum == null && <div className="team-note">A market order needs a price. You can still place a limit order.</div>}
+            <div className="field"><label htmlFor="paper-account">Trading portfolio</label>
+              <select id="paper-account" value={portfolioId} onChange={(e) => setPortfolioId(e.target.value)}>
+                {portfolios.length ? portfolios.map((p) => <option key={p.id} value={p.id}>{p.name} · {p.currency}</option>) : <option value={portfolioId}>{pf?.name || "Main"}</option>}
+              </select>
             </div>
-            <div className="paper-info-row"><span>CASH</span><strong>{num(pf?.cash).toFixed(2)}</strong></div>
+            <div className="paper-info-row"><span>Available cash</span><strong>{num(pf?.cash).toFixed(2)}</strong></div>
+            {position && <div className="paper-info-row"><span>Open position</span><strong>{position.side} · {position.quantity} shares</strong></div>}
+
+            <div className="field"><label htmlFor="paper-product">Trade type</label>
+              <select id="paper-product" value={product} onChange={(e) => setProduct(e.target.value)} disabled={Boolean(closing && reduceOnly)}>
+                <option value="CNC">Delivery · hold shares</option>
+                <option value="MIS">Intraday · session position</option>
+              </select>
+            </div>
+            {side === "sell" && !position && product === "CNC" && <div className="team-note">To open a short position, choose Intraday.</div>}
 
             <div className="field">
-              <label>ORDER TYPE</label>
-              <select value={orderType} onChange={(e) => setOrderType(e.target.value)}>
-                {ORDER_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+              <label htmlFor="paper-order-type">Order type</label>
+              <select id="paper-order-type" value={orderType} onChange={(e) => setOrderType(e.target.value)}>
+                {ORDER_TYPES.map((t) => <option key={t.key} value={t.key} disabled={t.key === "market" && priceNum == null}>{t.label}</option>)}
               </select>
             </div>
 
             <div className="field">
-              <label>QUANTITY</label>
-              <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="0" />
+              <label htmlFor="paper-qty">Quantity · shares</label>
+              <div className="paper-qty"><NumberInput id="paper-qty" stepperLabel="quantity" min="1" step="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="Enter quantity" />{closing && <button className="ghost" onClick={() => { setQty(String(position.quantity)); setReduceOnly(true); }}>Exit all</button>}</div>
             </div>
 
             {(orderType === "limit" || orderType === "stop_limit") && (
               <div className="field">
                 <label>LIMIT PRICE</label>
-                <input type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0.00" />
+                <NumberInput stepperLabel="limit price" stepperStep={1} min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0.00" />
               </div>
             )}
             {(orderType === "stop" || orderType === "stop_limit") && (
               <div className="field">
                 <label>STOP PRICE</label>
-                <input type="number" min="0" step="0.01" value={stopPrice} onChange={(e) => setStopPrice(e.target.value)} placeholder="0.00" />
+                <NumberInput stepperLabel="stop price" stepperStep={1} min="0" step="0.01" value={stopPrice} onChange={(e) => setStopPrice(e.target.value)} placeholder="0.00" />
               </div>
             )}
 
-            <div className="field">
-              <label>PRODUCT</label>
-              <select value={product} onChange={(e) => setProduct(e.target.value)} title="MIS = intraday (auto-squared at session close); CNC = delivery (carries forward)">
-                <option value="MIS">MIS · INTRADAY</option>
-                <option value="CNC">CNC · DELIVERY</option>
-              </select>
-            </div>
+            {closing && <label className="paper-check" title="Only reduce the existing position"><input type="checkbox" checked={reduceOnly} onChange={(e) => setReduceOnly(e.target.checked)} /> Close existing position only</label>}
 
-            <label className="paper-check" title="Only reduce an existing position; never open new exposure">
-              <input type="checkbox" checked={reduceOnly} onChange={(e) => setReduceOnly(e.target.checked)} /> REDUCE ONLY
-            </label>
-
-            <div className="paper-info-row"><span>EST. VALUE</span><strong>{estValue != null ? estValue.toFixed(2) : "—"}</strong></div>
-            <div className="paper-info-row"><span>REF (MARGIN)</span><strong>{refPrice > 0 ? refPrice.toFixed(4) : "—"}</strong></div>
+            <div className="paper-info-row paper-estimate"><span>Estimated order value</span><strong>{estValue != null ? estValue.toFixed(2) : "—"}</strong></div>
+            <div className="team-note">Estimate excludes simulated fees and margin. Market orders use the price available when submitted.</div>
 
             {decision && (
               <div className="paper-committee">
@@ -208,8 +241,8 @@ export default function PaperOrderPanel({ ticket, onClose }) {
               </div>
             )}
 
-            <button className={`paper-submit ${isBuy ? "buy" : "sell"}`} disabled={busy} onClick={confirm}>
-              {busy ? "SUBMITTING…" : `${isBuy ? "OPEN BUY" : "OPEN SELL"} ORDER`}
+            <button className={`paper-submit ${isBuy ? "buy" : "sell"}`} disabled={busy || !pf || !q || (orderType === "market" && priceNum == null)} onClick={confirm}>
+              {busy ? "Submitting…" : `${closing && reduceOnly ? "Close" : isBuy ? "Buy" : "Sell"} ${q > 0 ? `${q} shares` : "shares"}`}
             </button>
             <div className="team-note">SIMULATION ONLY — NO REAL ORDERS, NO REAL MONEY.</div>
           </>

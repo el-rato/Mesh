@@ -8,6 +8,7 @@ import {
 } from "../api.js";
 import { useApp } from "../App.jsx";
 import { StatusIndicator } from "./ui.jsx";
+import NumberInput from "./NumberInput.jsx";
 
 function money(value) {
   if (value == null) return "—";
@@ -208,12 +209,12 @@ export default function AlertsTab() {
                     <option value="below">At or below</option>
                   </select>
                 </label>
-                <label htmlFor="alert-target">
-                  <span>Target price</span>
-                  <input
+                <div className="alert-number-field">
+                  <label htmlFor="alert-target"><span>Target price</span></label>
+                  <NumberInput
                     id="alert-target"
                     ref={targetRef}
-                    type="number"
+                    stepperLabel="target price"
                     min="0.0001"
                     step="any"
                     inputMode="decimal"
@@ -227,7 +228,7 @@ export default function AlertsTab() {
                     aria-describedby={errors.target_price ? "alert-target-error" : undefined}
                   />
                   {errors.target_price && <small className="field-error" id="alert-target-error">{errors.target_price}</small>}
-                </label>
+                </div>
               </div>
             </fieldset>
             <label htmlFor="alert-note">

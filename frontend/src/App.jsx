@@ -8,7 +8,7 @@ import PortfolioTab from "./components/PortfolioTab.jsx";
 import ScannerTab from "./components/ScannerTab.jsx";
 import ScreenerTab from "./components/ScreenerTab.jsx";
 import FundsTab from "./components/FundsTab.jsx";
-import SimulationTab from "./components/SimulationTab.jsx";
+import ReplayTab from "./components/ReplayTab.jsx";
 import PaperTab from "./components/PaperTab.jsx";
 import PaperOrderPanel from "./components/PaperOrderPanel.jsx";
 import NewsTab from "./components/NewsTab.jsx";
@@ -23,6 +23,7 @@ import SecurityLink from "./components/SecurityLink.jsx";
 import PriceChart from "./components/PriceChart.jsx";
 import BreadthStrip from "./components/BreadthStrip.jsx";
 import MoversPanel from "./components/MoversPanel.jsx";
+import { buildTickerItems } from "./tickerTape.js";
 
 // Data-health chip state (kept out of context: only the footer reads it).
 function useDataHealth(enabled) {
@@ -55,7 +56,7 @@ const PRIMARY_TABS = [
 const SECONDARY_TABS = [
   { key: "news", fn: "F6", label: "NEWS" },
   { key: "screener", fn: "F7", label: "SCREENER" },
-  { key: "sim", fn: "F8", label: "SIM / BACKTEST" },
+  { key: "replay", fn: "F8", label: "REPLAY" },
   { key: "funds", fn: "F9", label: "HEDGE FUNDS" },
   { key: "workflows", fn: "F10", label: "WORKFLOWS" },
 ];
@@ -68,7 +69,7 @@ const TAB_COMPONENTS = {
   screener: ScreenerTab,
   paper: PaperTab,
   news: NewsTab,
-  sim: SimulationTab,
+  replay: ReplayTab,
   funds: FundsTab,
   workflows: WorkflowTab,
 };
@@ -455,22 +456,16 @@ function useClock() {
 }
 
 function TickerTape({ tickers }) {
-  const items = useMemo(() => {
-    const arr = [...(tickers || [])];
-    for (let i = arr.length - 1; i > 0; i -= 1) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-    return arr.slice(0, 60);
-  }, [tickers]);
+  const items = useMemo(() => buildTickerItems(tickers), [tickers]);
   if (!items.length) return <div className="ticker-tape" />;
   const duration = Math.max(60, items.length * 1.5);
-  const render = (s, i) => {
+  const render = (s, copy) => {
     const up = (s.change_pct ?? 0) >= 0;
     const sym = CURRENCY_SYMBOLS[s.currency] || "";
     const price = Number(s.close || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+    const key = s.security_id || `${s.market || ""}:${s.ticker || ""}`;
     return (
-      <SecurityLink key={i} market={s.market} ticker={s.ticker} className="tape-item" title={`Open Dossier ${s.security_id}`}>
+      <SecurityLink key={`${key}:${copy}`} market={s.market} ticker={s.ticker} className="tape-item" title={`Open Dossier ${s.security_id}`}>
         <span className="t">{s.security_id}</span>{" "}
         {sym}{price}{" "}
         {s.change_pct == null ? (
@@ -487,7 +482,7 @@ function TickerTape({ tickers }) {
   return (
     <div className="ticker-tape">
       <div className="tape-inner" style={{ animationDuration: `${duration}s` }}>
-        {[...items, ...items].map(render)}
+        {[0, 1].flatMap((copy) => items.map((item) => ({ item, copy }))).map(({ item, copy }) => render(item, copy))}
       </div>
     </div>
   );
@@ -836,6 +831,57 @@ export default function App() {
     return () => clearInterval(t);
   }, []);
 
+  // One live subscription fans normalized quote events into every market
+  // consumer. Updates are batched per frame so a broad refresh does not cause
+  // one React render per security.
+  useEffect(() => {
+    if (auth.status !== "authed") return undefined;
+    const pending = new Map();
+    let frame = 0;
+    const source = new EventSource(apiUrl("/api/market-events/stream"));
+    const flush = () => {
+      frame = 0;
+      if (!pending.size) return;
+      const updates = [...pending.values()];
+      pending.clear();
+      setTickers((current) => {
+        const next = [...current];
+        for (const event of updates) {
+          const payload = event.payload || {};
+          const index = next.findIndex((row) => row.market === event.exchange && row.ticker === event.symbol);
+          const patch = {
+            security_id: `${event.exchange}:${event.symbol}`,
+            market: event.exchange,
+            ticker: event.symbol,
+            close: payload.price,
+            change_pct: payload.change_pct,
+            price_date: event.eventTimestamp,
+            data_status: event.metadata?.dataStatus || "ready",
+          };
+          if (index >= 0) next[index] = { ...next[index], ...patch };
+          else next.push(patch);
+        }
+        return next;
+      });
+      setRefreshToken((value) => value + 1);
+      setLastUpdated(new Date());
+    };
+    source.onmessage = (message) => {
+      try {
+        const event = JSON.parse(message.data);
+        if (event.eventType !== "QUOTE") return;
+        pending.set(`${event.exchange}:${event.symbol}`, event);
+        if (!frame) frame = requestAnimationFrame(flush);
+      } catch {
+        // Keep the existing snapshot if one malformed stream message arrives.
+      }
+    };
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      source.close();
+    };
+  }, [auth.status]);
+
   const runBackgroundRefresh = useCallback(() => {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
@@ -955,6 +1001,22 @@ export default function App() {
     [market, markets, indexes, security, refreshToken, refreshStatus, theme, portfolioIds, addToPortfolio, removeFromPortfolio, inPortfolio, screenerPrefill, handleDrawerRequest, openDrawer, auth, openStandardTab]
   );
 
+  const openSecurityWorkspace = useCallback(() => {
+    if (!security?.market || !security?.ticker) return;
+    updateActiveWorkspace((workspace) => ({
+      ...workspace,
+      selectedTicker: { ...workspace.selectedTicker, ...security },
+    }));
+    closeDrawer();
+    setAppMode("workspace");
+  }, [security, updateActiveWorkspace, closeDrawer]);
+
+  const openSecurityPaperTicket = useCallback(() => {
+    if (!security?.market || !security?.ticker) return;
+    closeDrawer();
+    setPaperTicket({ ...security, action: "BUY" });
+  }, [security, closeDrawer]);
+
   const commands = useMemo(() => [
     ...ALL_TABS.map((item) => ({
       label: `Open ${item.label.toLowerCase()}`,
@@ -1052,7 +1114,6 @@ export default function App() {
               <span className="brand-mark" aria-hidden="true">M</span>
               <span className="brand-copy">MESH</span>
             </button>
-            <TickerTape tickers={tickers} />
             <SearchBox />
             <button className="command-trigger" type="button" onClick={() => setCommandOpen(true)} aria-keyshortcuts="Control+K Meta+K">
               Command <kbd>Ctrl K</kbd>
@@ -1083,6 +1144,7 @@ export default function App() {
               { key: "portfolio", label: "Portfolio", icon: "M3 7h18v14H3z M8 7V3h8v4 M3 12h18" },
               { key: "alerts", label: "Alerts", icon: "M6 16V9a6 6 0 0 1 12 0v7l2 2H4z M9 21h6" },
               { key: "paper", label: "Paper", icon: "M5 3h14v18H5z M8 8h8 M8 12h8 M8 16h5" },
+              { key: "replay", label: "Replay", icon: "M4 5h16v14H4z M8 5v14 M12 9h5 M12 13h3" },
               { key: "scanner", label: "Research", icon: "M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14 M15 15l6 6" },
               { key: "news", label: "News", icon: "M3 4h18v16H3z M7 8h4v4H7z M14 8h4 M14 12h4 M7 16h11" },
             ].map((item) => (
@@ -1108,7 +1170,7 @@ export default function App() {
                 <span>More tools</span>
               </button>
               {moreOpen && <div className="more-menu" id="secondary-navigation">
-                {SECONDARY_TABS.filter((item) => item.key !== "news").map((item) => (
+                {SECONDARY_TABS.filter((item) => item.key !== "news" && item.key !== "replay").map((item) => (
                   <button key={item.key} className={tab === item.key ? "more-item active" : "more-item"}
                     onClick={() => { openStandardTab(item.key); setMoreOpen(false); }}
                     aria-current={appMode === "standard" && tab === item.key ? "page" : undefined}>
@@ -1141,6 +1203,15 @@ export default function App() {
             <button className="ghost" onClick={() => setTab("overview")}>
               Market pulse
             </button>
+            {security && (
+              <div className="asset-context" aria-label={`Active asset ${security.market}:${security.ticker}`}>
+                <span className="asset-context-kicker">ACTIVE ASSET</span>
+                <strong>{security.market}:{security.ticker}</strong>
+                <span className="asset-context-company">{security.company || "Research context"}</span>
+                <button type="button" className="asset-context-action" onClick={openSecurityWorkspace}>CHART</button>
+                <button type="button" className="asset-context-action primary" onClick={openSecurityPaperTicket}>PAPER TRADE</button>
+              </div>
+            )}
           </div>}
           <main className={`content ${appMode === "workspace" ? "workspace-mode" : ""}`} id="main-content" tabIndex="-1">
             {appMode === "workspace" && activeWorkspace ? (

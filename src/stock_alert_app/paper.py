@@ -525,6 +525,25 @@ def pt_set_balance(db: Database, portfolio_id: str, new_balance: float) -> None:
     db.pt_update_balance(portfolio_id, new_balance)
 
 
+def pt_configure_portfolio(db: Database, portfolio_id: str, balance: float, currency: str) -> dict[str, Any]:
+    """Set the starting capital of an account before its first order."""
+    if not math.isfinite(balance) or balance <= 0.0:
+        raise ValueError("Starting balance must be positive")
+    currency = currency.strip().upper()
+    if len(currency) != 3 or not currency.isalpha():
+        raise ValueError("Currency must be a three-letter code")
+    with _fill_lock:
+        pt_get_portfolio(db, portfolio_id)
+        if db.pt_get_orders(portfolio_id) or db.pt_get_positions(portfolio_id) or db.pt_get_trades(portfolio_id):
+            raise ValueError("Starting balance and currency can only change before the first order")
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE pt_portfolios SET initial_balance = ?, balance = ?, currency = ? WHERE id = ?",
+                (balance, balance, currency, portfolio_id),
+            )
+    return pt_get_portfolio(db, portfolio_id)
+
+
 def pt_set_enforce_market_hours(db: Database, portfolio_id: str, enforce: bool) -> None:
     db.pt_set_enforce_market_hours(portfolio_id, enforce)
 
@@ -570,7 +589,13 @@ def ensure_default_portfolio(db: Database, user_id: str = "") -> dict[str, Any]:
 
 
 def _execution_price(db: Database, symbol: str, market: str, ticker: str) -> float | None:
-    """Latest available market price (intraday bar first, then stored snapshot)."""
+    """Latest event-driven market price, with historical fallbacks."""
+    try:
+        event = db.latest_market_event(ticker, "QUOTE")
+        if event and event.exchange == market.upper() and event.payload.get("price"):
+            return float(event.payload["price"])
+    except Exception:
+        pass
     try:
         from .indexes import index_history
 

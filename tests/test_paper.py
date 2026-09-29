@@ -230,6 +230,18 @@ class TestPaperEngine:
         paper.pt_delete_portfolio(db, p["id"])
         assert paper.pt_list_portfolios(db, "u1") == []
 
+    def test_starting_capital_and_currency_can_be_set_before_trading(self, tmp_path, monkeypatch):
+        db, p = self._setup(tmp_path, monkeypatch, price=100.0)
+        configured = paper.pt_configure_portfolio(db, p["id"], 25000.0, "aud")
+        assert configured["initial_balance"] == 25000.0
+        assert configured["balance"] == 25000.0
+        assert configured["currency"] == "AUD"
+
+        paper.pt_place_order(db, p["id"], "NYSE", "T", "buy", "market", 1.0)
+        with pytest.raises(ValueError, match="before the first order"):
+            paper.pt_configure_portfolio(db, p["id"], 50000.0, "USD")
+        assert paper.pt_get_portfolio(db, p["id"])["initial_balance"] == 25000.0
+
     def test_reset_preserves_account_identity_and_clears_trading_state(self, tmp_path, monkeypatch):
         db, p = self._setup(tmp_path, monkeypatch, price=100.0)
         paper.pt_place_order(db, p["id"], "NYSE", "T", "buy", "market", 10.0)
